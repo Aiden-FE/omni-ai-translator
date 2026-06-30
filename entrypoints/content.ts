@@ -1,7 +1,7 @@
 // Content Script — 划词翻译
 // 监听选区，发送翻译请求，在选区附近展示浮层。
 
-import './content.scss';
+import '@/assets/content.css';
 
 export default defineContentScript({
   matches: ['<all_urls>'],

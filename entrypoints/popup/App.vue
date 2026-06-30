@@ -1,12 +1,17 @@
 <script setup lang="ts">
 // 弹窗：快捷入口（第一版轻量，主要引导至选项页配置）
+function openOptions() {
+  chrome.runtime.openOptionsPage();
+}
 </script>
 
 <template>
   <div class="popup">
     <h1>LLM Translator</h1>
     <p>划词选中网页文本即可翻译。</p>
-    <button @click="chrome.runtime.openOptionsPage()">打开设置</button>
+    <button @click="openOptions()">
+      打开设置
+    </button>
   </div>
 </template>
 

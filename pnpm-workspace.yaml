@@ -1,0 +1,4 @@
+allowBuilds:
+  esbuild: false
+  spawn-sync: false
+onlyBuiltDependencies: '["esbuild","spawn-sync"]'

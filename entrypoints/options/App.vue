@@ -60,34 +60,80 @@ async function testProvider(p: ProviderConfig) {
 
     <section>
       <h2>默认目标语言</h2>
-      <input v-model="targetLang" @change="save" placeholder="如：中文、English" />
+      <input
+        v-model="targetLang"
+        placeholder="如：中文、English"
+        @change="save"
+      >
     </section>
 
     <section>
       <h2>LLM 提供方</h2>
-      <div v-for="p in providers" :key="p.id" class="provider-card">
+      <div
+        v-for="p in providers"
+        :key="p.id"
+        class="provider-card"
+      >
         <div class="row">
-          <input v-model="p.name" placeholder="名称" @change="save" />
-          <select v-model="p.type" @change="save">
-            <option value="openai-compatible">OpenAI 兼容（云端）</option>
-            <option value="ollama">Ollama（本地）</option>
+          <input
+            v-model="p.name"
+            placeholder="名称"
+            @change="save"
+          >
+          <select
+            v-model="p.type"
+            @change="save"
+          >
+            <option value="openai-compatible">
+              OpenAI 兼容（云端）
+            </option>
+            <option value="ollama">
+              Ollama（本地）
+            </option>
           </select>
-          <button :class="{ active: activeId === p.id }" @click="activate(p.id)">
+          <button
+            :class="{ active: activeId === p.id }"
+            @click="activate(p.id)"
+          >
             {{ activeId === p.id ? '已启用' : '启用' }}
           </button>
-          <button @click="removeProvider(p.id)">删除</button>
+          <button @click="removeProvider(p.id)">
+            删除
+          </button>
         </div>
         <div class="row">
-          <input v-model="p.baseUrl" placeholder="BaseURL" @change="save" />
-          <input v-model="p.model" placeholder="模型名" @change="save" />
+          <input
+            v-model="p.baseUrl"
+            placeholder="BaseURL"
+            @change="save"
+          >
+          <input
+            v-model="p.model"
+            placeholder="模型名"
+            @change="save"
+          >
         </div>
         <div class="row">
-          <input v-model="p.apiKey" type="password" placeholder="API Key（Ollama 可留空）" @change="save" />
-          <button @click="testProvider(p)">测试连通</button>
+          <input
+            v-model="p.apiKey"
+            type="password"
+            placeholder="API Key（Ollama 可留空）"
+            @change="save"
+          >
+          <button @click="testProvider(p)">
+            测试连通
+          </button>
         </div>
       </div>
-      <button @click="addProvider">+ 添加提供方</button>
-      <p v-if="testMsg" class="test-msg">{{ testMsg }}</p>
+      <button @click="addProvider">
+        + 添加提供方
+      </button>
+      <p
+        v-if="testMsg"
+        class="test-msg"
+      >
+        {{ testMsg }}
+      </p>
     </section>
   </div>
 </template>
