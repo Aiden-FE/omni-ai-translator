@@ -4,4 +4,4 @@
 
 ## 领域清单
 
-_立项阶段暂无 runbook，随发布与运维补充。_
+- [e2e-and-build/](e2e-and-build/index.md) — E2E 与构建排错

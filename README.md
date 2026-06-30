@@ -27,6 +27,7 @@ pnpm dev          # 启动开发（Chrome，热重载）
 pnpm build        # 构建生产包
 pnpm typecheck    # 类型检查
 pnpm lint         # ESLint
+pnpm e2e          # 构建扩展并跑 Playwright e2e（首次需 pnpm e2e:install 装 Chromium）
 ```
 
 ### 在 Chrome 中加载
@@ -56,9 +57,22 @@ shared/
   types.ts             # 共享类型
   storage.ts           # chrome.storage 封装
   llm.ts               # LLM 适配层
+e2e/                   # Playwright e2e（mock LLM + 划词全链路）
 knowledges/            # 项目知识库
 wxt.config.ts          # WXT / manifest 配置
+playwright.config.ts   # e2e 配置
 ```
+
+## 测试
+
+e2e 覆盖划词翻译全链路：加载扩展 → 配置 mock LLM 接口 → 划词 → 点击触发按钮 → 断言浮层译文。
+
+```bash
+pnpm e2e:install   # 首次：安装 Playwright Chromium
+pnpm e2e           # 构建扩展并运行 e2e
+```
+
+CI（GitHub Actions）在 push/PR 到 master 时自动跑 typecheck、lint 与 e2e。
 
 ## 知识库
 

@@ -36,10 +36,11 @@
 ## 常用命令
 
 ```bash
-pnpm dev        # 开发（热重载）
-pnpm build      # 构建
-pnpm typecheck  # 类型检查
-pnpm lint       # ESLint
+pnpm dev          # 开发（热重载）
+pnpm build        # 构建
+pnpm typecheck    # 类型检查
+pnpm lint         # ESLint
+pnpm e2e          # 构建扩展并跑 e2e（首次需 pnpm e2e:install）
 ```
 
 ## 当前状态
