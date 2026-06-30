@@ -8,7 +8,8 @@ const SETTINGS_KEY = 'llm_translator:settings';
 
 const DEFAULT_SETTINGS: Settings = {
   activeProviderId: null,
-  defaultTargetLang: '中文',
+  // 空字符串表示使用浏览器首选语言（navigator.language）
+  defaultTargetLang: '',
 };
 
 async function get<T>(key: string, fallback: T): Promise<T> {

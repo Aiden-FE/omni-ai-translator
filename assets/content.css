@@ -1,3 +1,26 @@
+.llm-translator-trigger {
+  position: absolute;
+  z-index: 2147483647;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #1f2937;
+  color: #f9fafb;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 50%;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  user-select: none;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.llm-translator-trigger:hover {
+  background: #374151;
+}
+
 .llm-translator-panel {
   position: absolute;
   z-index: 2147483647;

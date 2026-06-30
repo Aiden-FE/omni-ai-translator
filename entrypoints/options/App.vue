@@ -6,14 +6,33 @@ import { getProviders, setProviders, getSettings, setSettings } from '@/shared/s
 
 const providers = ref<ProviderConfig[]>([]);
 const activeId = ref<string | null>(null);
-const targetLang = ref('中文');
+const targetLang = ref('');
 const testMsg = ref('');
+const browserLang = ref(navigator.language || '');
+
+function defaultTargetLang(): string {
+  const lang = browserLang.value.toLowerCase();
+  const map: Record<string, string> = {
+    'zh-cn': '简体中文',
+    'zh-tw': '繁體中文',
+    'zh-hk': '繁體中文',
+    zh: '中文',
+    en: 'English',
+    ja: '日本語',
+    ko: '한국어',
+    fr: 'Français',
+    de: 'Deutsch',
+    es: 'Español',
+  };
+  return map[lang] ?? map[lang.split('-')[0]] ?? lang;
+}
 
 onMounted(async () => {
   providers.value = await getProviders();
   const s = await getSettings();
   activeId.value = s.activeProviderId;
-  targetLang.value = s.defaultTargetLang;
+  // 目标语言：优先用户已保存设置，否则取浏览器首选语言
+  targetLang.value = s.defaultTargetLang || defaultTargetLang();
 });
 
 async function addProvider() {
@@ -62,13 +81,19 @@ async function testProvider(p: ProviderConfig) {
       <h2>默认目标语言</h2>
       <input
         v-model="targetLang"
-        placeholder="如：中文、English"
+        placeholder="留空则使用浏览器首选语言"
         @change="save"
       >
+      <p class="hint">
+        留空时自动使用浏览器首选语言（{{ browserLang }}）。
+      </p>
     </section>
 
     <section>
       <h2>LLM 提供方</h2>
+      <p class="hint">
+        本插件不内置任何模型接口，请自行配置云端 OpenAI 兼容接口或本地 Ollama 接口。
+      </p>
       <div
         v-for="p in providers"
         :key="p.id"
@@ -150,6 +175,11 @@ section {
 }
 h2 {
   font-size: 16px;
+}
+.hint {
+  margin: 4px 0 8px;
+  font-size: 12px;
+  color: #6b7280;
 }
 .provider-card {
   border: 1px solid #e5e7eb;
