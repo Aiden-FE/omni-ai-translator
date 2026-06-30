@@ -22,11 +22,14 @@ async function set<T>(key: string, value: T): Promise<void> {
 }
 
 export async function getProviders(): Promise<ProviderConfig[]> {
-  return get<ProviderConfig[]>(PROVIDERS_KEY, []);
+  const value = await get<ProviderConfig[] | null>(PROVIDERS_KEY, null);
+  return Array.isArray(value) ? value : [];
 }
 
 export async function setProviders(providers: ProviderConfig[]): Promise<void> {
-  await set(PROVIDERS_KEY, providers);
+  // 强制转为纯数组,避免 Vue reactive proxy 经结构化克隆后变异
+  const plain = Array.from(providers);
+  await set(PROVIDERS_KEY, plain);
 }
 
 export async function getSettings(): Promise<Settings> {

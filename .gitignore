@@ -7,3 +7,8 @@ dist/
 .env
 .env.local
 .npmrc
+.e2e-profile/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache

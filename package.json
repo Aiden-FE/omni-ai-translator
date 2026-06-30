@@ -13,13 +13,16 @@
     "zip:firefox": "wxt zip -b firefox",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint . --ext .ts,.vue",
+    "e2e": "wxt build && playwright test",
+    "e2e:install": "playwright install chromium",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/chrome": "^0.0.270",
-    "@vitejs/plugin-vue": "^5.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "@vitejs/plugin-vue": "^5.0.0",
     "eslint": "^8.57.0",
     "eslint-plugin-vue": "^9.25.0",
     "typescript": "^5.4.0",

@@ -63,6 +63,11 @@ export default defineContentScript({
 
     // 划词后显示触发按钮
     document.addEventListener('mouseup', (e: MouseEvent) => {
+      // 点击发生在已有 trigger/panel 上时不重建,避免误清除
+      const target = e.target as Node;
+      if ((trigger && trigger.contains(target)) || (panel && panel.contains(target))) {
+        return;
+      }
       const selection = window.getSelection();
       const text = selection?.toString().trim() ?? '';
       clearAll();
@@ -75,8 +80,12 @@ export default defineContentScript({
       trigger.title = '翻译选中文本';
       trigger.style.left = `${e.pageX + 8}px`;
       trigger.style.top = `${e.pageY + 8}px`;
+      // 阻止 mousedown/mouseup 冒泡,防止 document 监听器误触发重建或清除
       trigger.addEventListener('mousedown', (ev) => {
         ev.preventDefault();
+        ev.stopPropagation();
+      });
+      trigger.addEventListener('mouseup', (ev) => {
         ev.stopPropagation();
       });
       trigger.addEventListener('click', (ev) => {
@@ -91,10 +100,10 @@ export default defineContentScript({
 
     // 点击空白处清除
     document.addEventListener('mousedown', (e) => {
-      if (
-        trigger && !trigger.contains(e.target as Node) &&
-        panel && !panel.contains(e.target as Node)
-      ) {
+      const target = e.target as Node;
+      const onTrigger = trigger && trigger.contains(target);
+      const onPanel = panel && panel.contains(target);
+      if (!onTrigger && !onPanel) {
         clearAll();
       }
     });
