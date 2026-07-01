@@ -17,4 +17,6 @@
 
 ## 视觉原型
 
-视觉原型与高保真交付物可后续结合 `web-design-engineer` 技能生成，沉淀于本目录。
+视觉原型与高保真交付物由 `web-design-engineer` 技能生成，沉淀于 [prototypes/](prototypes/index.md)。
+
+- [prototypes/v0.2-source-picker.html](prototypes/v0.2-source-picker.html) — v0.2 配置页翻译源选择 UI

@@ -8,5 +8,7 @@
 - [strategy/](strategy/index.md) — 产品策略
 - [roadmap/](roadmap/index.md) — 路线图
 - [privacy/](privacy/index.md) — 隐私声明
+- [releases/](releases/) — 版本需求文档
+  - [v0.2/](releases/v0.2/index.md) — 翻译源配置闭环（进行中）
 
 _各子目录文档由 `prodflow-knowledge-product` 在产品知识沉淀阶段补充。_

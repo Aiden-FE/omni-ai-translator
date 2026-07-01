@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Translator · 翻译源管理 (v0.2 原型)</title>
+<style>
+  /* ===== 设计 token（严格沿用 knowledges/ux/design-system.md，不引入新色相） ===== */
+  :root {
+    --c-panel-bg: #1f2937;      /* 浮层背景 */
+    --c-panel-text: #f9fafb;    /* 浮层文字 */
+    --c-primary: #1f2937;       /* 主操作按钮 / 启用态 */
+    --c-primary-hover: #374151; /* 启用态 hover */
+    --c-error: #dc2626;         /* 错误 */
+    --c-success: #16a34a;       /* 成功 */
+    --c-border: #e5e7eb;        /* 卡片边框 */
+    --c-input-border: #d1d5db;  /* 输入框边框 */
+    --c-hint: #6b7280;          /* 次要文字 */
+    --c-text: #111827;          /* 正文 */
+    --c-test: #4b5563;          /* 测试结果文字 */
+    --c-page-bg: #f9fafb;       /* 页面背景，中性 */
+
+    --font-stack: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --r-card: 8px;
+    --r-input: 4px;
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--c-page-bg);
+    font-family: var(--font-stack);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--c-text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .options {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: var(--sp-5);
+  }
+
+  h1 {
+    font-size: 22px;
+    font-weight: 600;
+    margin: 0 0 var(--sp-5);
+    letter-spacing: -0.01em;
+  }
+
+  section { margin-bottom: var(--sp-5); }
+
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 var(--sp-2);
+  }
+
+  .hint {
+    margin: var(--sp-1) 0 var(--sp-3);
+    font-size: 12px;
+    color: var(--c-hint);
+    line-height: 1.6;
+  }
+
+  input,
+  select,
+  button {
+    font-family: inherit;
+    font-size: 14px;
+    color: inherit;
+  }
+
+  input,
+  select {
+    padding: 6px 8px;
+    border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input);
+    background: #fff;
+  }
+
+  input { flex: 1; min-width: 0; }
+  input:focus,
+  select:focus {
+    outline: 2px solid var(--c-primary);
+    outline-offset: 1px;
+    border-color: var(--c-primary);
+  }
+
+  button {
+    padding: 6px 12px;
+    border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input);
+    background: #fff;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  }
+  button:hover { background: #f3f4f6; }
+
+  button.active {
+    background: var(--c-primary);
+    color: #fff;
+    border-color: var(--c-primary);
+  }
+  button.active:hover { background: var(--c-primary-hover); }
+
+  .row {
+    display: flex;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-2);
+    align-items: center;
+  }
+  .row:last-child { margin-bottom: 0; }
+
+  /* ===== 当前生效源提示行（状态差异核心） ===== */
+  .effective {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-radius: var(--r-card);
+    margin-bottom: var(--sp-4);
+    border: 1px solid var(--c-border);
+    background: #fff;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+  .effective__label {
+    font-size: 12px;
+    color: var(--c-hint);
+    white-space: nowrap;
+    padding-top: 1px;
+  }
+  .effective__body { flex: 1; min-width: 0; }
+  .effective__value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--c-text);
+  }
+  .effective__note {
+    font-size: 12px;
+    color: var(--c-hint);
+    margin-top: 2px;
+  }
+  .effective__action {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-primary);
+    text-decoration: none;
+    white-space: nowrap;
+    padding-top: 1px;
+  }
+  .effective__action:hover { text-decoration: underline; }
+
+  /* 兜底生效态：中性提示底，不使用警告红（信息性提示，非错误） */
+  .effective[data-state="fallback"] {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+  }
+  /* 自有源生效态：白底，左侧细标识沿用卡片风格，避免彩色左边框陈词滥调 */
+  .effective[data-state="active"] {
+    background: #fff;
+  }
+
+  /* ===== 源卡片 ===== */
+  .provider-card {
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-card);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-3);
+    background: #fff;
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+  }
+  .provider-card[data-active="true"] {
+    border-color: var(--c-primary);
+    box-shadow: 0 0 0 1px var(--c-primary);
+  }
+
+  .test-msg {
+    margin-top: var(--sp-2);
+    font-size: 12px;
+    color: var(--c-test);
+  }
+  .test-msg.ok { color: var(--c-success); }
+  .test-msg.err { color: var(--c-error); }
+
+  .add-btn {
+    width: 100%;
+    padding: 10px;
+    border: 1px dashed var(--c-input-border);
+    background: transparent;
+    border-radius: var(--r-input);
+    color: var(--c-hint);
+    font-weight: 500;
+  }
+  .add-btn:hover { background: #f3f4f6; color: var(--c-text); }
+
+  .field-hidden { display: none; }
+
+  /* ===== Tweaks 面板 ===== */
+  .tweaks {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    background: var(--c-panel-bg);
+    color: var(--c-panel-text);
+    border-radius: var(--r-card);
+    padding: var(--sp-3) var(--sp-4);
+    font-size: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    z-index: 9999;
+    min-width: 200px;
+  }
+  .tweaks__title {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    opacity: 0.7;
+    margin-bottom: var(--sp-2);
+  }
+  .tweaks select {
+    width: 100%;
+    padding: 4px 6px;
+    color: var(--c-panel-text);
+    background: #374151;
+    border-color: #4b5563;
+  }
+  .tweaks label { display: block; margin-bottom: var(--sp-2); }
+
+  .prototypes-note {
+    font-size: 12px;
+    color: var(--c-hint);
+    border-top: 1px solid var(--c-border);
+    padding-top: var(--sp-3);
+    margin-top: var(--sp-5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="options">
+    <h1>LLM Translator 设置</h1>
+
+    <!-- 默认目标语言 -->
+    <section>
+      <h2>默认目标语言</h2>
+      <input value="简体中文" placeholder="留空则使用浏览器首选语言" />
+      <p class="hint">留空时自动使用浏览器首选语言（zh-CN）。</p>
+    </section>
+
+    <!-- 翻译源管理（v0.2 新标题） -->
+    <section id="source-section">
+      <h2>翻译源管理</h2>
+      <p class="hint">
+        未配置时使用免 Key 兜底翻译；配置自有源后覆盖兜底。
+      </p>
+
+      <!-- 当前生效源提示行：随 Tweaks 状态切换 -->
+      <div class="effective" id="effective-banner" data-state="fallback">
+        <span class="effective__label">当前生效</span>
+        <div class="effective__body">
+          <div class="effective__value" id="eff-value">免 Key 兜底</div>
+          <div class="effective__note" id="eff-note">
+            未配置自有源，待翻译文本将外传到 Google / 微软完成翻译。
+          </div>
+        </div>
+        <a class="effective__action" id="eff-action" href="#source-section">配置自有源 →</a>
+      </div>
+
+      <!-- 源卡片 1：LLM（OpenAI 兼容），自有源生效态时此卡高亮 -->
+      <div class="provider-card" id="card-llm" data-active="false">
+        <div class="row">
+          <input value="我的 OpenAI" placeholder="名称" />
+          <select class="type-select" data-card="llm">
+            <option value="openai-compatible" selected>OpenAI 兼容（云端）</option>
+            <option value="ollama">Ollama（本地）</option>
+            <option value="google">Google 翻译</option>
+            <option value="microsoft">微软翻译</option>
+          </select>
+          <button class="activate-btn" data-card="llm">启用</button>
+          <button>删除</button>
+        </div>
+        <div class="row llm-only" >
+          <input value="https://api.openai.com" placeholder="BaseURL" />
+          <input value="gpt-4o-mini" placeholder="模型名" class="model-field" />
+        </div>
+        <div class="row">
+          <input type="password" value="sk-••••••••" placeholder="API Key（Ollama 可留空）" />
+          <button class="test-btn" data-card="llm">测试连通</button>
+        </div>
+        <p class="test-msg" data-card="llm" hidden></p>
+      </div>
+
+      <!-- 源卡片 2：传统翻译（Google），演示有 Key 覆盖兜底 -->
+      <div class="provider-card" id="card-trad" data-active="false">
+        <div class="row">
+          <input value="Google 官方 Key" placeholder="名称" />
+          <select class="type-select" data-card="trad">
+            <option value="google" selected>Google 翻译</option>
+            <option value="microsoft">微软翻译</option>
+            <option value="openai-compatible">OpenAI 兼容（云端）</option>
+            <option value="ollama">Ollama（本地）</option>
+          </select>
+          <button class="activate-btn" data-card="trad">启用</button>
+          <button>删除</button>
+        </div>
+        <div class="row trad-only">
+          <input value="https://translation.googleapis.com" placeholder="BaseURL（默认官方端点）" />
+        </div>
+        <div class="row">
+          <input type="password" value="AIza••••••••" placeholder="留空使用免 Key 兜底；填入则走官方 API" />
+          <button class="test-btn" data-card="trad">测试连通</button>
+        </div>
+        <p class="test-msg" data-card="trad" hidden></p>
+      </div>
+
+      <button class="add-btn">+ 添加翻译源</button>
+    </section>
+
+    <p class="prototypes-note">
+      v0.2 配置页原型 · 演示「当前生效源」提示行与源类型条件字段 · 右下角 Tweaks 可切换两个关键状态。
+    </p>
+  </div>
+
+  <!-- Tweaks 面板：切换关键状态 -->
+  <div class="tweaks">
+    <div class="tweaks__title">Tweaks</div>
+    <label>
+      状态
+      <select id="state-toggle">
+        <option value="fallback">兜底生效（无自有源）</option>
+        <option value="active">已启用自有源</option>
+      </select>
+    </label>
+  </div>
+
+<script>
+  // 状态切换：兜底生效 ↔ 已启用自有源
+  var toggle = document.getElementById('state-toggle');
+  var banner = document.getElementById('effective-banner');
+  var effValue = document.getElementById('eff-value');
+  var effNote = document.getElementById('eff-note');
+  var effAction = document.getElementById('eff-action');
+  var cardLlm = document.getElementById('card-llm');
+  var llmActivate = cardLlm.querySelector('.activate-btn');
+
+  function applyState(state) {
+    if (state === 'active') {
+      banner.setAttribute('data-state', 'active');
+      effValue.textContent = '我的 OpenAI';
+      effNote.textContent = '翻译请求将发送到该 LLM 提供方。';
+      effAction.style.display = 'none';
+      cardLlm.setAttribute('data-active', 'true');
+      llmActivate.classList.add('active');
+      llmActivate.textContent = '已启用';
+    } else {
+      banner.setAttribute('data-state', 'fallback');
+      effValue.textContent = '免 Key 兜底';
+      effNote.textContent = '未配置自有源，待翻译文本将外传到 Google / 微软完成翻译。';
+      effAction.style.display = '';
+      cardLlm.setAttribute('data-active', 'false');
+      llmActivate.classList.remove('active');
+      llmActivate.textContent = '启用';
+    }
+  }
+
+  toggle.addEventListener('change', function () { applyState(toggle.value); });
+
+  // 源类型切换：LLM ↔ 传统，条件字段显隐
+  function syncFields(card) {
+    var type = card.querySelector('.type-select').value;
+    var isLlm = type === 'openai-compatible' || type === 'ollama';
+    var llmRow = card.querySelector('.llm-only');
+    var tradRow = card.querySelector('.trad-only');
+    var modelField = card.querySelector('.model-field');
+    if (llmRow) llmRow.style.display = isLlm ? '' : 'none';
+    if (tradRow) tradRow.style.display = isLlm ? 'none' : '';
+    // 传统源不显示 model 字段
+    if (modelField) modelField.parentElement.style.display = isLlm ? '' : 'none';
+  }
+
+  document.querySelectorAll('.type-select').forEach(function (sel) {
+    sel.addEventListener('change', function () {
+      syncFields(sel.closest('.provider-card'));
+    });
+    syncFields(sel.closest('.provider-card'));
+  });
+
+  // 测试连通：演示 inline 反馈
+  document.querySelectorAll('.test-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var cardId = btn.getAttribute('data-card');
+      var msg = document.querySelector('.test-msg[data-card="' + cardId + '"]');
+      msg.hidden = false;
+      msg.className = 'test-msg';
+      msg.textContent = '测试中…';
+      setTimeout(function () {
+        msg.className = 'test-msg ok';
+        msg.textContent = '✅ 你好';
+      }, 600);
+    });
+  });
+
+  // 启用按钮：演示切换生效源
+  document.querySelectorAll('.activate-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.activate-btn').forEach(function (b) {
+        b.classList.remove('active'); b.textContent = '启用';
+      });
+      document.querySelectorAll('.provider-card').forEach(function (c) {
+        c.setAttribute('data-active', 'false');
+      });
+      btn.classList.add('active'); btn.textContent = '已启用';
+      btn.closest('.provider-card').setAttribute('data-active', 'true');
+      // 同步 Tweaks 与提示行
+      toggle.value = 'active';
+      applyState('active');
+      effValue.textContent = btn.closest('.provider-card').querySelector('input').value;
+    });
+  });
+
+  applyState('fallback');
+</script>
+</body>
+</html>
