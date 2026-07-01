@@ -6,7 +6,8 @@
 
 - [overview/](overview/index.md) — 产品概览
 - [strategy/](strategy/index.md) — 产品策略
-- [roadmap/](roadmap/index.md) — 路线图
+- [roadmap/](roadmap/index.md) — 路线图（含变现接缝）
+- [business/](business/index.md) — 商业模式与营收（变现方案）
 - [privacy/](privacy/index.md) — 隐私声明
 - [releases/](releases/) — 版本需求文档
   - [v0.2/](releases/v0.2/index.md) — 翻译源配置闭环（进行中）

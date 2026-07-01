@@ -10,7 +10,7 @@
 | ADR | [adr/](adr/index.md) | 架构决策记录 |
 | 功能知识 | [feature/](feature/index.md) | 具体功能模块说明 |
 | 运行手册 | [runbook/](runbook/index.md) | 运维与故障处理 |
-| 产品知识库 | [product-wiki/](product-wiki/index.md) | 产品概览、策略、路线图、隐私声明 |
+| 产品知识库 | [product-wiki/](product-wiki/index.md) | 产品概览、策略、路线图、商业模式、隐私声明 |
 | UX | [ux/](ux/index.md) | 项目级 UX 规范、设计系统、交互模式 |
 
 ## 启动文档
