@@ -20,6 +20,8 @@ export interface ProviderConfig {
   baseUrl: string;
   apiKey?: string;
   model: string;
+  /** microsoft Azure Translator 区域（如 eastus、global）；有 Key 时携带 Ocp-Apim-Subscription-Region。google 不使用。缺省则不发送该 header。 */
+  region?: string;
 }
 
 /** 翻译请求 */

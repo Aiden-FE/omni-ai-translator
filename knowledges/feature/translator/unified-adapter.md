@@ -9,7 +9,7 @@
 - **统一入口**：上层（background）调用翻译时经适配层统一入口 `translateWithAdapter(req)`，由适配层内部读取 `settings.activeProviderId` + `providers` 并路由，background 内无源类型 if-else 分支。
 - **无可用源**：生效源 ID 在用户已配置源与内置免 Key 免费源中均未匹配时返回 `errorType: 'no-config'`，不硬编码兜底逻辑。
 - **行为不变**：LLM provider（openai-compatible / ollama）从 `shared/llm.ts` 迁移而来，相同输入产出相同 `TranslateResult`（新增 `errorType` 字段），baseUrl 需为用户填写的完整接口路径，代码不追加固定 path。
-- **传统 provider 免 Key 实现**：google / microsoft 已实现免 Key 公共端点调用（功能事项 2 / #14），端点内置为常量不可编辑，调用非官方公共端点解析非标准响应，失败经 `classifyError` 归类。
+- **传统 provider 有 Key / 无 Key 双模式**：google / microsoft 按 `config.apiKey` 是否存在切换调用方式 — 有 Key 走官方鉴权端点（读 `config.baseUrl`），无 Key 走免 Key 公共端点（builtin-sources.ts 常量，端点不可编辑）。无 Key 路径由功能事项 2 / #14 实现，有 Key 路径由功能事项 3 / #18 实现（关联 PRD #3 功能事项 3，下游 #19 前端联调），两条路径均经 `classifyError` 归类失败。
 - **默认生效源**：全新安装、用户未做选择时默认选中 `builtin:microsoft`（显式默认值，非隐式回退）；`settings.activeProviderId === null` 时解析为默认 microsoft。
 - **存储读写**：翻译路径（`translateWithAdapter` / `testWithAdapter`）只读 `chrome.storage.local`（经 `shared/storage.ts`）；`setActiveSource` 写入 `settings.activeProviderId`（供 #4 配置页切换生效源）。
 - **不做自动降级**：翻译失败（含内置免 Key 免费源失败）只返回错误提示，不自动切换到其它源，由用户在配置页人工切换。
@@ -52,7 +52,7 @@ ProviderConfig.type + category
     ▼
 registry.createProvider(config)
     ├── category=llm         → createLLMProvider (openai-compatible / ollama)
-    └── category=traditional → createTraditionalProvider (google / microsoft 免 Key 实现)
+    └── category=traditional → createTraditionalProvider (google / microsoft，有 Key 走官方端点 / 无 Key 走免 Key 公共端点)
 ```
 
 ## 四类错误模型
@@ -79,7 +79,7 @@ content-script → sendMessage({type:'translate', payload})
         → 均未命中 → TranslateResult{errorType:'no-config'}
         → 命中 → registry.createProvider(config) → provider.translate(req)
             → LLM provider: fetch → 成功返回译文 / 失败 classifyError → errorType
-            → 传统 provider (免 Key): 调用内置端点常量 → 成功返回译文 / 失败 classifyError → errorType
+            → 传统 provider: 按 apiKey 切换 — 有 Key 走官方端点(读 baseUrl) / 无 Key 走内置免 Key 端点常量 → 成功返回译文 / 失败 classifyError → errorType
         → TranslateResult → background → content → 浮层展示
 ```
 
@@ -93,6 +93,38 @@ content-script → sendMessage({type:'translate', payload})
 - `setActiveSource(id)` 仅写入 `settings.activeProviderId`，不校验 id 是否存在（由调用方保证）；id 可为内置源 ID（`builtin:microsoft` / `builtin:google`）或用户已配置源 ID
 - 消息通道：`get-active-sources` / `set-active-source`（`entrypoints/background.ts`）
 
+## 传统 provider 有 Key / 无 Key 双模式
+
+`createTraditionalProvider(config)`（`shared/translator/traditional-provider.ts`）按 `config.apiKey` 是否存在切换调用方式，两种模式共用同一 provider 实例与 `classifyError` 错误归一化：
+
+| 模式 | 触发条件 | google 调用 | microsoft 调用 |
+|------|----------|-------------|----------------|
+| 无 Key | `config.apiKey` 缺省 | `callGoogle` — GET 免 Key 公共端点 `translate_a/single`，解析嵌套数组（#14） | `callMicrosoft` — GET edge auth 取 JWT token → POST 免 Key 翻译端点（#14） |
+| 有 Key | `config.apiKey` 存在 | `callGoogleWithKey` — POST 官方 v2 端点，响应 `data.translations[0].translatedText`（#18） | `callMicrosoftWithKey` — POST 官方端点，headers 鉴权，不走 edge auth（#18） |
+
+**有 Key 端点构造与请求体**：
+
+- **google 有 Key**：POST `<baseUrl>/language/translate/v2?key=<apiKey>`，body `{ q: [text], target, source?, format: 'text' }`，响应 `{ data: { translations: [{ translatedText }] } }`。`baseUrl` 默认为 host（`https://translation.googleapis.com`），自动追加 `/language/translate/v2`；若 `baseUrl` 已含该路径则不重复追加，兼容用户填完整端点。
+- **microsoft 有 Key**：POST `<baseUrl>?api-version=3.0&to=<target>`，body `[{ Text: text }]`，响应 `[{ translations: [{ text, to }] }]`。直接用 `config.baseUrl`（去尾斜杠）+ 查询参数，由用户填写完整官方端点；不再走 edge auth 取 JWT token（官方 Key 鉴权无需 token）。
+
+### region 字段契约
+
+`ProviderConfig.region?: string`（`shared/types.ts`，#18 新增，供下游 #19 前端消费）：
+
+- **microsoft Azure Translator 区域**（如 `eastus`、`global`），有 Key 时携带 `Ocp-Apim-Subscription-Region` header。
+- **google 不使用** region 字段。
+- **缺省 / 纯空白**（trim 后为空）时不发送 Region header（部分全局资源可省略，并防御无效空白值）。
+- 字段可选、向后兼容，既有存储的 `ProviderConfig` 无需迁移即可读取。
+
+### 安全约束
+
+- Key 仅放入 query 参数（google）/ header（microsoft），region 仅放入 header。
+- Key / region 不写入日志、错误文案、commit，仅存 `chrome.storage.local`。
+
+### 连通性测试
+
+`test()` 委托 `translate`，有 / 无 Key 两条路径均可经配置页连通性测试验证（#16 配置页 4 类源连通性测试已接入）。
+
 ## 相关文件
 
 - `shared/translator/types.ts` — `TranslationProvider` 接口定义
@@ -100,10 +132,10 @@ content-script → sendMessage({type:'translate', payload})
 - `shared/translator/registry.ts` — provider 工厂注册表与路由（`createProvider` / `inferCategory`）
 - `shared/translator/index.ts` — 统一入口（`translateWithAdapter` / `testWithAdapter` / `getActiveSources` / `setActiveSource`，后两者供 #4 配置页消费）
 - `shared/translator/llm-provider.ts` — LLM provider 工厂（`createLLMProvider`，迁移自 `shared/llm.ts`）
-- `shared/translator/traditional-provider.ts` — 传统 provider 免 Key 实现（`createTraditionalProvider`，google/microsoft 公共端点调用）
+- `shared/translator/traditional-provider.ts` — 传统 provider 实现（`createTraditionalProvider`，google/microsoft 有 Key 官方端点 + 无 Key 公共端点双模式，#18 扩展有 Key 路径）
 - `shared/translator/builtin-sources.ts` — 内置免 Key 免费源常量与查找（`BUILTIN_FREE_SOURCES` / `DEFAULT_ACTIVE_SOURCE_ID` / `getBuiltinSourceById` / 端点常量）
-- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter / builtin-sources，63 用例，含 `errorFeedback` 四类 errorType 渲染路径测试与内置免 Key 源查找测试）
-- `shared/types.ts` — `ProviderConfig` / `TranslateResult` / `ErrorType` / `ProviderCategory` / `ActiveSourcesResult` 类型定义
+- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter / builtin-sources / traditional-provider，85 用例，含 `errorFeedback` 四类 errorType 渲染路径、内置免 Key 源查找、传统 provider 有/无 Key 双路径与 region header 校验测试）
+- `shared/types.ts` — `ProviderConfig`（含 #18 新增可选 `region?`）/ `TranslateResult` / `ErrorType` / `ProviderCategory` / `ActiveSourcesResult` 类型定义
 - `shared/llm.ts` — 兼容层，保留 `translate(provider, req)` / `testProvider(provider)` 导出签名，内部委托适配层（已标记 `@deprecated`，新代码用 `shared/translator` 统一入口）
 - `entrypoints/background.ts` — `translate` 分支用 `translateWithAdapter`，`test-provider` 分支用 `testWithAdapter`，`get-active-sources` / `set-active-source` 分支供 #4 配置页消费，无源类型分支
 - `entrypoints/content.ts` — 划词浮层，`doTranslate` 按 `errorType` 调用 `errorFeedback` 渲染主行（❌ + 主文案）+ 引导次要行（#11 产出）
@@ -116,4 +148,4 @@ content-script → sendMessage({type:'translate', payload})
 
 ---
 
-> 更新日期：2026-07-02 · 关联 Issue：#14（内置免 Key 免费翻译源 google/microsoft 实现 + 生效源切换契约）
+> 更新日期：2026-07-02 · 关联 Issue：#14（免 Key 公共端点 + 生效源切换契约）、#18（有 Key 走官方 API + region 字段契约，关联 PRD #3 功能事项 3，下游 #19 前端联调）

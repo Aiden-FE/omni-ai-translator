@@ -38,7 +38,7 @@ function resolveLangCode(lang: string): string {
 }
 
 /**
- * 调用 Google 翻译免 Key 公共端点
+ * 调用 Google 翻译免 Key 公共端点（config.apiKey 缺省时使用）
  * GET translate_a/single?client=gtx&sl=<src>&tl=<target>&dt=t&q=<text>
  * 响应为嵌套数组：data[0] 是译文段数组，每段 [0] 为译文，拼接即得完整译文。
  */
@@ -72,7 +72,7 @@ async function callGoogle(req: TranslateRequest): Promise<TranslateResult> {
 }
 
 /**
- * 调用微软翻译免 Key 端点
+ * 调用微软翻译免 Key 端点（config.apiKey 缺省时使用）
  * 1. GET edge.microsoft.com/translate/auth 获取 JWT token（免 Key）
  * 2. POST api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=<target>
  *    header Authorization: Bearer <token>，body [{"Text": text}]
@@ -134,9 +134,110 @@ async function callMicrosoft(req: TranslateRequest): Promise<TranslateResult> {
 }
 
 /**
+ * 调用 Google 翻译官方 Key 端点（config.apiKey 存在时使用）
+ * POST <baseUrl>/language/translate/v2?key=<apiKey>
+ *   body { q: [text], target, source?, format: 'text' }
+ * 响应：{ data: { translations: [{ translatedText }] } }
+ * baseUrl 默认为 host（https://translation.googleapis.com），自动追加 v2 标准路径；
+ * 若 baseUrl 已含 /language/translate/v2 则不重复追加，兼容用户填完整端点。
+ * Key 仅放入 query 参数，不写入日志 / 错误文案。
+ */
+async function callGoogleWithKey(
+  config: ProviderConfig,
+  req: TranslateRequest,
+): Promise<TranslateResult> {
+  const apiKey = config.apiKey as string;
+  const target = resolveLangCode(req.targetLang);
+  const body: Record<string, unknown> = { q: [req.text], target, format: 'text' };
+  if (req.sourceLang) {
+    body.source = resolveLangCode(req.sourceLang);
+  }
+
+  // 端点构造：去尾斜杠，未以 v2 路径结尾则追加（兼容 host-only 默认值与完整端点）
+  const base = config.baseUrl.replace(/\/+$/, '');
+  const path = base.endsWith('/language/translate/v2')
+    ? base
+    : `${base}/language/translate/v2`;
+  const url = `${path}?key=${encodeURIComponent(apiKey)}`;
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const errorType = classifyError(null, resp.status);
+    return { translatedText: '', error: `Google HTTP ${resp.status}: ${await resp.text()}`, errorType };
+  }
+  const data = await resp.json();
+  const translatedText = data?.data?.translations?.[0]?.translatedText?.trim() ?? '';
+  if (!translatedText) {
+    return {
+      translatedText: '',
+      error: 'Google 翻译响应解析失败',
+      errorType: 'unreachable',
+    };
+  }
+  return { translatedText };
+}
+
+/**
+ * 调用微软 Azure Translator 官方 Key 端点（config.apiKey 存在时使用）
+ * POST <baseUrl>?api-version=3.0&to=<target>
+ *   headers: Ocp-Apim-Subscription-Key、Ocp-Apim-Subscription-Region（region 非空才发）、Content-Type
+ *   body [{ Text: text }]
+ * 响应：[{ translations: [{ text, to }] }]
+ * 不再走 edge auth 取 JWT token（官方 Key 鉴权无需 token）。
+ * Key / region 仅放入 header，不写入日志 / 错误文案。
+ */
+async function callMicrosoftWithKey(
+  config: ProviderConfig,
+  req: TranslateRequest,
+): Promise<TranslateResult> {
+  const apiKey = config.apiKey as string;
+  const to = resolveLangCode(req.targetLang);
+  const params = new URLSearchParams({ 'api-version': '3.0', to });
+  if (req.sourceLang) {
+    params.set('from', resolveLangCode(req.sourceLang));
+  }
+  const url = `${config.baseUrl.replace(/\/+$/, '')}?${params.toString()}`;
+
+  const headers: Record<string, string> = {
+    'Ocp-Apim-Subscription-Key': apiKey,
+    'Content-Type': 'application/json',
+  };
+  // region 缺省或纯空白时不发送 Region header（部分全局资源可省略；trim 防御无效空白值）
+  const region = config.region?.trim();
+  if (region) {
+    headers['Ocp-Apim-Subscription-Region'] = region;
+  }
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify([{ Text: req.text }]),
+  });
+  if (!resp.ok) {
+    const errorType = classifyError(null, resp.status);
+    return { translatedText: '', error: `微软翻译 HTTP ${resp.status}: ${await resp.text()}`, errorType };
+  }
+  const data = await resp.json();
+  const translatedText = data?.[0]?.translations?.[0]?.text?.trim() ?? '';
+  if (!translatedText) {
+    return {
+      translatedText: '',
+      error: '微软翻译响应解析失败',
+      errorType: 'unreachable',
+    };
+  }
+  return { translatedText };
+}
+
+/**
  * 创建传统翻译源 provider 实例
- * 按 config.type 路由到 Google / 微软免 Key 实现。
- * 端点使用内置常量（不读 config.baseUrl，因免费源端点不可编辑）。
+ * 按 config.type 路由到 Google / 微软；按 config.apiKey 是否存在切换有/无 Key 调用：
+ *   有 Key → 官方 Key 鉴权端点（读 config.baseUrl；microsoft 有 Key 携带 Ocp-Apim-Subscription-Key + Region）
+ *   无 Key → 内置免 Key 公共端点（builtin-sources.ts 常量，行为不变）
  * 失败经 classifyError 归类为 network / rate-limit / unreachable，不自动回退。
  */
 export function createTraditionalProvider(config: ProviderConfig): TranslationProvider {
@@ -145,8 +246,16 @@ export function createTraditionalProvider(config: ProviderConfig): TranslationPr
     type: 'traditional' as const,
     async translate(req: TranslateRequest): Promise<TranslateResult> {
       try {
-        if (config.type === 'google') return await callGoogle(req);
-        if (config.type === 'microsoft') return await callMicrosoft(req);
+        // 按 apiKey 是否存在切换：有 Key 走官方端点（读 config.baseUrl），无 Key 走免 Key 公共端点
+        // 保留 await 以使 catch 能捕获 callXxx 的 rejected promise
+        if (config.type === 'google') {
+          return config.apiKey ? await callGoogleWithKey(config, req) : await callGoogle(req);
+        }
+        if (config.type === 'microsoft') {
+          return config.apiKey
+            ? await callMicrosoftWithKey(config, req)
+            : await callMicrosoft(req);
+        }
         // 未知传统源类型
         return {
           translatedText: '',
