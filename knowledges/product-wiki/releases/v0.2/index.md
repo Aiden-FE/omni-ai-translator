@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-01 |
-| **最近更新** | 2026-07-02（功能事项 3 后端 #18 PR #20 已合并；前端 #19 region 输入框与联调回归 PR #21 待审查合并） |
+| **最近更新** | 2026-07-02（功能事项 3 完成：#18 PR #20 + #19 PR #21 均已合并，PRD #3 验收标准全覆盖） |
 | **开发周期估算** | ≤3 周（约 2.5–3 周） |
 | **闭环业务链** | 用户在配置页选择/配置翻译源（免 Key 兜底 / 传统 API Key / LLM）→ 划词触发 → 统一适配层按配置路由 → 调用对应源 → 浮层展示译文；未配置任何源时默认走免 Key 兜底源，开箱即用 |
 | **关联材料** | [../../strategy/index.md](../../strategy/index.md)、[../../roadmap/index.md](../../roadmap/index.md)、[../../../startup-summary.md](../../../startup-summary.md) |
@@ -28,7 +28,7 @@
 |---|---|---|---|---|---|
 | 1 | unified-adapter | P0 | `./1-unified-adapter/PRD.md` | done | 抽象统一翻译源接口，将现有 LLM 适配迁移为 provider 之一，新增传统翻译 provider 抽象，对上层暴露一致接口；前端浮层按四类 errorType 差异化反馈（#10 后端 + #11 前端） |
 | 2 | builtin-fallback | P0 | `./2-builtin-fallback/PRD.md` | done | 内置 Google + 微软免 Key 公共端点 provider，作为用户可选的免费翻译源；全新安装默认选中 microsoft，用户可随时切换；无隐式自动回退（研发任务 #14，PR #15 已合并） |
-| 3 | traditional-apikey-config | P0 | `./3-traditional-apikey-config/PRD.md` | in-progress | 配置页支持传统翻译源填 Key/端点，启用后覆盖免 Key 兜底；后端 #18 有 Key 走官方 API + region 字段（PR #20 已合并），前端 #19 region 输入框与联调回归（PR #21 待审查合并） |
+| 3 | traditional-apikey-config | P0 | `./3-traditional-apikey-config/PRD.md` | done | 配置页支持传统翻译源填 Key/端点，启用后覆盖免 Key 兜底；后端 #18 有 Key 走官方 API + region 字段（PR #20 已合并），前端 #19 region 输入框与联调回归（PR #21 已合并）；PRD #3 验收标准全覆盖，五条均达成 |
 | 4 | source-picker-ui | P0 | `./4-source-picker-ui/PRD.md` | done | 配置页翻译源选择 UI：源类型选择、当前生效源展示、连通性测试扩展；研发任务 #16 完成，PR #17 已合并 |
 
 ## 本轮不做
