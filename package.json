@@ -12,6 +12,7 @@
     "zip": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
     "lint": "eslint . --ext .ts,.vue",
     "e2e": "wxt build && playwright test",
     "e2e:install": "playwright install chromium",
@@ -26,6 +27,7 @@
     "eslint": "^8.57.0",
     "eslint-plugin-vue": "^9.25.0",
     "typescript": "^5.4.0",
+    "vitest": "^2.0.0",
     "vue-tsc": "^2.1.10",
     "wxt": "^0.19.0"
   },

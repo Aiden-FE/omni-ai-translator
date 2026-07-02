@@ -11,9 +11,12 @@ const testMsg = ref('');
 const browserLang = ref(navigator.language || '');
 
 // 各类型提供方的完整接口路径默认值（代码不再追加 path，需用户填完整路径）
+// google/microsoft 为传统翻译源占位，具体端点由功能事项 2/3 配置
 const DEFAULT_BASE_URL: Record<ProviderConfig['type'], string> = {
   'openai-compatible': 'https://api.openai.com/v1/chat/completions',
   ollama: 'http://localhost:11434/api/chat',
+  google: '',
+  microsoft: '',
 };
 // 已知的默认值（含历史 host 形式），切换类型时若 baseUrl 命中则自动替换
 const KNOWN_DEFAULT_BASE_URLS = new Set([

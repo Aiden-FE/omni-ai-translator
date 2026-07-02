@@ -24,5 +24,5 @@
     "shared/**/*",
     "wxt.config.ts"
   ],
-  "exclude": ["node_modules", ".output", "e2e", "playwright.config.ts"]
+  "exclude": ["node_modules", ".output", "e2e", "playwright.config.ts", "vitest.config.ts", "shared/**/*.test.ts"]
 }

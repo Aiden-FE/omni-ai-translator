@@ -1,9 +1,10 @@
 // Background Service Worker（MV3）
-// 负责：接收翻译请求、读取配置、调用 LLM 适配层。
+// 负责：接收翻译请求、经适配层统一入口调用翻译、管理配置。
 // 注意：SW 会被回收，状态不依赖内存，配置走 storage。
+// 本文件不含源类型 if-else 分支，所有源类型路由由适配层（shared/translator）处理。
 
 import { getProviders, getSettings } from '@/shared/storage';
-import { translate, testProvider } from '@/shared/llm';
+import { translateWithAdapter, testWithAdapter } from '@/shared/translator';
 import type { Message } from '@/shared/types';
 
 export default defineBackground(() => {
@@ -13,18 +14,11 @@ export default defineBackground(() => {
       try {
         switch (message.type) {
           case 'translate': {
-            const settings = await getSettings();
-            const providers = await getProviders();
-            const provider = providers.find((p) => p.id === settings.activeProviderId);
-            if (!provider) {
-              sendResponse({ translatedText: '', error: '未配置或未启用 LLM 提供方' });
-              return;
-            }
-            sendResponse(await translate(provider, message.payload));
+            sendResponse(await translateWithAdapter(message.payload));
             return;
           }
           case 'test-provider': {
-            sendResponse(await testProvider(message.payload));
+            sendResponse(await testWithAdapter(message.payload));
             return;
           }
           case 'get-settings': {
