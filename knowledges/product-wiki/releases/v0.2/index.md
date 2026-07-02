@@ -27,7 +27,7 @@
 | 编号 | 概要标题 | 优先级 | PRD 文档 | 状态 | 闭环路径说明 |
 |---|---|---|---|---|---|
 | 1 | unified-adapter | P0 | `./1-unified-adapter/PRD.md` | done | 抽象统一翻译源接口，将现有 LLM 适配迁移为 provider 之一，新增传统翻译 provider 抽象，对上层暴露一致接口；前端浮层按四类 errorType 差异化反馈（#10 后端 + #11 前端） |
-| 2 | builtin-fallback | P0 | `./2-builtin-fallback/PRD.md` | draft | 内置 Google + 微软免 Key 公共端点 provider，未配置任何源时默认启用，开箱即用 |
+| 2 | builtin-fallback | P0 | `./2-builtin-fallback/PRD.md` | draft | 内置 Google + 微软免 Key 公共端点 provider，作为用户可选的免费翻译源；全新安装默认选中 microsoft，用户可随时切换；无隐式自动回退（研发任务 #14） |
 | 3 | traditional-apikey-config | P0 | `./3-traditional-apikey-config/PRD.md` | draft | 配置页支持传统翻译源填 Key/端点，启用后覆盖免 Key 兜底 |
 | 4 | source-picker-ui | P0 | `./4-source-picker-ui/PRD.md` | draft | 配置页翻译源选择 UI：源类型选择、当前生效源展示、连通性测试扩展 |
 
