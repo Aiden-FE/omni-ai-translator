@@ -10,6 +10,24 @@ const targetLang = ref('');
 const testMsg = ref('');
 const browserLang = ref(navigator.language || '');
 
+// 各类型提供方的完整接口路径默认值（代码不再追加 path，需用户填完整路径）
+const DEFAULT_BASE_URL: Record<ProviderConfig['type'], string> = {
+  'openai-compatible': 'https://api.openai.com/v1/chat/completions',
+  ollama: 'http://localhost:11434/api/chat',
+};
+// 已知的默认值（含历史 host 形式），切换类型时若 baseUrl 命中则自动替换
+const KNOWN_DEFAULT_BASE_URLS = new Set([
+  'https://api.openai.com',
+  'http://localhost:11434',
+  ...Object.values(DEFAULT_BASE_URL),
+]);
+
+function baseUrlPlaceholder(type: ProviderConfig['type']): string {
+  return type === 'ollama'
+    ? '完整接口路径,如 http://localhost:11434/api/chat'
+    : '完整接口路径,如 https://api.openai.com/v1/chat/completions';
+}
+
 function defaultTargetLang(): string {
   const lang = browserLang.value.toLowerCase();
   const map: Record<string, string> = {
@@ -41,7 +59,7 @@ async function addProvider() {
     id,
     name: '新提供方',
     type: 'openai-compatible',
-    baseUrl: 'https://api.openai.com',
+    baseUrl: DEFAULT_BASE_URL['openai-compatible'],
     apiKey: '',
     model: 'gpt-4o-mini',
   });
@@ -61,6 +79,14 @@ async function save() {
 
 async function activate(id: string) {
   activeId.value = id;
+  await save();
+}
+
+// 切换提供方类型时,若 baseUrl 仍是已知默认值(含历史 host 形式),自动替换为新类型的完整路径默认值
+async function onTypeChange(p: ProviderConfig) {
+  if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
+    p.baseUrl = DEFAULT_BASE_URL[p.type];
+  }
   await save();
 }
 
@@ -93,6 +119,7 @@ async function testProvider(p: ProviderConfig) {
       <h2>LLM 提供方</h2>
       <p class="hint">
         本插件不内置任何模型接口，请自行配置云端 OpenAI 兼容接口或本地 Ollama 接口。
+        BaseURL 需填写<b>完整接口路径</b>（如 https://api.openai.com/v1/chat/completions），代码不再自动追加路径。
       </p>
       <div
         v-for="p in providers"
@@ -107,7 +134,7 @@ async function testProvider(p: ProviderConfig) {
           >
           <select
             v-model="p.type"
-            @change="save"
+            @change="onTypeChange(p)"
           >
             <option value="openai-compatible">
               OpenAI 兼容（云端）
@@ -129,7 +156,8 @@ async function testProvider(p: ProviderConfig) {
         <div class="row">
           <input
             v-model="p.baseUrl"
-            placeholder="BaseURL"
+            data-testid="base-url"
+            :placeholder="baseUrlPlaceholder(p.type)"
             @change="save"
           >
           <input

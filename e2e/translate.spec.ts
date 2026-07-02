@@ -29,7 +29,8 @@ test('划词后出现触发按钮,点击后浮层展示 mock 译文', async ({ c
   const cards = optionsPage.locator('.provider-card');
   const card = cards.last();
   await card.locator('input[placeholder="名称"]').fill('mock');
-  await card.locator('input[placeholder="BaseURL"]').fill(mockUrl);
+  // BaseURL 需填完整接口路径(契约变更后代码不再追加 path)
+  await card.getByTestId('base-url').fill(`${mockUrl}/v1/chat/completions`);
   await card.locator('input[placeholder="模型名"]').fill('mock-model');
 
   // 启用该提供方
