@@ -3,6 +3,7 @@
 // 目标语言：默认浏览器首选语言（navigator.language）。
 
 import '@/assets/content.css';
+import { getSettings } from '@/shared/storage';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -11,8 +12,12 @@ export default defineContentScript({
     let panel: HTMLDivElement | null = null;
     let selectedText = '';
 
-    function getTargetLang(): string {
-      // 浏览器首选语言，如 "zh-CN" → "中文" 简化映射；未命中则原样返回
+    async function getTargetLang(): Promise<string> {
+      // 优先使用用户在设置页配置的默认目标语言（trim 后非空）
+      const settings = await getSettings();
+      const configured = settings.defaultTargetLang?.trim();
+      if (configured) return configured;
+      // 留空则回退浏览器首选语言，如 "zh-CN" → "中文" 简化映射；未命中则原样返回
       const lang = (navigator.language || 'en').toLowerCase();
       const map: Record<string, string> = {
         'zh-cn': '简体中文',
@@ -50,9 +55,10 @@ export default defineContentScript({
       trigger?.remove();
       trigger = null;
       showPanel('翻译中…', x, y);
+      const targetLang = await getTargetLang();
       const resp = await chrome.runtime.sendMessage({
         type: 'translate' as const,
-        payload: { text: selectedText, targetLang: getTargetLang() },
+        payload: { text: selectedText, targetLang },
       });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result: { translatedText?: string; error?: string } = resp as any;
