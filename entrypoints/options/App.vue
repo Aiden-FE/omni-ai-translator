@@ -320,6 +320,18 @@ function isErr(msg: string): boolean {
             测试连通
           </button>
         </div>
+        <!-- microsoft 有 Key 场景：region 输入框（消费 ProviderConfig.region，无 Key 或非 microsoft 源不显示） -->
+        <div
+          v-if="p.type === 'microsoft' && p.apiKey"
+          class="row"
+        >
+          <input
+            v-model="p.region"
+            data-testid="region"
+            placeholder="Azure 区域，如 eastus"
+            @change="saveProviders"
+          >
+        </div>
         <p
           v-if="testMsgs[p.id]"
           class="test-msg inline"
