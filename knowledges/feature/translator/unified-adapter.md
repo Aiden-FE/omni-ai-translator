@@ -9,7 +9,7 @@
 - **统一入口**：上层（background）调用翻译时经适配层统一入口 `translateWithAdapter(req)`，由适配层内部读取 `settings.activeProviderId` + `providers` 并路由，background 内无源类型 if-else 分支。
 - **无可用源**：生效源 ID 在用户已配置源与内置免 Key 免费源中均未匹配时返回 `errorType: 'no-config'`，不硬编码兜底逻辑。
 - **行为不变**：LLM provider（openai-compatible / ollama）从 `shared/llm.ts` 迁移而来，相同输入产出相同 `TranslateResult`（新增 `errorType` 字段），baseUrl 需为用户填写的完整接口路径，代码不追加固定 path。
-- **传统 provider 有 Key / 无 Key 双模式**：google / microsoft 按 `config.apiKey` 是否存在切换调用方式 — 有 Key 走官方鉴权端点（读 `config.baseUrl`），无 Key 走免 Key 公共端点（builtin-sources.ts 常量，端点不可编辑）。无 Key 路径由功能事项 2 / #14 实现，有 Key 路径由功能事项 3 / #18 实现（关联 PRD #3 功能事项 3，下游 #19 前端联调），两条路径均经 `classifyError` 归类失败。
+- **传统 provider 有 Key / 无 Key 双模式**：google / microsoft 按 `config.apiKey` 是否存在切换调用方式 — 有 Key 走官方鉴权端点（读 `config.baseUrl`），无 Key 走免 Key 公共端点（builtin-sources.ts 常量，端点不可编辑）。无 Key 路径由功能事项 2 / #14 实现，有 Key 路径由功能事项 3 / #18 实现（关联 PRD #3 功能事项 3，#19 前端联调已交付：配置页 microsoft 有 Key 时显示 region 输入框 + e2e 验证官方端点落点与 Key/region header），两条路径均经 `classifyError` 归类失败。
 - **默认生效源**：全新安装、用户未做选择时默认选中 `builtin:microsoft`（显式默认值，非隐式回退）；`settings.activeProviderId === null` 时解析为默认 microsoft。
 - **存储读写**：翻译路径（`translateWithAdapter` / `testWithAdapter`）只读 `chrome.storage.local`（经 `shared/storage.ts`）；`setActiveSource` 写入 `settings.activeProviderId`（供 #4 配置页切换生效源）。
 - **不做自动降级**：翻译失败（含内置免 Key 免费源失败）只返回错误提示，不自动切换到其它源，由用户在配置页人工切换。
@@ -109,12 +109,13 @@ content-script → sendMessage({type:'translate', payload})
 
 ### region 字段契约
 
-`ProviderConfig.region?: string`（`shared/types.ts`，#18 新增，供下游 #19 前端消费）：
+`ProviderConfig.region?: string`（`shared/types.ts`，#18 新增，#19 前端已消费）：
 
 - **microsoft Azure Translator 区域**（如 `eastus`、`global`），有 Key 时携带 `Ocp-Apim-Subscription-Region` header。
 - **google 不使用** region 字段。
 - **缺省 / 纯空白**（trim 后为空）时不发送 Region header（部分全局资源可省略，并防御无效空白值）。
 - 字段可选、向后兼容，既有存储的 `ProviderConfig` 无需迁移即可读取。
+- **前端消费（#19）**：配置页 `entrypoints/options/App.vue` 在源类型为 microsoft 且已填入 apiKey 时显示 region 输入框（placeholder「Azure 区域，如 eastus」），无 Key 或非 microsoft 源不显示；region 为公开区域值，普通文本输入（非凭证，无需掩码）。
 
 ### 安全约束
 
@@ -135,6 +136,8 @@ content-script → sendMessage({type:'translate', payload})
 - `shared/translator/traditional-provider.ts` — 传统 provider 实现（`createTraditionalProvider`，google/microsoft 有 Key 官方端点 + 无 Key 公共端点双模式，#18 扩展有 Key 路径）
 - `shared/translator/builtin-sources.ts` — 内置免 Key 免费源常量与查找（`BUILTIN_FREE_SOURCES` / `DEFAULT_ACTIVE_SOURCE_ID` / `getBuiltinSourceById` / 端点常量）
 - `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter / builtin-sources / traditional-provider，85 用例，含 `errorFeedback` 四类 errorType 渲染路径、内置免 Key 源查找、传统 provider 有/无 Key 双路径与 region header 校验测试）
+- `entrypoints/options/App.vue` — 配置页翻译源管理（#16 交付 4 类源管理 + 连通性测试；#19 新增 microsoft 有 Key 场景 region 输入框，条件渲染 `p.type === 'microsoft' && p.apiKey`）
+- `e2e/translate.spec.ts` + `e2e/mock-server.ts` — Playwright e2e（#19 扩展 mock server 新增 microsoft `/translate` 路由 + headers 记录，新增 microsoft 有 Key 划词 e2e 验证官方端点落点与 `Ocp-Apim-Subscription-Key`/`Ocp-Apim-Subscription-Region` header 携带）
 - `shared/types.ts` — `ProviderConfig`（含 #18 新增可选 `region?`）/ `TranslateResult` / `ErrorType` / `ProviderCategory` / `ActiveSourcesResult` 类型定义
 - `shared/llm.ts` — 兼容层，保留 `translate(provider, req)` / `testProvider(provider)` 导出签名，内部委托适配层（已标记 `@deprecated`，新代码用 `shared/translator` 统一入口）
 - `entrypoints/background.ts` — `translate` 分支用 `translateWithAdapter`，`test-provider` 分支用 `testWithAdapter`，`get-active-sources` / `set-active-source` 分支供 #4 配置页消费，无源类型分支
@@ -148,4 +151,4 @@ content-script → sendMessage({type:'translate', payload})
 
 ---
 
-> 更新日期：2026-07-02 · 关联 Issue：#14（免 Key 公共端点 + 生效源切换契约）、#18（有 Key 走官方 API + region 字段契约，关联 PRD #3 功能事项 3，下游 #19 前端联调）
+> 更新日期：2026-07-02 · 关联 Issue：#14（免 Key 公共端点 + 生效源切换契约）、#18（有 Key 走官方 API + region 字段契约，关联 PRD #3 功能事项 3）、#19（前端联调：配置页 region 输入框 + microsoft 有 Key e2e 验证）

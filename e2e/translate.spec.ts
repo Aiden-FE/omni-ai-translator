@@ -1,6 +1,6 @@
 // 划词翻译全链路 e2e 测试
 import { test, expect } from './fixtures';
-import { startMockServer, getLastRequestBody } from './mock-server';
+import { startMockServer, getLastRequestBody, getLastRequestHeaders } from './mock-server';
 import path from 'node:path';
 
 const testPageUrl = `file://${path.resolve(process.cwd(), 'e2e/fixtures/test-page.html')}`;
@@ -101,5 +101,50 @@ test('配置的默认目标语言生效,prompt 使用用户配置值', async ({ 
   } | null;
   const prompt = body?.messages?.[0]?.content ?? '';
   expect(prompt).toContain('into 简体中文');
+});
+
+test('microsoft 有 Key 源启用后,划词翻译落到官方端点并携带 region', async ({ context, extensionId }) => {
+  // 1. 通过 options 页配置 microsoft 有 Key 提供方并启用
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const cards = optionsPage.locator('.provider-card');
+  const card = cards.last();
+  await card.locator('input[placeholder="名称"]').fill('ms-key');
+  // 切换为 microsoft 传统源（onTypeChange 会把 baseUrl 替换为官方默认值）
+  await card.locator('select').selectOption('microsoft');
+  // baseUrl 指向 mock server 的 microsoft translate 路由
+  await card.getByTestId('base-url').fill(`${mockUrl}/translate`);
+  // 填入 API Key（填入后 region 输入框出现）
+  await card.locator('input[type="password"]').fill('test-ms-key');
+  // 填入 region
+  await card.getByTestId('region').fill('eastus');
+  // 启用该提供方
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  // 2. 打开测试页,选中 "Hello world" 并翻译
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  // 3. 断言译文浮层展示 mock 译文
+  const panel = page.locator('.llm-translator-panel');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText('你好,世界');
+
+  // 4. 断言请求落到 microsoft 官方端点（mock）并携带 Key 与 region header
+  const headers = getLastRequestHeaders();
+  expect(headers['ocp-apim-subscription-key']).toBe('test-ms-key');
+  expect(headers['ocp-apim-subscription-region']).toBe('eastus');
 });
 
