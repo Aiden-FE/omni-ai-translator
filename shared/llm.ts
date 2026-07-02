@@ -9,13 +9,15 @@ function buildPrompt(text: string, targetLang: string, sourceLang?: string): str
 }
 
 /**
- * 调用 OpenAI 兼容接口（/v1/chat/completions）
+ * 调用 OpenAI 兼容接口
+ * baseUrl 需为用户填写的完整接口路径（如 https://api.openai.com/v1/chat/completions），
+ * 代码不再追加固定 path，仅去除末尾多余斜杠后直接使用。
  */
 async function callOpenAICompatible(
   provider: ProviderConfig,
   req: TranslateRequest,
 ): Promise<TranslateResult> {
-  const url = `${provider.baseUrl.replace(/\/$/, '')}/v1/chat/completions`;
+  const url = provider.baseUrl.replace(/\/+$/, '');
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -37,13 +39,15 @@ async function callOpenAICompatible(
 }
 
 /**
- * 调用 Ollama 本地接口（/api/chat）
+ * 调用 Ollama 本地接口
+ * baseUrl 需为用户填写的完整接口路径（如 http://localhost:11434/api/chat），
+ * 代码不再追加固定 path，仅去除末尾多余斜杠后直接使用。
  */
 async function callOllama(
   provider: ProviderConfig,
   req: TranslateRequest,
 ): Promise<TranslateResult> {
-  const url = `${provider.baseUrl.replace(/\/$/, '')}/api/chat`;
+  const url = provider.baseUrl.replace(/\/+$/, '');
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

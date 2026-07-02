@@ -8,6 +8,7 @@ export interface ProviderConfig {
   id: string;
   name: string;
   type: ProviderType;
+  /** 完整接口路径（如 https://api.openai.com/v1/chat/completions 或 http://localhost:11434/api/chat），代码不再追加 path */
   baseUrl: string;
   apiKey?: string;
   model: string;
