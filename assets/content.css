@@ -34,3 +34,19 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
   font-family: system-ui, -apple-system, sans-serif;
 }
+
+/* 错误态主行：❌ + 可读主文案（沿用 panel 文字颜色，对比度满足 WCAG AA） */
+.llm-translator-error-main {
+  color: #f9fafb;
+  font-size: 14px;
+}
+
+/* 错误态引导次要行：较小字号、稍暗颜色，对比度 ≥ 4.5:1（WCAG AA），纯文本不可点击 */
+.llm-translator-error-hint {
+  margin-top: 4px;
+  color: #d1d5db;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: default;
+  user-select: none;
+}

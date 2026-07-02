@@ -4,6 +4,8 @@
 
 import '@/assets/content.css';
 import { getSettings } from '@/shared/storage';
+import type { TranslateResult } from '@/shared/types';
+import { errorFeedback } from '@/shared/translator/error';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -60,10 +62,29 @@ export default defineContentScript({
         type: 'translate' as const,
         payload: { text: selectedText, targetLang },
       });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result: { translatedText?: string; error?: string } = resp as any;
-      if (panel) {
-        panel.textContent = result.error ? `❌ ${result.error}` : result.translatedText ?? '';
+      const result = resp as TranslateResult;
+      if (!panel) return;
+      if (result.error) {
+        if (result.errorType) {
+          // 四类 errorType 差异化反馈：主行（❌ + 主文案）+ 引导次要行
+          const { main, guidance } = errorFeedback(result.errorType);
+          panel.textContent = '';
+          const mainDiv = document.createElement('div');
+          mainDiv.className = 'llm-translator-error-main';
+          mainDiv.textContent = `❌ ${main}`;
+          panel.appendChild(mainDiv);
+          if (guidance) {
+            const hintDiv = document.createElement('div');
+            hintDiv.className = 'llm-translator-error-hint';
+            hintDiv.textContent = guidance;
+            panel.appendChild(hintDiv);
+          }
+        } else {
+          // 回退：无 errorType 时沿用旧逻辑
+          panel.textContent = `❌ ${result.error}`;
+        }
+      } else {
+        panel.textContent = result.translatedText ?? '';
       }
     }
 
