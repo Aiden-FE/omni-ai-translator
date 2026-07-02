@@ -65,7 +65,7 @@ registry.createProvider(config)
 | `rate-limit` | 源返回 429 | `classifyError` status === 429 | 翻译源繁忙（限流），请稍后再试或在配置页切换源 |
 | `unreachable` | 源返回 4xx/5xx（非 429）、域名不可达 | `classifyError` status >= 400 | 翻译源不可达，请在配置页切换到其它源 |
 
-每类对应不同的用户侧操作，前端可据此做差异化反馈而非统一「翻译失败」。`errorTypeMessage(errorType)` 返回对应可读提示。
+每类对应不同的用户侧操作，前端可据此做差异化反馈而非统一「翻译失败」。`errorTypeMessage(errorType)` 返回合并的可读提示（主文案 + 引导拼接），`errorFeedback(errorType)` 返回拆分的 `{ main, guidance }` 结构供前端浮层差异化渲染（#11 产出）。
 
 ## 数据流
 
@@ -83,15 +83,17 @@ content-script → sendMessage({type:'translate', payload})
 ## 相关文件
 
 - `shared/translator/types.ts` — `TranslationProvider` 接口定义
-- `shared/translator/error.ts` — 错误归一化（`classifyError` / `errorTypeMessage`）
+- `shared/translator/error.ts` — 错误归一化（`classifyError` / `errorTypeMessage` / `errorFeedback`）
 - `shared/translator/registry.ts` — provider 工厂注册表与路由（`createProvider` / `inferCategory`）
 - `shared/translator/index.ts` — 统一入口（`translateWithAdapter` / `testWithAdapter`）
 - `shared/translator/llm-provider.ts` — LLM provider 工厂（`createLLMProvider`，迁移自 `shared/llm.ts`）
 - `shared/translator/traditional-provider.ts` — 传统 provider 占位（`createTraditionalProvider`）
-- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter，40 用例）
+- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter，54 用例，含 `errorFeedback` 四类 errorType 渲染路径测试）
 - `shared/types.ts` — `ProviderConfig` / `TranslateResult` / `ErrorType` / `ProviderCategory` 类型定义
 - `shared/llm.ts` — 兼容层，保留 `translate(provider, req)` / `testProvider(provider)` 导出签名，内部委托适配层（已标记 `@deprecated`，新代码用 `shared/translator` 统一入口）
 - `entrypoints/background.ts` — `translate` 分支用 `translateWithAdapter`，`test-provider` 分支用 `testWithAdapter`，无源类型分支
+- `entrypoints/content.ts` — 划词浮层，`doTranslate` 按 `errorType` 调用 `errorFeedback` 渲染主行（❌ + 主文案）+ 引导次要行（#11 产出）
+- `assets/content.css` — 浮层样式，含错误态主行 `.llm-translator-error-main` 和引导次要行 `.llm-translator-error-hint`（#11 产出）
 
 ## 相关模块
 

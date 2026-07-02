@@ -1,6 +1,6 @@
 // 错误归一化单元测试 — 覆盖四类错误路径（no-config / network / rate-limit / unreachable）
 import { describe, it, expect } from 'vitest';
-import { classifyError, errorTypeMessage } from '../error';
+import { classifyError, errorTypeMessage, errorFeedback } from '../error';
 import type { ErrorType } from '@/shared/types';
 
 describe('classifyError', () => {
@@ -64,5 +64,67 @@ describe('errorTypeMessage', () => {
   it('四类提示互不相同（可区分）', () => {
     const messages = allTypes.map((t) => errorTypeMessage(t));
     expect(new Set(messages).size).toBe(4);
+  });
+});
+
+describe('errorFeedback', () => {
+  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable'];
+
+  it('no-config → 主文案「未配置可用翻译源」+ 引导「请在配置页选择或添加源」', () => {
+    const fb = errorFeedback('no-config');
+    expect(fb.main).toBe('未配置可用翻译源');
+    expect(fb.guidance).toBe('请在配置页选择或添加源');
+  });
+
+  it('network → 主文案「翻译请求失败」+ 引导「请检查网络或源地址」', () => {
+    const fb = errorFeedback('network');
+    expect(fb.main).toBe('翻译请求失败');
+    expect(fb.guidance).toBe('请检查网络或源地址');
+  });
+
+  it('rate-limit → 主文案「翻译源繁忙（限流）」+ 引导「请稍后再试或在配置页切换源」', () => {
+    const fb = errorFeedback('rate-limit');
+    expect(fb.main).toBe('翻译源繁忙（限流）');
+    expect(fb.guidance).toBe('请稍后再试或在配置页切换源');
+  });
+
+  it('unreachable → 主文案「翻译源不可达」+ 引导「请在配置页切换到其它源」', () => {
+    const fb = errorFeedback('unreachable');
+    expect(fb.main).toBe('翻译源不可达');
+    expect(fb.guidance).toBe('请在配置页切换到其它源');
+  });
+
+  it.each(allTypes)('errorType=%s 的 main 和 guidance 均非空', (type) => {
+    const fb = errorFeedback(type);
+    expect(fb.main).toBeTruthy();
+    expect(fb.main.length).toBeGreaterThan(2);
+    expect(fb.guidance).toBeTruthy();
+    expect(fb.guidance.length).toBeGreaterThan(2);
+  });
+
+  it('四类 main 互不相同（可区分）', () => {
+    const mains = allTypes.map((t) => errorFeedback(t).main);
+    expect(new Set(mains).size).toBe(4);
+  });
+
+  it('四类 guidance 互不相同（可区分）', () => {
+    const guidances = allTypes.map((t) => errorFeedback(t).guidance);
+    expect(new Set(guidances).size).toBe(4);
+  });
+
+  it('no-config 引导包含「配置页」', () => {
+    expect(errorFeedback('no-config').guidance).toContain('配置页');
+  });
+
+  it('network 引导包含「网络」', () => {
+    expect(errorFeedback('network').guidance).toContain('网络');
+  });
+
+  it('rate-limit 主文案包含「限流」', () => {
+    expect(errorFeedback('rate-limit').main).toContain('限流');
+  });
+
+  it('unreachable 主文案包含「不可达」', () => {
+    expect(errorFeedback('unreachable').main).toContain('不可达');
   });
 });
