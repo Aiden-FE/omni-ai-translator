@@ -44,9 +44,19 @@ export interface Settings {
   customPrompt?: string;
 }
 
+/** 生效源列表与当前生效源（getActiveSources 返回，供 #4 配置页消费） */
+export interface ActiveSourcesResult {
+  /** 可用源列表：内置免费源 + 用户已配置源 */
+  sources: ProviderConfig[];
+  /** 当前生效源 ID（fresh install 解析为默认 microsoft） */
+  activeSourceId: string;
+}
+
 /** 消息通道类型 */
 export type Message =
   | { type: 'translate'; payload: TranslateRequest }
   | { type: 'test-provider'; payload: ProviderConfig }
   | { type: 'get-settings' }
-  | { type: 'get-providers' };
+  | { type: 'get-providers' }
+  | { type: 'get-active-sources' }
+  | { type: 'set-active-source'; payload: { id: string } };

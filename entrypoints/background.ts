@@ -4,7 +4,12 @@
 // 本文件不含源类型 if-else 分支，所有源类型路由由适配层（shared/translator）处理。
 
 import { getProviders, getSettings } from '@/shared/storage';
-import { translateWithAdapter, testWithAdapter } from '@/shared/translator';
+import {
+  translateWithAdapter,
+  testWithAdapter,
+  getActiveSources,
+  setActiveSource,
+} from '@/shared/translator';
 import type { Message } from '@/shared/types';
 
 export default defineBackground(() => {
@@ -27,6 +32,15 @@ export default defineBackground(() => {
           }
           case 'get-providers': {
             sendResponse(await getProviders());
+            return;
+          }
+          case 'get-active-sources': {
+            sendResponse(await getActiveSources());
+            return;
+          }
+          case 'set-active-source': {
+            await setActiveSource(message.payload.id);
+            sendResponse({ ok: true });
             return;
           }
           default:

@@ -1,5 +1,5 @@
 // Provider 注册表与路由单元测试
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createProvider, inferCategory } from '../registry';
 import type { ProviderConfig } from '@/shared/types';
 
@@ -33,6 +33,10 @@ describe('inferCategory', () => {
 });
 
 describe('createProvider', () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('openai-compatible 配置 → LLM provider', () => {
     const provider = createProvider(makeConfig('openai-compatible'));
     expect(provider.type).toBe('llm');
@@ -60,19 +64,75 @@ describe('createProvider', () => {
     expect(provider.type).toBe('traditional');
   });
 
-  it('传统 provider translate 返回 unreachable 错误', async () => {
-    const provider = createProvider(makeConfig('google'));
+  it('未知传统源类型 → unreachable 错误', async () => {
+    // category=traditional 但 type 非 google/microsoft 时，translate 返回 unreachable
+    const provider = createProvider(
+      makeConfig('openai-compatible', { category: 'traditional' }),
+    );
     const result = await provider.translate({ text: 'hello', targetLang: '中文' });
     expect(result.translatedText).toBe('');
     expect(result.errorType).toBe('unreachable');
-    expect(result.error).toBeTruthy();
+    expect(result.error).toContain('未知');
   });
 
-  it('传统 provider test 返回 unreachable 错误', async () => {
+  it('google provider translate 调用 fetch 并解析嵌套数组响应', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => [[['你好', 'hello', null, null, 1]], null, 'en'],
+      }),
+    );
+    const provider = createProvider(makeConfig('google'));
+    const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
+    expect(result.translatedText).toBe('你好');
+    expect(result.errorType).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('microsoft provider translate 经 auth token 调用翻译端点', async () => {
+    const authFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => 'fake-jwt-token',
+    });
+    const translateFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
+    });
+    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
+      return url.includes('/translate/auth') ? authFetch() : translateFetch();
+    }));
     const provider = createProvider(makeConfig('microsoft'));
-    const result = await provider.test();
+    const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
+    expect(result.translatedText).toBe('你好');
+    expect(result.errorType).toBeUndefined();
+    expect(authFetch).toHaveBeenCalled();
+    expect(translateFetch).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('传统 provider fetch 失败 → classifyError 归类', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 429, text: async () => 'rate limited' }),
+    );
+    const provider = createProvider(makeConfig('google'));
+    const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
     expect(result.translatedText).toBe('');
-    expect(result.errorType).toBe('unreachable');
+    expect(result.errorType).toBe('rate-limit');
+    vi.unstubAllGlobals();
+  });
+
+  it('传统 provider fetch 抛异常 → network 错误', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const provider = createProvider(makeConfig('google'));
+    const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
+    expect(result.translatedText).toBe('');
+    expect(result.errorType).toBe('network');
+    vi.unstubAllGlobals();
   });
 
   it('所有 provider 实现 TranslationProvider 接口', () => {
