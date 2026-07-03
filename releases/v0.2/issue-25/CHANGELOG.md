@@ -45,3 +45,11 @@
 - 流式 fetch 使用 MV3 background SW 的 `fetch` + `response.body.getReader()`，SW 回收时 port 断开归入 network 错误
 - 既有 e2e 测试已适配 port 流程，全部通过（6 e2e + 103 单元测试）
 - 流式光标 CSS 动画无害，不影响非流式场景
+
+## 知识沉淀
+
+由 prodflow-workers 协调器补做（worker 子 agent 无 Skill 工具，Step5b 知识沉淀由主会话接管）：
+
+- **ADR**：新增 [ADR-002 — LLM 翻译流式响应采用 Port 长连接 + ReadableStream](../../../../adr/002-llm-streaming-port-and-readablestream.md)，记录 translate 流程 port 化、三源流式解析统一、可选 `translateStream` 契约的决策与备选方案（sendMessage 分块 / content 直接 fetch 均否决）。
+- **Feature**：新增 [streaming.md](../../../../feature/translator/streaming.md)，记录 LLM 流式翻译的功能目标、业务规则、浮层状态流转、port 协议与相关文件。
+- **索引**：更新 `knowledges/adr/index.md`、`knowledges/feature/translator/index.md`。
