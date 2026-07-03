@@ -22,6 +22,8 @@ export interface ProviderConfig {
   model: string;
   /** microsoft Azure Translator 区域（如 eastus、global）；有 Key 时携带 Ocp-Apim-Subscription-Region。google 不使用。缺省则不发送该 header。 */
   region?: string;
+  /** 响应风格：仅对 openai-compatible 类型有意义。缺省按 'openai'（向后兼容，存量配置无需迁移）。anthropic 走原生 Anthropic Messages API 协议。 */
+  responseStyle?: 'openai' | 'anthropic';
 }
 
 /** 翻译请求 */

@@ -152,7 +152,27 @@ async function onTypeChange(p: ProviderConfig) {
   if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
     p.baseUrl = DEFAULT_BASE_URL[p.type];
   }
+  // 响应风格仅对 openai-compatible 有意义，切换为其它类型时复位为 openai，避免残留无效风格
+  if (p.type !== 'openai-compatible') {
+    p.responseStyle = 'openai';
+  }
   // 类型变更后旧测试结果失效，清除
+  const next = { ...testMsgs.value };
+  delete next[p.id];
+  testMsgs.value = next;
+  await saveProviders();
+}
+
+// 响应风格说明文案：区分 openai 与 anthropic 两种风格
+function responseStyleHint(p: ProviderConfig): string {
+  return p.responseStyle === 'anthropic'
+    ? '适用于原生 Anthropic Messages API 端点（如 Claude 官方 https://api.anthropic.com/v1/messages）'
+    : '适用于 OpenAI 兼容端点';
+}
+
+// 切换响应风格（openai / anthropic），保存并清除旧测试结果
+async function onResponseStyleChange(p: ProviderConfig, style: 'openai' | 'anthropic') {
+  p.responseStyle = style;
   const next = { ...testMsgs.value };
   delete next[p.id];
   testMsgs.value = next;
@@ -309,6 +329,37 @@ function isErr(msg: string): boolean {
             @change="saveProviders"
           >
         </div>
+        <!-- 响应风格单选：仅 openai-compatible 类型展示（openai / anthropic，默认 openai） -->
+        <div
+          v-if="p.type === 'openai-compatible'"
+          class="row response-style-row"
+          data-testid="response-style"
+        >
+          <span class="response-style-label">响应风格</span>
+          <label class="response-style-option">
+            <input
+              type="radio"
+              value="openai"
+              :name="`response-style-${p.id}`"
+              :checked="(p.responseStyle ?? 'openai') === 'openai'"
+              @change="onResponseStyleChange(p, 'openai')"
+            >
+            openai
+          </label>
+          <label class="response-style-option">
+            <input
+              type="radio"
+              value="anthropic"
+              :name="`response-style-${p.id}`"
+              :checked="p.responseStyle === 'anthropic'"
+              @change="onResponseStyleChange(p, 'anthropic')"
+            >
+            anthropic
+          </label>
+          <span class="hint response-style-hint">
+            {{ responseStyleHint(p) }}
+          </span>
+        </div>
         <div class="row">
           <input
             v-model="p.apiKey"
@@ -459,6 +510,32 @@ h2 {
 }
 .row:last-child {
   margin-bottom: 0;
+}
+
+/* ===== 响应风格单选 ===== */
+.response-style-label {
+  font-size: 13px;
+  color: #374151;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+.response-style-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: #1f2937;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.response-style-option input {
+  flex: none;
+  width: auto;
+}
+.response-style-hint {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
 }
 input,
 select,

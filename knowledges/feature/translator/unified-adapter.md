@@ -55,6 +55,39 @@ registry.createProvider(config)
     └── category=traditional → createTraditionalProvider (google / microsoft，有 Key 走官方端点 / 无 Key 走免 Key 公共端点)
 ```
 
+## LLM 响应风格（responseStyle）
+
+`ProviderConfig.responseStyle?: 'openai' | 'anthropic'`（`shared/types.ts`，#22 新增）— 仅对 `openai-compatible` 类型有意义，缺省按 `'openai'`（向后兼容，存量配置无需迁移）。使原生 Anthropic Messages API 端点（如 Claude 官方 `https://api.anthropic.com/v1/messages`）可作为 OpenAI 兼容源的一种风格直接配置使用。
+
+`createLLMProvider`（`shared/translator/llm-provider.ts`）在 `openai-compatible` 类型下按 `responseStyle` 内部分流（ollama 不受影响，固定走 `callOllama`）：
+
+```
+createLLMProvider(config)
+    ├── config.type === 'ollama' → callOllama(config, req)
+    └── config.type === 'openai-compatible'
+         ├── responseStyle === 'anthropic' → callAnthropic(config, req)
+         └── else（openai / 缺省）       → callOpenAICompatible(config, req)
+```
+
+### anthropic 风格请求规范（callAnthropic）
+
+| 维度 | 规范 |
+|---|---|
+| 鉴权头 | `x-api-key: <apiKey>`（非 Bearer，有 apiKey 时携带）+ `anthropic-version: 2023-06-01` |
+| 请求体 | `{ model, max_tokens: 1024, system: <翻译指令>, messages: [{role:'user', content: <原文>}], temperature: 0.3 }` |
+| 响应解析 | `data.content[0].text`（可选链兜底空数组/null） |
+| 错误归一化 | 复用 `classifyError`：429→rate-limit，4xx/5xx→unreachable，fetch 异常→network（不新增错误类型） |
+| baseUrl | 沿用 #5 修复（用户填完整路径，去尾斜杠，不追加 path） |
+
+### 配置页 UI（#22）
+
+`entrypoints/options/App.vue` 源卡片在类型为 `openai-compatible` 时展示响应风格单选（openai / anthropic，默认 openai），切换类型时复位为 openai，说明文案区分两种风格。连通性测试复用 `test-provider` 通道，覆盖 anthropic 风格。
+
+### 不包含
+
+- anthropic 流式响应（streaming，延后 v0.3+）
+- 其他厂商原生协议、自动协议探测
+
 ## 四类错误模型
 
 `classifyError(err, status?)`（`shared/translator/error.ts`）将底层异常 / HTTP 状态码归一化为四类互斥 `errorType`：
@@ -132,13 +165,13 @@ content-script → sendMessage({type:'translate', payload})
 - `shared/translator/error.ts` — 错误归一化（`classifyError` / `errorTypeMessage` / `errorFeedback`）
 - `shared/translator/registry.ts` — provider 工厂注册表与路由（`createProvider` / `inferCategory`）
 - `shared/translator/index.ts` — 统一入口（`translateWithAdapter` / `testWithAdapter` / `getActiveSources` / `setActiveSource`，后两者供 #4 配置页消费）
-- `shared/translator/llm-provider.ts` — LLM provider 工厂（`createLLMProvider`，迁移自 `shared/llm.ts`）
+- `shared/translator/llm-provider.ts` — LLM provider 工厂（`createLLMProvider`，迁移自 `shared/llm.ts`；#22 新增 `callAnthropic` 函数 + `responseStyle` 风格分流）
 - `shared/translator/traditional-provider.ts` — 传统 provider 实现（`createTraditionalProvider`，google/microsoft 有 Key 官方端点 + 无 Key 公共端点双模式，#18 扩展有 Key 路径）
 - `shared/translator/builtin-sources.ts` — 内置免 Key 免费源常量与查找（`BUILTIN_FREE_SOURCES` / `DEFAULT_ACTIVE_SOURCE_ID` / `getBuiltinSourceById` / 端点常量）
-- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter / builtin-sources / traditional-provider，85 用例，含 `errorFeedback` 四类 errorType 渲染路径、内置免 Key 源查找、传统 provider 有/无 Key 双路径与 region header 校验测试）
-- `entrypoints/options/App.vue` — 配置页翻译源管理（#16 交付 4 类源管理 + 连通性测试；#19 新增 microsoft 有 Key 场景 region 输入框，条件渲染 `p.type === 'microsoft' && p.apiKey`）
-- `e2e/translate.spec.ts` + `e2e/mock-server.ts` — Playwright e2e（#19 扩展 mock server 新增 microsoft `/translate` 路由 + headers 记录，新增 microsoft 有 Key 划词 e2e 验证官方端点落点与 `Ocp-Apim-Subscription-Key`/`Ocp-Apim-Subscription-Region` header 携带）
-- `shared/types.ts` — `ProviderConfig`（含 #18 新增可选 `region?`）/ `TranslateResult` / `ErrorType` / `ProviderCategory` / `ActiveSourcesResult` 类型定义
+- `shared/translator/__tests__/` — Vitest 单元测试（error / registry / llm-provider / adapter / builtin-sources / traditional-provider，93 用例，含 `errorFeedback` 四类 errorType 渲染路径、内置免 Key 源查找、传统 provider 有/无 Key 双路径与 region header 校验、#22 anthropic 风格请求构建/响应解析/错误归类与 openai 回归测试）
+- `entrypoints/options/App.vue` — 配置页翻译源管理（#16 交付 4 类源管理 + 连通性测试；#19 新增 microsoft 有 Key 场景 region 输入框，条件渲染 `p.type === 'microsoft' && p.apiKey`；#22 新增 openai-compatible 响应风格单选 UI + 切换类型复位 + 说明文案）
+- `e2e/translate.spec.ts` + `e2e/mock-server.ts` — Playwright e2e（#19 扩展 mock server 新增 microsoft `/translate` 路由 + headers 记录，新增 microsoft 有 Key 划词 e2e 验证官方端点落点与 `Ocp-Apim-Subscription-Key`/`Ocp-Apim-Subscription-Region` header 携带；#22 新增 Anthropic `/v1/messages` mock 路由 + anthropic 风格划词翻译 e2e 验证请求落点与 `x-api-key`/`anthropic-version` header）
+- `shared/types.ts` — `ProviderConfig`（含 #18 新增可选 `region?`、#22 新增可选 `responseStyle?: 'openai' | 'anthropic'`）/ `TranslateResult` / `ErrorType` / `ProviderCategory` / `ActiveSourcesResult` 类型定义
 - `shared/llm.ts` — 兼容层，保留 `translate(provider, req)` / `testProvider(provider)` 导出签名，内部委托适配层（已标记 `@deprecated`，新代码用 `shared/translator` 统一入口）
 - `entrypoints/background.ts` — `translate` 分支用 `translateWithAdapter`，`test-provider` 分支用 `testWithAdapter`，`get-active-sources` / `set-active-source` 分支供 #4 配置页消费，无源类型分支
 - `entrypoints/content.ts` — 划词浮层，`doTranslate` 按 `errorType` 调用 `errorFeedback` 渲染主行（❌ + 主文案）+ 引导次要行（#11 产出）
@@ -151,4 +184,4 @@ content-script → sendMessage({type:'translate', payload})
 
 ---
 
-> 更新日期：2026-07-02 · 关联 Issue：#14（免 Key 公共端点 + 生效源切换契约）、#18（有 Key 走官方 API + region 字段契约，关联 PRD #3 功能事项 3）、#19（前端联调：配置页 region 输入框 + microsoft 有 Key e2e 验证）
+> 更新日期：2026-07-03 · 关联 Issue：#14（免 Key 公共端点 + 生效源切换契约）、#18（有 Key 走官方 API + region 字段契约，关联 PRD #3 功能事项 3）、#19（前端联调：配置页 region 输入框 + microsoft 有 Key e2e 验证）、#22（LLM 适配层 anthropic 响应风格支持：responseStyle 字段 + callAnthropic + 配置页 UI，关联 PRD #6 功能事项 5）
