@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-01 |
-| **最近更新** | 2026-07-03（登记 bug #27/#28/#29；新增功能事项 7 popup-settings PRD draft #30、8 md-render PRD draft #31；事项 1-6 done） |
+| **最近更新** | 2026-07-03（登记 bug #27/#28/#29 → 独立快修并合并 PR #32/#33/#34，Issue 已关闭；新增功能事项 7 popup-settings PRD draft #30、8 md-render PRD draft #31；事项 1-6 done） |
 | **开发周期估算** | ≤3 周（约 2.5–3 周） |
 | **闭环业务链** | 用户在配置页选择/配置翻译源（免 Key 兜底 / 传统 API Key / LLM）→ 划词触发 → 统一适配层按配置路由 → 调用对应源 → 浮层展示译文；未配置任何源时默认走免 Key 兜底源，开箱即用 |
 | **关联材料** | [../../strategy/index.md](../../strategy/index.md)、[../../roadmap/index.md](../../roadmap/index.md)、[../../../startup-summary.md](../../../startup-summary.md) |
