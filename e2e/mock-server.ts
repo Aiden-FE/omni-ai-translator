@@ -53,6 +53,22 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           return;
         }
 
+        // Anthropic Messages API（原生协议，anthropic 响应风格）
+        if (req.method === 'POST' && req.url?.includes('/v1/messages')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              id: 'msg_mock',
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'text', text: '你好,世界' }],
+              model: 'mock-model',
+              stop_reason: 'end_turn',
+            }),
+          );
+          return;
+        }
+
         // 微软官方 translate 端点（有 Key 场景）：POST /translate?api-version=3.0&to=...
         // 返回微软响应格式,供有 Key e2e 验证官方端点落点与鉴权 header
         if (req.method === 'POST' && req.url?.includes('/translate')) {

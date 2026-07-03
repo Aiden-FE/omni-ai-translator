@@ -148,3 +148,61 @@ test('microsoft 有 Key 源启用后,划词翻译落到官方端点并携带 reg
   expect(headers['ocp-apim-subscription-region']).toBe('eastus');
 });
 
+test('anthropic 响应风格划词翻译落到 /v1/messages 并携带 x-api-key + anthropic-version', async ({ context, extensionId }) => {
+  // 1. 通过 options 页配置 anthropic 风格提供方并启用
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const cards = optionsPage.locator('.provider-card');
+  const card = cards.last();
+  await card.locator('input[placeholder="名称"]').fill('anthropic-mock');
+  // BaseURL 指向 mock server 的 Anthropic /v1/messages 路由
+  await card.getByTestId('base-url').fill(`${mockUrl}/v1/messages`);
+  await card.locator('input[placeholder="模型名"]').fill('mock-model');
+  // 选择 anthropic 响应风格
+  await card.getByTestId('response-style').locator('input[type="radio"][value="anthropic"]').check();
+  // 填入 API Key
+  await card.locator('input[type="password"]').fill('test-anthropic-key');
+
+  // 连通性测试（复用 test-provider 通道，覆盖 anthropic 风格）
+  await card.getByRole('button', { name: '测试连通' }).click();
+  await expect(card.locator('.test-msg')).toContainText('✅', { timeout: 5_000 });
+
+  // 启用该提供方
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  // 2. 打开测试页,选中 "Hello world" 并翻译
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  // 3. 断言译文浮层展示 mock 译文
+  const panel = page.locator('.llm-translator-panel');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText('你好,世界');
+
+  // 4. 断言请求落到 Anthropic /v1/messages 并携带 x-api-key + anthropic-version
+  const headers = getLastRequestHeaders();
+  expect(headers['x-api-key']).toBe('test-anthropic-key');
+  expect(headers['anthropic-version']).toBe('2023-06-01');
+  // 5. 断言请求体为 Anthropic 格式（max_tokens + 顶层 system + user message）
+  const body = getLastRequestBody() as {
+    system?: string;
+    max_tokens?: number;
+    messages?: Array<{ role?: string; content?: string }>;
+  } | null;
+  expect(body?.max_tokens).toBe(1024);
+  expect(body?.system).toBeTruthy();
+  expect(body?.messages?.[0]?.role).toBe('user');
+});
+
