@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Translator · 译文 markdown 渲染 (v0.2 原型)</title>
+<style>
+  :root {
+    --c-panel-bg: #1f2937;
+    --c-panel-text: #f9fafb;
+    --c-code-bg: #374151;
+    --c-border: #e5e7eb;
+    --c-hint: #6b7280;
+    --c-text: #111827;
+    --c-page-bg: #f3f4f6;
+    --font-stack: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --r-card: 8px;
+    --sp-3: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--c-page-bg);
+    font-family: var(--font-stack);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--c-text);
+    padding: 32px;
+  }
+  .page { max-width: 720px; margin: 0 auto; }
+  .page h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .page .desc { font-size: 13px; color: var(--c-hint); margin: 0 0 24px; }
+
+  /* 模拟网页选中文本 */
+  .source {
+    background: #fff;
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-card);
+    padding: var(--sp-3);
+    font-size: 13px;
+    color: #374151;
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+  .source mark { background: #fef08a; padding: 0 2px; border-radius: 2px; }
+
+  /* 翻译浮层(暗色,沿用 design-system) */
+  .panel {
+    margin-top: 20px;
+    background: var(--c-panel-bg);
+    color: var(--c-panel-text);
+    border-radius: var(--r-card);
+    padding: 12px 14px;
+    max-width: 360px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+    font-size: 14px;
+    line-height: 1.6;
+    word-wrap: break-word;
+  }
+  .panel__cursor { color: #9ca3af; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* markdown 渲染样式(暗底) */
+  .md h1, .md h2, .md h3 { margin: 0.4em 0 0.2em; line-height: 1.3; font-weight: 600; }
+  .md h1 { font-size: 16px; }
+  .md h2 { font-size: 15px; }
+  .md h3 { font-size: 14px; }
+  .md p { margin: 0.3em 0; }
+  .md ul, .md ol { margin: 0.3em 0; padding-left: 1.4em; }
+  .md li { margin: 0.1em 0; }
+  .md strong { font-weight: 600; color: #fff; }
+  .md em { font-style: italic; }
+  .md code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    background: var(--c-code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .md pre {
+    background: var(--c-code-bg);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 0.4em 0;
+    overflow-x: auto;
+  }
+  .md pre code { background: transparent; padding: 0; font-size: 12.5px; }
+  .md blockquote {
+    border-left: 3px solid #6b7280;
+    margin: 0.4em 0;
+    padding: 0.1em 0 0.1em 10px;
+    color: #d1d5db;
+  }
+
+  /* raw 模式:等宽,保留符号 */
+  .raw {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12.5px;
+    white-space: pre-wrap;
+    color: #e5e7eb;
+  }
+
+  /* Tweaks */
+  .tweaks {
+    position: fixed; right: 20px; bottom: 20px;
+    background: var(--c-panel-bg); color: var(--c-panel-text);
+    border-radius: var(--r-card); padding: 12px 14px;
+    font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.22);
+    z-index: 9999; min-width: 200px;
+  }
+  .tweaks__title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 8px; }
+  .tweaks label { display: block; }
+  .tweaks select { width: 100%; padding: 4px 6px; margin-top: 4px; color: var(--c-panel-text); background: #374151; border: 1px solid #4b5563; border-radius: 4px; }
+</style>
+</head>
+<body>
+  <div class="page">
+    <h1>译文 markdown 渲染 · 原型</h1>
+    <p class="desc">同一份 LLM 译文,左下角浮层在 raw(textContent,现状)与 rendered(markdown→sanitize→innerHTML)间切换。</p>
+
+    <div class="source">
+用户选中源文(技术文档片段):
+<mark># Configuration
+Enable **streaming** and set `model`.
+- Open the popup
+- Click *Add Provider*
+
+```js
+const t = await translate(text)
+```</mark>
+    </div>
+
+    <!-- 翻译浮层 -->
+    <div class="panel" id="panel" role="status" aria-live="polite">
+      <div id="panel-content" class="raw"># 配置
+启用 **流式** 并设置 `model`。
+- 打开 popup
+- 点击 *添加提供方*
+
+```js
+const t = await translate(text)
+```</div>
+    </div>
+  </div>
+
+  <div class="tweaks">
+    <div class="tweaks__title">Tweaks</div>
+    <label>渲染模式
+      <select id="mode-toggle">
+        <option value="raw">Raw(textContent,现状)</option>
+        <option value="rendered">Rendered(markdown 渲染)</option>
+      </select>
+    </label>
+  </div>
+
+<script>
+  // 极简 sanitize:演示用,生产用 DOMPurify
+  function escapeHtml(s){ return s.replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+  function renderMarkdown(md){
+    // 行块解析(演示级;生产用 marked)
+    var lines = md.split('\n');
+    var html = '';
+    var inCode = false, codeBuf = [], inList = false;
+    function flushList(){ if(inList){ html += '</ul>'; inList = false; } }
+    for (var i=0;i<lines.length;i++){
+      var l = lines[i];
+      if (l.trim().indexOf('```') === 0) {
+        if (!inCode){ flushList(); inCode = true; codeBuf = []; }
+        else { html += '<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>'; inCode = false; }
+        continue;
+      }
+      if (inCode){ codeBuf.push(l); continue; }
+      if (/^###\s/.test(l)) { flushList(); html += '<h3>' + inline(l.replace(/^###\s/,'')) + '</h3>'; }
+      else if (/^##\s/.test(l)) { flushList(); html += '<h2>' + inline(l.replace(/^##\s/,'')) + '</h2>'; }
+      else if (/^#\s/.test(l)) { flushList(); html += '<h1>' + inline(l.replace(/^#\s/,'')) + '</h1>'; }
+      else if (/^-\s/.test(l)) { if(!inList){ html += '<ul>'; inList = true; } html += '<li>' + inline(l.replace(/^-\s/,'')) + '</li>'; }
+      else if (/^>\s/.test(l)) { flushList(); html += '<blockquote>' + inline(l.replace(/^>\s/,'')) + '</blockquote>'; }
+      else if (l.trim() === '') { flushList(); }
+      else { flushList(); html += '<p>' + inline(l) + '</p>'; }
+    }
+    if (inCode) html += '<pre><code>' + escapeHtml(codeBuf.join('\n')) + '</code></pre>';
+    flushList();
+    return html;
+  }
+  function inline(s){
+    return escapeHtml(s)
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  }
+
+  var raw = document.getElementById('panel-content').textContent.trim();
+  var toggle = document.getElementById('mode-toggle');
+  var content = document.getElementById('panel-content');
+  function apply(mode){
+    if (mode === 'rendered'){
+      content.className = 'md';
+      content.innerHTML = renderMarkdown(raw);
+    } else {
+      content.className = 'raw';
+      content.textContent = raw;
+    }
+  }
+  toggle.addEventListener('change', function(){ apply(toggle.value); });
+  apply('raw');
+</script>
+</body>
+</html>

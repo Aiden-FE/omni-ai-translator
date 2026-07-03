@@ -20,3 +20,5 @@
 视觉原型与高保真交付物由 `web-design-engineer` 技能生成，沉淀于 [prototypes/](prototypes/index.md)。
 
 - [prototypes/v0.2-source-picker.html](prototypes/v0.2-source-picker.html) — v0.2 配置页翻译源选择 UI
+- [prototypes/v0.2-popup-settings.html](prototypes/v0.2-popup-settings.html) — v0.2 popup 设置面板(配置入口 popup 化与现代化)
+- [prototypes/v0.2-md-render.html](prototypes/v0.2-md-render.html) — v0.2 译文 markdown 可读渲染(raw vs rendered)

@@ -60,6 +60,7 @@
 
 - 轻量入口，说明使用方式 + 「打开设置」按钮
 - 第一版不承载复杂交互
+- v0.2-7 升级（PRD 7-popup-settings）：popup 改为配置主入口——生效源横幅、源卡片(可折叠)、源类型 optgroup 分组(LLM 接口配置/传统翻译)、连通性测试、目标语言、「打开全部设置」跳 options；options 页保留为兜底全功能页。视觉原型 prototypes/v0.2-popup-settings.html
 
 ## 待规划交互（后续版本）
 

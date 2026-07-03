@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-01 |
-| **最近更新** | 2026-07-03（功能事项 6 llm-streaming 研发任务 #25 完成，PR #26 已合并，状态 done；事项 1-6 全部 done） |
+| **最近更新** | 2026-07-03（登记 bug #27/#28/#29；新增功能事项 7 popup-settings PRD draft #30、8 md-render PRD draft #31；事项 1-6 done） |
 | **开发周期估算** | ≤3 周（约 2.5–3 周） |
 | **闭环业务链** | 用户在配置页选择/配置翻译源（免 Key 兜底 / 传统 API Key / LLM）→ 划词触发 → 统一适配层按配置路由 → 调用对应源 → 浮层展示译文；未配置任何源时默认走免 Key 兜底源，开箱即用 |
 | **关联材料** | [../../strategy/index.md](../../strategy/index.md)、[../../roadmap/index.md](../../roadmap/index.md)、[../../../startup-summary.md](../../../startup-summary.md) |
@@ -32,6 +32,8 @@
 | 4 | source-picker-ui | P0 | `./4-source-picker-ui/PRD.md` | done | 配置页翻译源选择 UI：源类型选择、当前生效源展示、连通性测试扩展；研发任务 #16 完成，PR #17 已合并 |
 | 5 | llm-anthropic-style | P1 | `./5-llm-anthropic-style/PRD.md` | done | LLM 适配层新增 anthropic 响应风格（默认 openai，向后兼容）；Issue #6 驱动，研发任务 #22 完成（full-stack · AI+前端+后端，parallel-safe，base-branch），PR #23 已合并 |
 | 6 | llm-streaming | P1 | `./6-llm-streaming/PRD.md` | done | LLM 翻译采用流式响应，译文逐步呈现，避免用户干等；仅 LLM 源（openai-compatible/anthropic/ollama）流式，传统源（google/microsoft）保持非流式；涉及 provider 契约、background↔content 消息层（port 流式）、浮层渐进渲染；研发任务 #25 已完成（full-stack · AI+前端+后端，parallel-safe，base-branch），PR #26 已合并 |
+| 7 | popup-settings | P1 | `./7-popup-settings/PRD.md` | draft | 点击插件 icon 右上角弹出设置界面（popup），现代化重构配置入口，兼顾后续自由输入翻译入口；含 LLM 源类目归并（openai-compatible/ollama 统一为「LLM 接口配置」） |
+| 8 | md-render | P1 | `./8-md-render/PRD.md` | draft | 翻译浮层按 markdown 可读渲染译文（流式感知 + prompt 保留格式 + XSS 过滤） |
 
 ## 本轮不做
 

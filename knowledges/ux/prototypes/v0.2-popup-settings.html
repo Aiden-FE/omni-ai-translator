@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Translator · Popup 设置 (v0.2 原型)</title>
+<style>
+  /* ===== 设计 token（严格沿用 knowledges/ux/design-system.md，不引入新色相） ===== */
+  :root {
+    --c-panel-bg: #1f2937;      /* 深色表面（Tweaks / popup 标题条） */
+    --c-panel-text: #f9fafb;
+    --c-primary: #1f2937;       /* 主操作按钮 / 启用态 */
+    --c-primary-hover: #374151;
+    --c-error: #dc2626;
+    --c-success: #16a34a;
+    --c-border: #e5e7eb;
+    --c-input-border: #d1d5db;
+    --c-hint: #6b7280;
+    --c-text: #111827;
+    --c-test: #4b5563;
+    --c-page-bg: #e5e7eb;       /* 模拟浏览器背景，衬托 popup 窗口 */
+    --c-popup-bg: #f9fafb;      /* popup 内部背景，与 options 一致 */
+
+    --font-stack: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --r-card: 8px;
+    --r-input: 4px;
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+
+    --popup-w: 400px;
+    --popup-h: 600px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--c-page-bg);
+    font-family: var(--font-stack);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--c-text);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+
+  /* ===== Popup 窗口框（模拟工具栏 icon 弹出） ===== */
+  .popup {
+    width: var(--popup-w);
+    height: var(--popup-h);
+    background: var(--c-popup-bg);
+    border-radius: var(--r-card);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--c-border);
+  }
+
+  .popup__header {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--c-panel-bg);
+    color: var(--c-panel-text);
+    flex: none;
+  }
+  .popup__brand { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; }
+  .popup__logo {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: #f9fafb;
+    color: var(--c-panel-bg);
+    font-size: 13px; font-weight: 700;
+    display: grid; place-items: center;
+    flex: none;
+  }
+  .popup__title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .popup__close {
+    background: transparent;
+    border: none;
+    color: var(--c-panel-text);
+    font-size: 16px;
+    line-height: 1;
+    padding: 4px 6px;
+    border-radius: var(--r-input);
+    cursor: pointer;
+    opacity: 0.75;
+  }
+  .popup__close:hover { opacity: 1; background: rgba(255,255,255,0.12); }
+  .popup__close:focus-visible { outline: 2px solid #f9fafb; outline-offset: 1px; opacity: 1; }
+
+  .popup__body {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--sp-3) var(--sp-4);
+  }
+
+  .popup__footer {
+    flex: none;
+    border-top: 1px solid var(--c-border);
+    padding: var(--sp-2) var(--sp-4);
+    background: #fff;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+
+  /* ===== 通用控件 ===== */
+  input, select, button {
+    font-family: inherit;
+    font-size: 13px;
+    color: inherit;
+  }
+  input, select {
+    padding: 6px 8px;
+    border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input);
+    background: #fff;
+  }
+  input { flex: 1; min-width: 0; }
+  input:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--c-primary);
+    outline-offset: 1px;
+    border-color: var(--c-primary);
+  }
+  button {
+    padding: 6px 10px;
+    border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input);
+    background: #fff;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+  }
+  button:hover { background: #f3f4f6; }
+  button.active {
+    background: var(--c-primary);
+    color: #fff;
+    border-color: var(--c-primary);
+  }
+  button.active:hover { background: var(--c-primary-hover); }
+  button.primary {
+    background: var(--c-primary);
+    color: #fff;
+    border-color: var(--c-primary);
+  }
+  button.primary:hover { background: var(--c-primary-hover); }
+
+  .hint { margin: var(--sp-1) 0 var(--sp-3); font-size: 12px; color: var(--c-hint); line-height: 1.6; }
+
+  /* ===== 目标语言（紧凑） ===== */
+  .lang-row { margin-bottom: var(--sp-3); }
+  .lang-row__label {
+    font-size: 12px; font-weight: 600; color: var(--c-text);
+    margin-bottom: var(--sp-1);
+  }
+  .lang-row input { width: 100%; }
+
+  /* ===== 当前生效源横幅 ===== */
+  .effective {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: var(--sp-3);
+    border-radius: var(--r-card);
+    margin-bottom: var(--sp-3);
+    border: 1px solid var(--c-border);
+    background: #fff;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+  .effective__dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--c-hint);
+    margin-top: 6px; flex: none;
+  }
+  .effective[data-state="active"] .effective__dot { background: var(--c-success); }
+  .effective__body { flex: 1; min-width: 0; }
+  .effective__label { font-size: 11px; color: var(--c-hint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .effective__value { font-size: 14px; font-weight: 600; color: var(--c-text); margin-top: 1px; }
+  .effective__note { font-size: 12px; color: var(--c-hint); margin-top: 2px; line-height: 1.55; }
+  .effective[data-state="fallback"] { background: #f3f4f6; border-color: #d1d5db; }
+  .effective[data-state="active"] { background: #fff; }
+
+  /* ===== 源卡片（可折叠） ===== */
+  .card {
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-card);
+    margin-bottom: var(--sp-2);
+    background: #fff;
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+    overflow: hidden;
+  }
+  .card[data-active="true"] {
+    border-color: var(--c-primary);
+    box-shadow: 0 0 0 1px var(--c-primary);
+  }
+  .card__head {
+    display: flex;
+    gap: var(--sp-2);
+    align-items: center;
+    padding: var(--sp-2) var(--sp-3);
+    cursor: pointer;
+  }
+  .card__name { flex: 1; min-width: 0; }
+  .card__name input { font-weight: 600; }
+  .card__chevron {
+    width: 20px; height: 20px;
+    display: grid; place-items: center;
+    color: var(--c-hint);
+    font-size: 12px;
+    transition: transform 160ms ease;
+    flex: none;
+  }
+  .card[data-collapsed="false"] .card__chevron { transform: rotate(90deg); }
+  .card__body {
+    padding: 0 var(--sp-3) var(--sp-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+  }
+  .card[data-collapsed="true"] .card__body { display: none; }
+  .row { display: flex; gap: var(--sp-2); align-items: center; }
+  .row > input, .row > select { flex: 1; min-width: 0; }
+
+  .test-msg { font-size: 12px; color: var(--c-test); margin: 0; }
+  .test-msg.ok { color: var(--c-success); }
+  .test-msg.err { color: var(--c-error); }
+  .field-hidden { display: none; }
+
+  .add-btn {
+    width: 100%;
+    padding: 9px;
+    border: 1px dashed var(--c-input-border);
+    background: transparent;
+    border-radius: var(--r-input);
+    color: var(--c-hint);
+    font-weight: 500;
+  }
+  .add-btn:hover { background: #f3f4f6; color: var(--c-text); }
+
+  .footer__link {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--c-hint);
+    text-decoration: none;
+  }
+  .footer__link:hover { color: var(--c-primary); text-decoration: underline; }
+
+  /* ===== Tweaks 面板 ===== */
+  .tweaks {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    background: var(--c-panel-bg);
+    color: var(--c-panel-text);
+    border-radius: var(--r-card);
+    padding: var(--sp-3) var(--sp-4);
+    font-size: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    z-index: 9999;
+    min-width: 210px;
+  }
+  .tweaks__title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    opacity: 0.7; margin-bottom: var(--sp-2);
+  }
+  .tweaks label { display: block; margin-bottom: var(--sp-2); }
+  .tweaks select {
+    width: 100%; padding: 4px 6px;
+    color: var(--c-panel-text);
+    background: #374151;
+    border-color: #4b5563;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="popup" role="dialog" aria-label="LLM Translator 设置">
+
+    <!-- 标题条 -->
+    <header class="popup__header">
+      <div class="popup__brand">
+        <div class="popup__logo" aria-hidden="true">译</div>
+        <span class="popup__title">LLM Translator</span>
+      </div>
+      <button class="popup__close" aria-label="关闭" title="关闭">✕</button>
+    </header>
+
+    <!-- 可滚动主体 -->
+    <div class="popup__body" id="popup-body">
+
+      <!-- 目标语言 -->
+      <div class="lang-row">
+        <div class="lang-row__label">默认目标语言</div>
+        <input id="target-lang" value="简体中文" placeholder="留空则使用浏览器首选语言" />
+      </div>
+
+      <!-- 当前生效源横幅 -->
+      <div class="effective" id="effective-banner" data-state="fallback" role="status"
+           aria-label="当前生效：免 Key 兜底">
+        <span class="effective__dot" aria-hidden="true"></span>
+        <div class="effective__body">
+          <div class="effective__label">当前生效</div>
+          <div class="effective__value" id="eff-value">免 Key 兜底</div>
+          <div class="effective__note" id="eff-note">
+            未配置自有源，待翻译文本将外传到 Google / 微软完成翻译。
+          </div>
+        </div>
+      </div>
+      <!-- 兜底态：功能化「配置自有源」按钮（修复 bug #27，非无反应锚点） -->
+      <button class="primary" id="configure-btn" style="width:100%;margin-bottom:var(--sp-3);">
+        + 配置自有源
+      </button>
+
+      <!-- 源卡片 1：LLM（OpenAI 兼容） -->
+      <div class="card" id="card-llm" data-active="false" data-collapsed="false">
+        <div class="card__head">
+          <input class="card__name" value="我的 OpenAI" placeholder="名称" aria-label="提供方名称" />
+          <button class="activate-btn" data-card="llm">启用</button>
+          <button class="delete-btn" data-card="llm">删除</button>
+          <span class="card__chevron" aria-hidden="true">▸</span>
+        </div>
+        <div class="card__body">
+          <div class="row">
+            <select class="type-select" data-card="llm" aria-label="源类型">
+              <optgroup label="LLM 接口配置">
+                <option value="openai-compatible" selected>OpenAI 兼容</option>
+                <option value="ollama">Ollama</option>
+              </optgroup>
+              <optgroup label="传统翻译">
+                <option value="google">Google 翻译</option>
+                <option value="microsoft">微软翻译</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="row llm-only">
+            <input value="https://api.openai.com/v1/chat/completions" placeholder="完整接口路径" aria-label="接口路径" />
+          </div>
+          <div class="row llm-only">
+            <input class="model-field" value="gpt-4o-mini" placeholder="模型名" aria-label="模型名" />
+          </div>
+          <div class="row">
+            <input type="password" value="sk-••••••••" placeholder="API Key（Ollama 可留空）" aria-label="API Key" />
+            <button class="test-btn" data-card="llm">测试连通</button>
+          </div>
+          <p class="test-msg" data-card="llm" hidden></p>
+        </div>
+      </div>
+
+      <!-- 源卡片 2：传统翻译（Google） -->
+      <div class="card" id="card-trad" data-active="false" data-collapsed="true">
+        <div class="card__head">
+          <input class="card__name" value="Google 官方 Key" placeholder="名称" aria-label="提供方名称" />
+          <button class="activate-btn" data-card="trad">启用</button>
+          <button class="delete-btn" data-card="trad">删除</button>
+          <span class="card__chevron" aria-hidden="true">▸</span>
+        </div>
+        <div class="card__body">
+          <div class="row">
+            <select class="type-select" data-card="trad" aria-label="源类型">
+              <optgroup label="LLM 接口配置">
+                <option value="openai-compatible">OpenAI 兼容</option>
+                <option value="ollama">Ollama</option>
+              </optgroup>
+              <optgroup label="传统翻译">
+                <option value="google" selected>Google 翻译</option>
+                <option value="microsoft">微软翻译</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="row trad-only">
+            <input value="https://translation.googleapis.com" placeholder="默认官方端点，可改" aria-label="接口路径" />
+          </div>
+          <div class="row">
+            <input type="password" value="AIza••••••••" placeholder="留空使用免 Key 兜底；填入则走官方 API" aria-label="API Key" />
+            <button class="test-btn" data-card="trad">测试连通</button>
+          </div>
+          <p class="test-msg" data-card="trad" hidden></p>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 底部：添加 + 打开全部设置 -->
+    <footer class="popup__footer">
+      <button class="add-btn" id="add-btn" style="flex:1;">+ 添加提供方</button>
+      <a class="footer__link" href="#" id="open-options">打开全部设置 →</a>
+    </footer>
+
+  </div>
+
+  <!-- Tweaks 面板 -->
+  <div class="tweaks">
+    <div class="tweaks__title">Tweaks</div>
+    <label>
+      生效态
+      <select id="state-toggle">
+        <option value="fallback">兜底生效（无自有源）</option>
+        <option value="active">已启用自有源</option>
+      </select>
+    </label>
+  </div>
+
+<script>
+  var banner = document.getElementById('effective-banner');
+  var effValue = document.getElementById('eff-value');
+  var effNote = document.getElementById('eff-note');
+  var configureBtn = document.getElementById('configure-btn');
+  var toggle = document.getElementById('state-toggle');
+
+  // 生效态切换
+  function applyState(state) {
+    banner.setAttribute('data-state', state);
+    var cardLlm = document.getElementById('card-llm');
+    var llmActivate = cardLlm.querySelector('.activate-btn');
+    if (state === 'active') {
+      banner.setAttribute('aria-label', '当前生效：我的 OpenAI');
+      effValue.textContent = '我的 OpenAI';
+      effNote.textContent = '翻译请求将发送到该 LLM 提供方。';
+      configureBtn.style.display = 'none';
+      cardLlm.setAttribute('data-active', 'true');
+      llmActivate.classList.add('active');
+      llmActivate.textContent = '已启用';
+    } else {
+      banner.setAttribute('aria-label', '当前生效：免 Key 兜底');
+      effValue.textContent = '免 Key 兜底';
+      effNote.textContent = '未配置自有源，待翻译文本将外传到 Google / 微软完成翻译。';
+      configureBtn.style.display = '';
+      cardLlm.setAttribute('data-active', 'false');
+      llmActivate.classList.remove('active');
+      llmActivate.textContent = '启用';
+    }
+  }
+  toggle.addEventListener('change', function () { applyState(toggle.value); });
+
+  // 卡片折叠
+  document.querySelectorAll('.card__head').forEach(function (head) {
+    head.addEventListener('click', function (e) {
+      if (e.target.closest('input, button, select')) return; // 不拦截控件
+      var card = head.closest('.card');
+      card.setAttribute('data-collapsed', card.getAttribute('data-collapsed') === 'true' ? 'false' : 'true');
+    });
+  });
+
+  // 源类型 → 条件字段显隐（LLM 类显示模型名）
+  function syncFields(card) {
+    var type = card.querySelector('.type-select').value;
+    var isLlm = type === 'openai-compatible' || type === 'ollama';
+    card.querySelectorAll('.trad-only').forEach(function (r) { r.style.display = isLlm ? 'none' : ''; });
+    card.querySelectorAll('.llm-only').forEach(function (r) { r.style.display = isLlm ? '' : 'none'; });
+  }
+  document.querySelectorAll('.type-select').forEach(function (sel) {
+    sel.addEventListener('change', function () { syncFields(sel.closest('.card')); });
+    syncFields(sel.closest('.card'));
+  });
+
+  // 测试连通：inline 反馈
+  document.querySelectorAll('.test-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var cardId = btn.getAttribute('data-card');
+      var msg = document.querySelector('.test-msg[data-card="' + cardId + '"]');
+      msg.hidden = false;
+      msg.className = 'test-msg';
+      msg.textContent = '测试中…';
+      setTimeout(function () {
+        msg.className = 'test-msg ok';
+        msg.textContent = '✅ 你好，世界';
+      }, 600);
+    });
+  });
+
+  // 启用按钮：切换生效源
+  document.querySelectorAll('.activate-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.activate-btn').forEach(function (b) {
+        b.classList.remove('active'); b.textContent = '启用';
+      });
+      document.querySelectorAll('.card').forEach(function (c) { c.setAttribute('data-active', 'false'); });
+      btn.classList.add('active'); btn.textContent = '已启用';
+      btn.closest('.card').setAttribute('data-active', 'true');
+      toggle.value = 'active';
+      applyState('active');
+      effValue.textContent = btn.closest('.card').querySelector('.card__name').value;
+    });
+  });
+
+  // 删除按钮（演示）
+  document.querySelectorAll('.delete-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var card = btn.closest('.card');
+      card.remove();
+    });
+  });
+
+  // 新建提供方（「配置自有源」与「+ 添加提供方」共用，修复 bug #27）
+  function addProvider(focusName) {
+    var body = document.getElementById('popup-body');
+    var tpl = document.getElementById('card-llm');
+    var clone = tpl.cloneNode(true);
+    clone.setAttribute('data-active', 'false');
+    clone.setAttribute('data-collapsed', 'false');
+    clone.id = 'card-' + Date.now();
+    clone.querySelector('.card__name').value = '新提供方';
+    clone.querySelectorAll('[data-card]').forEach(function (el) { el.setAttribute('data-card', clone.id); });
+    body.appendChild(clone);
+    // 重新绑定克隆节点的事件
+    bindCard(clone);
+    syncFields(clone);
+    if (focusName) {
+      var nameInput = clone.querySelector('.card__name');
+      nameInput.focus();
+      nameInput.select();
+      var bodyEl = document.getElementById('popup-body');
+      bodyEl.scrollTop = bodyEl.scrollHeight;
+    }
+  }
+  function bindCard(card) {
+    var head = card.querySelector('.card__head');
+    head.addEventListener('click', function (e) {
+      if (e.target.closest('input, button, select')) return;
+      card.setAttribute('data-collapsed', card.getAttribute('data-collapsed') === 'true' ? 'false' : 'true');
+    });
+    card.querySelector('.type-select').addEventListener('change', function () { syncFields(card); });
+    card.querySelector('.test-btn').addEventListener('click', function () {
+      var msg = card.querySelector('.test-msg');
+      msg.hidden = false; msg.className = 'test-msg'; msg.textContent = '测试中…';
+      setTimeout(function () { msg.className = 'test-msg ok'; msg.textContent = '✅ 你好，世界'; }, 600);
+    });
+    card.querySelector('.activate-btn').addEventListener('click', function () {
+      document.querySelectorAll('.activate-btn').forEach(function (b) { b.classList.remove('active'); b.textContent = '启用'; });
+      document.querySelectorAll('.card').forEach(function (c) { c.setAttribute('data-active', 'false'); });
+      card.querySelector('.activate-btn').classList.add('active');
+      card.querySelector('.activate-btn').textContent = '已启用';
+      card.setAttribute('data-active', 'true');
+      toggle.value = 'active'; applyState('active');
+      effValue.textContent = card.querySelector('.card__name').value;
+    });
+    card.querySelector('.delete-btn').addEventListener('click', function () { card.remove(); });
+  }
+  configureBtn.addEventListener('click', function () { addProvider(true); });
+  document.getElementById('add-btn').addEventListener('click', function () { addProvider(true); });
+
+  // 「打开全部设置」（演示）
+  document.getElementById('open-options').addEventListener('click', function (e) {
+    e.preventDefault();
+    alert('chrome.runtime.openOptionsPage() → 跳转 options 全功能页（原型演示）');
+  });
+
+  // popup 打开即聚焦首个可交互项（可访问性）
+  document.getElementById('target-lang').focus();
+
+  applyState('fallback');
+</script>
+</body>
+</html>
