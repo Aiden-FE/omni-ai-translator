@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-01 |
-| **最近更新** | 2026-07-02（功能事项 3 完成：#18 PR #20 + #19 PR #21 均已合并，PRD #3 验收标准全覆盖） |
+| **最近更新** | 2026-07-03（功能事项 5 PRD 落档 + 研发任务 #22 创建；Issue #6 已补 PRD 标签；事项 1-4 维持 done） |
 | **开发周期估算** | ≤3 周（约 2.5–3 周） |
 | **闭环业务链** | 用户在配置页选择/配置翻译源（免 Key 兜底 / 传统 API Key / LLM）→ 划词触发 → 统一适配层按配置路由 → 调用对应源 → 浮层展示译文；未配置任何源时默认走免 Key 兜底源，开箱即用 |
 | **关联材料** | [../../strategy/index.md](../../strategy/index.md)、[../../roadmap/index.md](../../roadmap/index.md)、[../../../startup-summary.md](../../../startup-summary.md) |
@@ -30,6 +30,7 @@
 | 2 | builtin-fallback | P0 | `./2-builtin-fallback/PRD.md` | done | 内置 Google + 微软免 Key 公共端点 provider，作为用户可选的免费翻译源；全新安装默认选中 microsoft，用户可随时切换；无隐式自动回退（研发任务 #14，PR #15 已合并） |
 | 3 | traditional-apikey-config | P0 | `./3-traditional-apikey-config/PRD.md` | done | 配置页支持传统翻译源填 Key/端点，启用后覆盖免 Key 兜底；后端 #18 有 Key 走官方 API + region 字段（PR #20 已合并），前端 #19 region 输入框与联调回归（PR #21 已合并）；PRD #3 验收标准全覆盖，五条均达成 |
 | 4 | source-picker-ui | P0 | `./4-source-picker-ui/PRD.md` | done | 配置页翻译源选择 UI：源类型选择、当前生效源展示、连通性测试扩展；研发任务 #16 完成，PR #17 已合并 |
+| 5 | llm-anthropic-style | P1 | `./5-llm-anthropic-style/PRD.md` | draft | LLM 适配层新增 anthropic 响应风格（默认 openai，向后兼容）；Issue #6 驱动，研发任务 #22（full-stack · AI+前端+后端，parallel-safe，base-branch）已创建待开发 |
 
 ## 本轮不做
 
@@ -50,6 +51,7 @@
 | 风险 | 免 Key 公共端点不稳定（限流/封锁/地域不可达，如 Google 在大陆不可达） | 兜底翻译可用性 | 内置 Google + 微软两个源，失败时明确错误提示并支持人工切换 |  |
 | 风险 | 隐私变更：默认外传文本到 Google/微软 | 隐私合规 | 同步更新隐私声明，明示默认外传行为与用户权利 |  |
 | 隐私登记 | PRD 2-builtin-fallback、3-traditional-apikey-config 涉及隐私变更（新增第三方数据共享：文本外传到 Google/微软） | 隐私合规 | 需在 sprint-open Phase 4 步骤 5 统一更新隐私声明 |  |
+| 隐私登记 | PRD 5-llm-anthropic-style 涉及隐私文案补充：LLM 提供方扩展到原生 Anthropic 端点（非 OpenAI 兼容协议），现有隐私声明第 5 节仅列「OpenAI 兼容接口 / 本地 Ollama」需补充 | 隐私合规 | 发布前用 prodflow-prd revise 或 privacy-policy 更新隐私声明，明示原生 Anthropic 端点文本外传（数据流同既有 LLM 提供方，仅协议/厂商补充） |  |
 
 ## 验收标准
 
