@@ -2,6 +2,7 @@
 import type {
   ActiveSourcesResult,
   ProviderConfig,
+  TranslateChunk,
   TranslateRequest,
   TranslateResult,
 } from '@/shared/types';
@@ -40,6 +41,47 @@ export async function translateWithAdapter(req: TranslateRequest): Promise<Trans
 
   const provider = createProvider(config);
   return provider.translate(req);
+}
+
+/**
+ * 流式翻译：经适配层路由到当前生效源
+ * 读取生效源配置（同 translateWithAdapter），创建 provider。
+ * - provider 实现 translateStream → 调流式方法，逐 chunk 经 onChunk 上抛，返回最终结果。
+ * - provider 未实现 translateStream（传统源）→ 回退调 translate(req)，将完整译文作为单 chunk 经 onChunk 推送一次，再返回结果（非流式源对上层表现为「一次性流」）。
+ * - 无可用源返回 TranslateResult{ errorType: 'no-config' }（不调 onChunk）。
+ */
+export async function translateWithAdapterStream(
+  req: TranslateRequest,
+  onChunk: (chunk: TranslateChunk) => void,
+): Promise<TranslateResult> {
+  const settings = await getSettings();
+  const providers = await getProviders();
+  const activeId = settings.activeProviderId ?? DEFAULT_ACTIVE_SOURCE_ID;
+
+  const config =
+    providers.find((p) => p.id === activeId) ?? getBuiltinSourceById(activeId);
+
+  if (!config) {
+    return {
+      translatedText: '',
+      error: errorTypeMessage('no-config'),
+      errorType: 'no-config',
+    };
+  }
+
+  const provider = createProvider(config);
+
+  // provider 支持流式 → 调流式方法
+  if (provider.translateStream) {
+    return provider.translateStream(req, onChunk);
+  }
+
+  // 传统源回退：调 translate() 一次性返回，完整译文作单 chunk 推送
+  const result = await provider.translate(req);
+  if (!result.error && result.translatedText) {
+    onChunk({ deltaText: result.translatedText });
+  }
+  return result;
 }
 
 /**

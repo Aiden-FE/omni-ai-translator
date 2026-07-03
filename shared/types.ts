@@ -64,3 +64,19 @@ export type Message =
   | { type: 'get-providers' }
   | { type: 'get-active-sources' }
   | { type: 'set-active-source'; payload: { id: string } };
+
+/** 流式翻译 chunk（增量译文片段） */
+export interface TranslateChunk {
+  deltaText: string;
+}
+
+/**
+ * Port 消息类型（content ↔ background 流式翻译契约）
+ * - content → background：request（翻译请求）
+ * - background → content：chunk（增量译文）/ done（流结束）/ error（错误）
+ */
+export type StreamPortMessage =
+  | { type: 'request'; text: string; targetLang: string; sourceLang?: string }
+  | { type: 'chunk'; deltaText: string }
+  | { type: 'done'; result: TranslateResult }
+  | { type: 'error'; result: TranslateResult };

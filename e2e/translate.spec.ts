@@ -206,3 +206,82 @@ test('anthropic 响应风格划词翻译落到 /v1/messages 并携带 x-api-key 
   expect(body?.messages?.[0]?.role).toBe('user');
 });
 
+test('OpenAI 流式翻译浮层渐进渲染译文', async ({ context, extensionId }) => {
+  // 1. 配置 OpenAI 兼容提供方指向 mock server（stream 路径）
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const cards = optionsPage.locator('.provider-card');
+  const card = cards.last();
+  await card.locator('input[placeholder="名称"]').fill('stream-mock');
+  await card.getByTestId('base-url').fill(`${mockUrl}/v1/chat/completions`);
+  await card.locator('input[placeholder="模型名"]').fill('mock-model');
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  // 2. 打开测试页,选中 "Hello world" 并翻译
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  // 3. 等待浮层出现
+  const panel = page.locator('.llm-translator-panel');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+
+  // 4. 流式渲染期间应出现光标元素（渐进渲染标志）
+  const cursor = panel.locator('.llm-translator-cursor');
+  await expect(cursor).toBeVisible({ timeout: 5_000 });
+
+  // 5. 流式结束后光标消失,最终译文完整展示
+  await expect(panel).toContainText('你好,世界', { timeout: 10_000 });
+  await expect(cursor).not.toBeVisible({ timeout: 5_000 });
+});
+
+test('传统源(microsoft)划词翻译一次性返回译文', async ({ context, extensionId }) => {
+  // 1. 配置 microsoft 有 Key 提供方指向 mock server（非流式回退路径）
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const cards = optionsPage.locator('.provider-card');
+  const card = cards.last();
+  await card.locator('input[placeholder="名称"]').fill('ms-fallback');
+  await card.locator('select').selectOption('microsoft');
+  await card.getByTestId('base-url').fill(`${mockUrl}/translate`);
+  await card.locator('input[type="password"]').fill('test-ms-key');
+  await card.getByTestId('region').fill('eastus');
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  // 2. 打开测试页,选中 "Hello world" 并翻译
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  // 3. 断言译文浮层展示 mock 译文（非流式回退一次性返回）
+  const panel = page.locator('.llm-translator-panel');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText('你好,世界');
+
+  // 4. 断言请求未走流式（microsoft 传统源回退,请求体为 array 格式,无 stream 字段）
+  const body = getLastRequestBody();
+  expect(Array.isArray(body)).toBe(true);
+});
+
