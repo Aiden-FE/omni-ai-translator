@@ -50,3 +50,15 @@
   cursor: default;
   user-select: none;
 }
+
+/* 流式光标：闪烁竖线 ▋，流式进行中显示，定稿移除（辅助视觉，非唯一状态指示） */
+.llm-translator-cursor {
+  display: inline-block;
+  color: #f9fafb;
+  animation: llm-translator-blink 1s step-end infinite;
+}
+
+@keyframes llm-translator-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}

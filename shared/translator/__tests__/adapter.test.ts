@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   translateWithAdapter,
+  translateWithAdapterStream,
   testWithAdapter,
   getActiveSources,
   setActiveSource,
@@ -208,5 +209,97 @@ describe('setActiveSource', () => {
     expect(setSettings).toHaveBeenCalledWith(
       expect.objectContaining({ activeProviderId: 'user-llm' }),
     );
+  });
+});
+
+// 流式适配层测试辅助 — 构造 ReadableStream 模拟 SSE / NDJSON 流
+function makeReadableStream(chunks: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      const encoder = new TextEncoder();
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+}
+
+describe('translateWithAdapterStream', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('LLM 源流式 → 调用 translateStream,onChunk 被调用并返回最终结果', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'llm-1', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([
+      { id: 'llm-1', name: 'test-llm', type: 'openai-compatible', baseUrl: 'http://localhost:9999/v1/chat/completions', model: 'm' },
+    ]);
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":",世界"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    }));
+
+    const chunks: string[] = [];
+    const result = await translateWithAdapterStream(
+      { text: 'hello', targetLang: '中文' },
+      (c) => chunks.push(c.deltaText),
+    );
+    expect(chunks).toEqual(['你好', ',世界']);
+    expect(result.translatedText).toBe('你好,世界');
+    expect(result.errorType).toBeUndefined();
+  });
+
+  it('传统源回退 → 调用 translate(),完整译文作单 chunk 推送', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'builtin:microsoft', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([]);
+
+    // mock microsoft 翻译端点（auth + translate 两步）
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes('/translate/auth')) {
+          return Promise.resolve({ ok: true, status: 200, text: async () => 'token' });
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => [{ translations: [{ text: '你好,世界', to: 'zh-CN' }] }],
+        });
+      }),
+    );
+
+    const chunks: string[] = [];
+    const result = await translateWithAdapterStream(
+      { text: 'hello', targetLang: '简体中文' },
+      (c) => chunks.push(c.deltaText),
+    );
+    // 传统源无 translateStream → 回退 translate(),完整译文作单 chunk
+    expect(chunks).toEqual(['你好,世界']);
+    expect(result.translatedText).toBe('你好,世界');
+    expect(result.errorType).toBeUndefined();
+  });
+
+  it('无可用源 → no-config 错误,不调 onChunk', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'non-existent', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([
+      { id: 'other', name: 'other', type: 'openai-compatible', baseUrl: 'http://localhost', model: 'm' },
+    ]);
+
+    const onChunk = vi.fn();
+    const result = await translateWithAdapterStream(
+      { text: 'hello', targetLang: '中文' },
+      onChunk,
+    );
+    expect(result.translatedText).toBe('');
+    expect(result.errorType).toBe('no-config');
+    expect(onChunk).not.toHaveBeenCalled();
   });
 });

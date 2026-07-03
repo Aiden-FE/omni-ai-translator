@@ -6,11 +6,12 @@
 import { getProviders, getSettings } from '@/shared/storage';
 import {
   translateWithAdapter,
+  translateWithAdapterStream,
   testWithAdapter,
   getActiveSources,
   setActiveSource,
 } from '@/shared/translator';
-import type { Message } from '@/shared/types';
+import type { Message, StreamPortMessage } from '@/shared/types';
 
 export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -51,5 +52,40 @@ export default defineBackground(() => {
       }
     })();
     return true;
+  });
+
+  // 流式翻译 port 长连接：content-script 经 chrome.runtime.connect({name:'translate-stream'}) 建连
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'translate-stream') return;
+
+    port.onMessage.addListener((msg: StreamPortMessage) => {
+      if (msg.type !== 'request') return;
+
+      translateWithAdapterStream(
+        { text: msg.text, targetLang: msg.targetLang, sourceLang: msg.sourceLang },
+        (chunk) => {
+          port.postMessage({ type: 'chunk', deltaText: chunk.deltaText });
+        },
+      )
+        .then((result) => {
+          if (result.error) {
+            port.postMessage({ type: 'error', result });
+          } else {
+            port.postMessage({ type: 'done', result });
+          }
+          port.disconnect();
+        })
+        .catch((err) => {
+          port.postMessage({
+            type: 'error',
+            result: {
+              translatedText: '',
+              error: err instanceof Error ? err.message : String(err),
+              errorType: 'network',
+            },
+          });
+          port.disconnect();
+        });
+    });
   });
 });

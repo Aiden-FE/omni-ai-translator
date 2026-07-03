@@ -1,5 +1,6 @@
 // E2E Mock LLM Server
-// 模拟 OpenAI 兼容 /v1/chat/completions 与微软官方 translate 接口,返回固定译文,供 e2e 测试使用。
+// 模拟 OpenAI 兼容 /v1/chat/completions、Anthropic /v1/messages、Ollama /api/chat 与微软官方 translate 接口。
+// 支持 stream: true 时返回流式响应(SSE / NDJSON),供 e2e 测试验证渐进渲染。
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 
@@ -15,12 +16,71 @@ export function getLastRequestHeaders() {
   return lastRequestHeaders;
 }
 
+/** 模拟流式翻译的固定译文 "你好,世界",按字符拆分为 chunk */
+const STREAM_CHUNKS = ['你', '好', ',世界'];
+
+/** chunk 间延迟(ms),模拟真实流式传输,使渐进渲染可被 e2e 捕获 */
+const CHUNK_DELAY_MS = 100;
+
+/** 等待指定毫秒 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** 发送 OpenAI 兼容 SSE 流式响应:逐 chunk data 行,以 data: [DONE] 结束 */
+async function sendOpenAIStream(res: ServerResponse): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  for (const chunk of STREAM_CHUNKS) {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
+    await sleep(CHUNK_DELAY_MS);
+  }
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
+/** 发送 Anthropic SSE 流式响应:message_start → content_block_delta × N → message_stop */
+async function sendAnthropicStream(res: ServerResponse): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write(`event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_mock', type: 'message', role: 'assistant', content: [] } })}\n\n`);
+  res.write(`event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n\n`);
+  for (const chunk of STREAM_CHUNKS) {
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text', text: chunk } })}\n\n`);
+    await sleep(CHUNK_DELAY_MS);
+  }
+  res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+  res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })}\n\n`);
+  res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+  res.end();
+}
+
+/** 发送 Ollama NDJSON 流式响应:逐行 message.content,最后一行 done: true */
+async function sendOllamaStream(res: ServerResponse): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'application/x-ndjson',
+    'Cache-Control': 'no-cache',
+  });
+  for (const chunk of STREAM_CHUNKS) {
+    res.write(`${JSON.stringify({ message: { content: chunk } })}\n`);
+    await sleep(CHUNK_DELAY_MS);
+  }
+  res.write(`${JSON.stringify({ message: { content: '' }, done: true })}\n`);
+  res.end();
+}
+
 export function startMockServer(): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       let body = '';
       req.on('data', (chunk) => (body += chunk));
-      req.on('end', () => {
+      req.on('end', async () => {
         try {
           lastRequestBody = body ? JSON.parse(body) : null;
         } catch {
@@ -36,36 +96,64 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           return;
         }
 
+        const parsedBody = lastRequestBody as Record<string, unknown> | null;
+        const isStream = parsedBody?.stream === true;
+
         // OpenAI 兼容 chat completions
         if (req.method === 'POST' && req.url?.includes('/v1/chat/completions')) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              choices: [
-                {
-                  message: { role: 'assistant', content: '你好,世界' },
-                  finish_reason: 'stop',
-                  index: 0,
-                },
-              ],
-            }),
-          );
+          if (isStream) {
+            await sendOpenAIStream(res);
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                choices: [
+                  {
+                    message: { role: 'assistant', content: '你好,世界' },
+                    finish_reason: 'stop',
+                    index: 0,
+                  },
+                ],
+              }),
+            );
+          }
           return;
         }
 
         // Anthropic Messages API（原生协议，anthropic 响应风格）
         if (req.method === 'POST' && req.url?.includes('/v1/messages')) {
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              id: 'msg_mock',
-              type: 'message',
-              role: 'assistant',
-              content: [{ type: 'text', text: '你好,世界' }],
-              model: 'mock-model',
-              stop_reason: 'end_turn',
-            }),
-          );
+          if (isStream) {
+            await sendAnthropicStream(res);
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                id: 'msg_mock',
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'text', text: '你好,世界' }],
+                model: 'mock-model',
+                stop_reason: 'end_turn',
+              }),
+            );
+          }
+          return;
+        }
+
+        // Ollama 本地接口(/api/chat)
+        if (req.method === 'POST' && req.url?.includes('/api/chat')) {
+          if (isStream) {
+            await sendOllamaStream(res);
+          } else {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                model: 'mock-model',
+                message: { role: 'assistant', content: '你好,世界' },
+                done: true,
+              }),
+            );
+          }
           return;
         }
 

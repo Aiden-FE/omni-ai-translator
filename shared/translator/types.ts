@@ -1,5 +1,5 @@
 // 适配层接口定义 — 所有翻译源实现同一契约
-import type { TranslateRequest, TranslateResult } from '@/shared/types';
+import type { TranslateChunk, TranslateRequest, TranslateResult } from '@/shared/types';
 
 /**
  * 统一翻译源接口
@@ -15,4 +15,10 @@ export interface TranslationProvider {
   translate(req: TranslateRequest): Promise<TranslateResult>;
   /** 连通性测试（发送最小请求） */
   test(req?: TranslateRequest): Promise<TranslateResult>;
+  /**
+   * 流式翻译（可选实现）
+   * LLM 源实现此方法，逐 chunk 经 onChunk 回调推送增量译文，返回最终 TranslateResult（含完整译文）。
+   * 传统源不实现（undefined），适配层回退到 translate() 一次性返回。
+   */
+  translateStream?(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult>;
 }
