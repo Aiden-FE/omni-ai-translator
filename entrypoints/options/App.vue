@@ -292,18 +292,22 @@ function isErr(msg: string): boolean {
             v-model="p.type"
             @change="onTypeChange(p)"
           >
-            <option value="openai-compatible">
-              OpenAI 兼容（云端）
-            </option>
-            <option value="ollama">
-              Ollama（本地）
-            </option>
-            <option value="google">
-              Google 翻译
-            </option>
-            <option value="microsoft">
-              微软翻译
-            </option>
+            <optgroup label="LLM 接口配置">
+              <option value="openai-compatible">
+                OpenAI 兼容
+              </option>
+              <option value="ollama">
+                Ollama
+              </option>
+            </optgroup>
+            <optgroup label="传统翻译">
+              <option value="google">
+                Google 翻译
+              </option>
+              <option value="microsoft">
+                微软翻译
+              </option>
+            </optgroup>
           </select>
           <button
             :class="{ active: activeSourceId === p.id }"
