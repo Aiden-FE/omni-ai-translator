@@ -2,7 +2,7 @@
 // 选项页：翻译源管理（LLM / 传统 API Key / 免 Key 兜底 统一管理）
 // v0.2：源类型下拉扩展为 4 项，顶部生效源提示行走 get-active-sources/set-active-source 新契约，
 // 连通性测试覆盖 LLM、传统 API Key、免 Key 兜底源，结果 inline 展示。
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import type {
   ActiveSourcesResult,
   Message,
@@ -128,6 +128,15 @@ async function addProvider() {
     model: 'gpt-4o-mini',
   });
   await saveProviders();
+}
+
+// 兜底态「配置自有源」入口：新建提供方卡片并聚焦名称输入（focus 自动滚动入视口）
+async function configureOwnSource() {
+  await addProvider();
+  await nextTick();
+  const cards = document.querySelectorAll('.provider-card');
+  const last = cards[cards.length - 1];
+  last?.querySelector('input')?.focus();
 }
 
 async function removeProvider(id: string) {
@@ -257,7 +266,8 @@ function isErr(msg: string): boolean {
         <a
           v-if="isFallback"
           class="effective__action"
-          href="#source-section"
+          href="#"
+          @click.prevent="configureOwnSource"
         >配置自有源 →</a>
       </div>
 
