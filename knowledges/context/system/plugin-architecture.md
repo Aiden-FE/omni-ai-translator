@@ -33,7 +33,7 @@ background 内不含源类型 if-else 分支，所有源类型路由由适配层
 ### 关键约束
 
 - **MV3 Service Worker 生命周期**：SW 空闲会被回收，不可依赖内存状态；配置与缓存走 `chrome.storage.local`。
-- **跨域请求**：调用第三方 LLM 接口需在 manifest `host_permissions` 声明；本地模型（如 Ollama）走 `http://localhost:<port>`。
+- **跨域请求**：调用第三方 LLM 接口需在 manifest `host_permissions` 声明——声明域内 background Service Worker 的 `fetch` 具备跨域特权（绕过 CORS），未声明域仅靠目标端点 CORS 头放行；本地模型（如 Ollama）走 `http://localhost:<port>`。**用户自配的云端 LLM 端点（openai-compatible 云端 / anthropic 原生 / ARK 等）是运行时动态输入，无法逐个枚举**，故 host_permissions 需通配 `https://*/*` 覆盖，否则非 CORS 友好 provider（部分 OpenAI 兼容网关 / 自建反代）会被跨域拦截（#29）。选 `https://*/*` 而非 `<all_urls>` 以平衡 Chrome Web Store 审核（仅 HTTPS），但仍是宽泛权限，store 审核会询问用途，需说明「用户自配云端 LLM 端点跨域 fetch」。
 - **Key 安全**：API Key 仅存 `chrome.storage.local`，不写入日志、不上传。
 - **统一适配层**：所有翻译源（LLM 类 / 传统类）实现 `TranslationProvider` 接口，上层经 `shared/translator/index.ts` 统一入口调用，不感知具体源类型。
 
