@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!-- 事项9 llm-type-unify:LLM 类型分组统一为响应风格,深化事项7 -->
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LLM Translator · LLM 类型统一 (v0.2-9 原型)</title>
+<style>
+  /* ===== 设计 token（严格沿用 knowledges/ux/design-system.md，不引入新色相） ===== */
+  :root {
+    --c-panel-bg: #1f2937;      /* 深色表面（header / Tweaks） */
+    --c-panel-text: #f9fafb;
+    --c-primary: #1f2937;       /* 主操作按钮 / 启用态 */
+    --c-primary-hover: #374151;
+    --c-error: #dc2626;
+    --c-success: #16a34a;
+    --c-border: #e5e7eb;
+    --c-input-border: #d1d5db;
+    --c-hint: #6b7280;
+    --c-text: #111827;
+    --c-test: #4b5563;
+    --c-page-bg: #e5e7eb;
+    --c-popup-bg: #f9fafb;
+
+    --font-stack: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --r-card: 8px;
+    --r-input: 4px;
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+
+    --popup-w: 400px;
+    --popup-h: 600px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--c-page-bg);
+    font-family: var(--font-stack);
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--c-text);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 32px 16px;
+  }
+
+  /* ===== Popup 窗口框（与 v0.2-popup-settings.html 一致） ===== */
+  .popup {
+    width: var(--popup-w);
+    height: var(--popup-h);
+    background: var(--c-popup-bg);
+    border-radius: var(--r-card);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.08);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--c-border);
+  }
+  .popup__header {
+    display: flex; align-items: center; gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    background: var(--c-panel-bg); color: var(--c-panel-text); flex: none;
+  }
+  .popup__brand { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 0; }
+  .popup__logo {
+    width: 22px; height: 22px; border-radius: 5px;
+    background: #f9fafb; color: var(--c-panel-bg);
+    font-size: 13px; font-weight: 700;
+    display: grid; place-items: center; flex: none;
+  }
+  .popup__title { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .popup__subtitle { font-size: 11px; opacity: 0.7; margin-left: var(--sp-2); }
+  .popup__close {
+    background: transparent; border: none; color: var(--c-panel-text);
+    font-size: 16px; line-height: 1; padding: 4px 6px;
+    border-radius: var(--r-input); cursor: pointer; opacity: 0.75;
+  }
+  .popup__close:hover { opacity: 1; background: rgba(255,255,255,0.12); }
+  .popup__close:focus-visible { outline: 2px solid #f9fafb; outline-offset: 1px; opacity: 1; }
+
+  .popup__body { flex: 1; overflow-y: auto; padding: var(--sp-3) var(--sp-4); }
+
+  /* ===== 通用控件（沿用既有） ===== */
+  input, select, button { font-family: inherit; font-size: 13px; color: inherit; }
+  input, select {
+    padding: 6px 8px; border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input); background: #fff;
+  }
+  input { flex: 1; min-width: 0; }
+  input:focus, select:focus, button:focus-visible {
+    outline: 2px solid var(--c-primary); outline-offset: 1px; border-color: var(--c-primary);
+  }
+  button {
+    padding: 6px 10px; border: 1px solid var(--c-input-border);
+    border-radius: var(--r-input); background: #fff; cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+    white-space: nowrap;
+  }
+  button:hover { background: #f3f4f6; }
+  button.active { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+  button.active:hover { background: var(--c-primary-hover); }
+
+  .hint { margin: var(--sp-1) 0 var(--sp-3); font-size: 12px; color: var(--c-hint); line-height: 1.6; }
+  .field-label { font-size: 12px; font-weight: 600; color: var(--c-text); margin-bottom: var(--sp-1); }
+
+  /* ===== 源卡片（可折叠，沿用既有） ===== */
+  .card {
+    border: 1px solid var(--c-border); border-radius: var(--r-card);
+    margin-bottom: var(--sp-2); background: #fff;
+    transition: border-color 160ms ease, box-shadow 160ms ease; overflow: hidden;
+  }
+  .card[data-active="true"] { border-color: var(--c-primary); box-shadow: 0 0 0 1px var(--c-primary); }
+  .card__head {
+    display: flex; gap: var(--sp-2); align-items: center;
+    padding: var(--sp-2) var(--sp-3); cursor: pointer;
+  }
+  .card__name { flex: 1; min-width: 0; }
+  .card__name input { font-weight: 600; }
+  .card__chevron {
+    width: 20px; height: 20px; display: grid; place-items: center;
+    color: var(--c-hint); font-size: 12px; transition: transform 160ms ease; flex: none;
+  }
+  .card[data-collapsed="false"] .card__chevron { transform: rotate(90deg); }
+  .card__body {
+    padding: 0 var(--sp-3) var(--sp-3);
+    display: flex; flex-direction: column; gap: var(--sp-2);
+  }
+  .card[data-collapsed="true"] .card__body { display: none; }
+  .row { display: flex; gap: var(--sp-2); align-items: center; }
+  .row > input, .row > select { flex: 1; min-width: 0; }
+
+  .test-msg { font-size: 12px; color: var(--c-test); margin: 0; }
+  .test-msg.ok { color: var(--c-success); }
+  .test-msg.err { color: var(--c-error); }
+  .field-hidden { display: none; }
+
+  /* ===== 响应风格 radio group（事项9 新增，复用既有 token） ===== */
+  .rs {
+    border: 1px solid var(--c-border);
+    border-radius: var(--r-input);
+    padding: var(--sp-1);
+    background: #f9fafb;
+  }
+  .rs__option {
+    display: flex; align-items: flex-start; gap: var(--sp-2);
+    padding: 6px var(--sp-2); border-radius: var(--r-input); cursor: pointer;
+  }
+  .rs__option:hover { background: #f3f4f6; }
+  .rs__option input[type="radio"] {
+    flex: none; margin: 3px 0 0; accent-color: var(--c-primary);
+  }
+  .rs__option input[type="radio"]:focus-visible {
+    outline: 2px solid var(--c-primary); outline-offset: 2px;
+  }
+  .rs__body { flex: 1; min-width: 0; }
+  .rs__title { font-size: 13px; font-weight: 500; color: var(--c-text); }
+  .rs__hint { font-size: 11px; color: var(--c-hint); line-height: 1.5; margin-top: 1px; word-break: break-all; }
+
+  /* ===== Tweaks 面板（沿用既有） ===== */
+  .tweaks {
+    position: fixed; right: 20px; bottom: 20px;
+    background: var(--c-panel-bg); color: var(--c-panel-text);
+    border-radius: var(--r-card); padding: var(--sp-3) var(--sp-4);
+    font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    z-index: 9999; min-width: 230px;
+  }
+  .tweaks__title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+    opacity: 0.7; margin-bottom: var(--sp-2);
+  }
+  .tweaks label { display: block; margin-bottom: var(--sp-2); }
+  .tweaks select {
+    width: 100%; padding: 4px 6px; margin-top: 2px;
+    color: var(--c-panel-text); background: #374151; border-color: #4b5563;
+  }
+  .tweaks__note { font-size: 11px; opacity: 0.6; line-height: 1.5; margin-top: var(--sp-1); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="popup" role="dialog" aria-label="LLM Translator 设置">
+
+    <!-- 标题条 -->
+    <header class="popup__header">
+      <div class="popup__brand">
+        <div class="popup__logo" aria-hidden="true">译</div>
+        <span class="popup__title">LLM Translator</span>
+        <span class="popup__subtitle">事项9 · 类型统一</span>
+      </div>
+      <button class="popup__close" aria-label="关闭" title="关闭">✕</button>
+    </header>
+
+    <!-- 可滚动主体 -->
+    <div class="popup__body" id="popup-body">
+
+      <p class="hint">
+        LLM 源统一为「LLM」类型 + 响应风格(openai/anthropic/ollama)区分协议;配置四要素:完整接口 + 模型 + Key + 响应风格。
+      </p>
+
+      <!-- 源卡片 1:LLM(统一类型 + 响应风格三选一) -->
+      <div class="card" id="card-llm" data-active="true" data-collapsed="false">
+        <div class="card__head">
+          <span class="card__name"><input value="我的 LLM" placeholder="名称" aria-label="提供方名称" /></span>
+          <button class="activate-btn" data-card="llm">已启用</button>
+          <button class="delete-btn" data-card="llm">删除</button>
+          <span class="card__chevron" aria-hidden="true">▸</span>
+        </div>
+        <div class="card__body">
+          <!-- 源类型下拉:LLM optgroup 收敛为单一「LLM」option -->
+          <div class="row">
+            <select class="type-select" data-card="llm" aria-label="源类型">
+              <optgroup label="LLM 接口配置">
+                <option value="llm" selected>LLM</option>
+              </optgroup>
+              <optgroup label="传统翻译">
+                <option value="google">Google 翻译</option>
+                <option value="microsoft">微软翻译</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="row llm-only">
+            <input class="baseurl-field" value="https://api.openai.com/v1/chat/completions" placeholder="完整接口路径,如 https://api.openai.com/v1/chat/completions" aria-label="接口路径" />
+          </div>
+          <div class="row llm-only">
+            <input class="model-field" value="gpt-4o-mini" placeholder="模型名" aria-label="模型名" />
+          </div>
+          <div class="row llm-only">
+            <input type="password" value="sk-••••••••" placeholder="API Key(Ollama 可留空)" aria-label="API Key" />
+            <button class="test-btn" data-card="llm">测试连通</button>
+          </div>
+          <!-- 响应风格 radio group:对所有 LLM 源展示(事项9 核心) -->
+          <div class="rs llm-only" role="radiogroup" aria-label="响应风格">
+            <div class="field-label" style="padding: 4px 4px 0;">响应风格</div>
+            <label class="rs__option">
+              <input type="radio" name="rs-llm" value="openai" checked />
+              <span class="rs__body">
+                <span class="rs__title">OpenAI 兼容</span>
+                <span class="rs__hint">适用于 OpenAI 兼容端点(如 https://api.openai.com/v1/chat/completions)</span>
+              </span>
+            </label>
+            <label class="rs__option">
+              <input type="radio" name="rs-llm" value="anthropic" />
+              <span class="rs__body">
+                <span class="rs__title">Anthropic</span>
+                <span class="rs__hint">适用于原生 Anthropic Messages API 端点(如 https://api.anthropic.com/v1/messages)</span>
+              </span>
+            </label>
+            <label class="rs__option">
+              <input type="radio" name="rs-llm" value="ollama" />
+              <span class="rs__body">
+                <span class="rs__title">Ollama</span>
+                <span class="rs__hint">适用于本地 Ollama 端点(如 http://localhost:11434/api/chat)</span>
+              </span>
+            </label>
+          </div>
+          <p class="test-msg" data-card="llm" hidden></p>
+        </div>
+      </div>
+
+      <!-- 源卡片 2:传统翻译(Google,无响应风格、无 model,作对照) -->
+      <div class="card" id="card-trad" data-active="false" data-collapsed="true">
+        <div class="card__head">
+          <span class="card__name"><input value="Google 官方 Key" placeholder="名称" aria-label="提供方名称" /></span>
+          <button class="activate-btn" data-card="trad">启用</button>
+          <button class="delete-btn" data-card="trad">删除</button>
+          <span class="card__chevron" aria-hidden="true">▸</span>
+        </div>
+        <div class="card__body">
+          <div class="row">
+            <select class="type-select" data-card="trad" aria-label="源类型">
+              <optgroup label="LLM 接口配置">
+                <option value="llm">LLM</option>
+              </optgroup>
+              <optgroup label="传统翻译">
+                <option value="google" selected>Google 翻译</option>
+                <option value="microsoft">微软翻译</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="row trad-only">
+            <input value="https://translation.googleapis.com" placeholder="默认官方端点,可改" aria-label="接口路径" />
+          </div>
+          <div class="row">
+            <input type="password" value="AIza••••••••" placeholder="留空使用免 Key 兜底;填入则走官方 API" aria-label="API Key" />
+            <button class="test-btn" data-card="trad">测试连通</button>
+          </div>
+          <p class="test-msg" data-card="trad" hidden></p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Tweaks 面板:切换响应风格 / 源类型,演示 baseUrl 联动与字段显隐 -->
+  <div class="tweaks">
+    <div class="tweaks__title">Tweaks</div>
+    <label>
+      LLM 卡响应风格
+      <select id="rs-toggle">
+        <option value="openai" selected>OpenAI 兼容</option>
+        <option value="anthropic">Anthropic</option>
+        <option value="ollama">Ollama</option>
+      </select>
+    </label>
+    <div class="tweaks__note">切换时若 baseUrl 命中已知默认值则自动替换;自定义端点保留。测试结果同步复位。</div>
+  </div>
+
+<script>
+  // 已知默认端点集合(事项5 KNOWN_DEFAULT_BASE_URLS 机制扩展)
+  var KNOWN_DEFAULTS = {
+    openai: 'https://api.openai.com/v1/chat/completions',
+    anthropic: 'https://api.anthropic.com/v1/messages',
+    ollama: 'http://localhost:11434/api/chat'
+  };
+  var KNOWN_SET = new Set(Object.values(KNOWN_DEFAULTS));
+
+  var rsToggle = document.getElementById('rs-toggle');
+
+  // 源类型 → 条件字段显隐(LLM 显示 model + 响应风格;传统隐藏)
+  function syncFields(card) {
+    var type = card.querySelector('.type-select').value;
+    var isLlm = type === 'llm';
+    card.querySelectorAll('.trad-only').forEach(function (r) { r.style.display = isLlm ? 'none' : ''; });
+    card.querySelectorAll('.llm-only').forEach(function (r) { r.style.display = isLlm ? '' : 'none'; });
+  }
+
+  // 响应风格切换 → baseUrl 联动替换(仅命中已知默认值)+ 测试结果复位
+  function applyResponseStyle(card, style) {
+    var baseurl = card.querySelector('.baseurl-field');
+    if (baseurl && KNOWN_SET.has(baseurl.value)) {
+      baseurl.value = KNOWN_DEFAULTS[style];
+    }
+    var msg = card.querySelector('.test-msg');
+    if (msg) { msg.hidden = true; msg.textContent = ''; msg.className = 'test-msg'; }
+  }
+
+  // 绑定响应风格 radio
+  document.querySelectorAll('input[name="rs-llm"]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      applyResponseStyle(document.getElementById('card-llm'), radio.value);
+      rsToggle.value = radio.value;
+    });
+  });
+
+  // Tweaks → 响应风格
+  rsToggle.addEventListener('change', function () {
+    var radio = document.querySelector('input[name="rs-llm"][value="' + rsToggle.value + '"]');
+    if (radio) { radio.checked = true; applyResponseStyle(document.getElementById('card-llm'), rsToggle.value); }
+  });
+
+  // 源类型切换 → 字段显隐 + 响应风格复位为 openai
+  document.querySelectorAll('.type-select').forEach(function (sel) {
+    sel.addEventListener('change', function () {
+      var card = sel.closest('.card');
+      syncFields(card);
+      if (sel.value !== 'llm') {
+        var r = card.querySelector('input[name="rs-llm"][value="openai"]');
+        if (r) r.checked = true;
+      }
+    });
+    syncFields(sel.closest('.card'));
+  });
+
+  // 卡片折叠
+  document.querySelectorAll('.card__head').forEach(function (head) {
+    head.addEventListener('click', function (e) {
+      if (e.target.closest('input, button, select')) return;
+      var card = head.closest('.card');
+      card.setAttribute('data-collapsed', card.getAttribute('data-collapsed') === 'true' ? 'false' : 'true');
+    });
+  });
+
+  // 测试连通:inline 反馈(三种响应风格均覆盖)
+  document.querySelectorAll('.test-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var cardId = btn.getAttribute('data-card');
+      var msg = document.querySelector('.test-msg[data-card="' + cardId + '"]');
+      msg.hidden = false; msg.className = 'test-msg'; msg.textContent = '测试中…';
+      setTimeout(function () {
+        // LLM 卡按当前响应风格给出示例译文;传统卡独立反馈
+        if (cardId === 'llm') {
+          var style = document.querySelector('input[name="rs-llm"]:checked').value;
+          msg.className = 'test-msg ok';
+          msg.textContent = '✅ ' + style + ' 风格连通正常 → 你好,世界';
+        } else {
+          msg.className = 'test-msg ok';
+          msg.textContent = '✅ 你好,世界';
+        }
+      }, 600);
+    });
+  });
+
+  // 启用按钮:切换生效源
+  document.querySelectorAll('.activate-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.activate-btn').forEach(function (b) {
+        b.classList.remove('active'); b.textContent = '启用';
+      });
+      document.querySelectorAll('.card').forEach(function (c) { c.setAttribute('data-active', 'false'); });
+      btn.classList.add('active'); btn.textContent = '已启用';
+      btn.closest('.card').setAttribute('data-active', 'true');
+    });
+  });
+
+  // 删除按钮(演示)
+  document.querySelectorAll('.delete-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { btn.closest('.card').remove(); });
+  });
+</script>
+</body>
+</html>

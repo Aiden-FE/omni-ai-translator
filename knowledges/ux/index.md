@@ -22,3 +22,4 @@
 - [prototypes/v0.2-source-picker.html](prototypes/v0.2-source-picker.html) — v0.2 配置页翻译源选择 UI
 - [prototypes/v0.2-popup-settings.html](prototypes/v0.2-popup-settings.html) — v0.2 popup 设置面板(配置入口 popup 化与现代化)
 - [prototypes/v0.2-md-render.html](prototypes/v0.2-md-render.html) — v0.2 译文 markdown 可读渲染(raw vs rendered)
+- [prototypes/v0.2-llm-type-unify.html](prototypes/v0.2-llm-type-unify.html) — v0.2 事项9 LLM 类型分组统一为响应风格(LLM 单一类型 + 响应风格三选一 + baseUrl 联动)
