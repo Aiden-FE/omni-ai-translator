@@ -6,7 +6,7 @@ import { classifyError } from './error';
 
 function buildPrompt(text: string, targetLang: string, sourceLang?: string): string {
   const source = sourceLang ? `from ${sourceLang} ` : '';
-  return `Translate the following text ${source}into ${targetLang}. Output ONLY the translation, without explanation or quotes.\n\n${text}`;
+  return `Translate the following text ${source}into ${targetLang}. Output ONLY the translation, without explanation or quotes. If the source text is markdown, preserve its structure and markup (headings, lists, code blocks).\n\n${text}`;
 }
 
 /**
