@@ -7,6 +7,7 @@ import '@/assets/content.css';
 import { getSettings } from '@/shared/storage';
 import type { TranslateResult, StreamPortMessage } from '@/shared/types';
 import { errorFeedback } from '@/shared/translator/error';
+import { renderMarkdown } from '@/shared/render/markdown';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -157,10 +158,20 @@ export default defineContentScript({
           // 以 done.result 为准（含完整译文）
           if (currentPanel) {
             if (firstChunkReceived && textContainer && msg.result.translatedText) {
-              textContainer.textContent = msg.result.translatedText;
+              // done 阶段:markdown 渲染(解析 → sanitize → innerHTML)
+              // 移除流式 span,创建 md 渲染容器注入 sanitize 后的 HTML
+              textContainer.remove();
+              const mdContainer = document.createElement('div');
+              mdContainer.className = 'llm-translator-md-render';
+              mdContainer.innerHTML = renderMarkdown(msg.result.translatedText);
+              currentPanel.appendChild(mdContainer);
             } else if (!firstChunkReceived) {
               // 无 chunk 直接 done（理论上不会发生，但防御处理）
-              currentPanel.textContent = msg.result.translatedText ?? '';
+              currentPanel.textContent = '';
+              const mdContainer = document.createElement('div');
+              mdContainer.className = 'llm-translator-md-render';
+              mdContainer.innerHTML = renderMarkdown(msg.result.translatedText ?? '');
+              currentPanel.appendChild(mdContainer);
             }
           }
           port.disconnect();
