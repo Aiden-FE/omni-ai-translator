@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createProvider, inferCategory } from '../registry';
 import type { ProviderConfig } from '@/shared/types';
 
-function makeConfig(type: ProviderConfig['type'], overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+function makeConfig(type: string, overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
     id: 'test-id',
     name: 'test',
-    type,
+    type: type as ProviderConfig['type'],
     baseUrl: 'http://localhost:9999/api',
     model: 'test-model',
     ...overrides,
@@ -15,11 +15,15 @@ function makeConfig(type: ProviderConfig['type'], overrides: Partial<ProviderCon
 }
 
 describe('inferCategory', () => {
-  it('openai-compatible → llm', () => {
+  it('llm → llm', () => {
+    expect(inferCategory('llm')).toBe('llm');
+  });
+
+  it('openai-compatible → llm（向后兼容）', () => {
     expect(inferCategory('openai-compatible')).toBe('llm');
   });
 
-  it('ollama → llm', () => {
+  it('ollama → llm（向后兼容）', () => {
     expect(inferCategory('ollama')).toBe('llm');
   });
 
@@ -37,13 +41,18 @@ describe('createProvider', () => {
     vi.unstubAllGlobals();
   });
 
-  it('openai-compatible 配置 → LLM provider', () => {
-    const provider = createProvider(makeConfig('openai-compatible'));
+  it('llm 配置 → LLM provider', () => {
+    const provider = createProvider(makeConfig('llm'));
     expect(provider.type).toBe('llm');
     expect(provider.id).toBe('test-id');
   });
 
-  it('ollama 配置 → LLM provider', () => {
+  it('openai-compatible 配置 → LLM provider（向后兼容）', () => {
+    const provider = createProvider(makeConfig('openai-compatible'));
+    expect(provider.type).toBe('llm');
+  });
+
+  it('ollama 配置 → LLM provider（向后兼容）', () => {
     const provider = createProvider(makeConfig('ollama'));
     expect(provider.type).toBe('llm');
   });
@@ -59,15 +68,15 @@ describe('createProvider', () => {
   });
 
   it('显式 category 字段覆盖 type 推断', () => {
-    // 即使 type 是 openai-compatible，显式 category=traditional 应创建传统 provider
-    const provider = createProvider(makeConfig('openai-compatible', { category: 'traditional' }));
+    // 即使 type 是 llm，显式 category=traditional 应创建传统 provider
+    const provider = createProvider(makeConfig('llm', { category: 'traditional' }));
     expect(provider.type).toBe('traditional');
   });
 
   it('未知传统源类型 → unreachable 错误', async () => {
     // category=traditional 但 type 非 google/microsoft 时，translate 返回 unreachable
     const provider = createProvider(
-      makeConfig('openai-compatible', { category: 'traditional' }),
+      makeConfig('llm', { category: 'traditional' }),
     );
     const result = await provider.translate({ text: 'hello', targetLang: '中文' });
     expect(result.translatedText).toBe('');
@@ -136,7 +145,7 @@ describe('createProvider', () => {
   });
 
   it('所有 provider 实现 TranslationProvider 接口', () => {
-    const types: ProviderConfig['type'][] = ['openai-compatible', 'ollama', 'google', 'microsoft'];
+    const types: string[] = ['llm', 'google', 'microsoft'];
     for (const type of types) {
       const provider = createProvider(makeConfig(type));
       expect(provider).toHaveProperty('id');

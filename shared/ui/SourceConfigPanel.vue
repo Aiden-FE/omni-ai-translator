@@ -38,26 +38,32 @@ const collapsedCards = ref<Record<string, boolean>>({});
 
 // ===== 常量 =====
 const DEFAULT_BASE_URL: Record<ProviderType, string> = {
-  'openai-compatible': 'https://api.openai.com/v1/chat/completions',
-  ollama: 'http://localhost:11434/api/chat',
+  llm: 'https://api.openai.com/v1/chat/completions',
   google: 'https://translation.googleapis.com',
   microsoft: 'https://api.cognitive.microsofttranslator.com/translate',
+};
+/** 响应风格 → 默认 baseUrl（LLM 源切换响应风格时联动替换） */
+const DEFAULT_BASE_URL_BY_STYLE: Record<string, string> = {
+  openai: 'https://api.openai.com/v1/chat/completions',
+  anthropic: 'https://api.anthropic.com/v1/messages',
+  ollama: 'http://localhost:11434/api/chat',
 };
 const KNOWN_DEFAULT_BASE_URLS = new Set([
   'https://api.openai.com',
   'http://localhost:11434',
+  'https://api.anthropic.com',
   ...Object.values(DEFAULT_BASE_URL),
+  ...Object.values(DEFAULT_BASE_URL_BY_STYLE),
 ]);
 const FALLBACK_SOURCE_ID = DEFAULT_ACTIVE_SOURCE_ID;
 
 // ===== 计算属性 =====
 function isLlmType(type: ProviderType): boolean {
-  return type === 'openai-compatible' || type === 'ollama';
+  return type === 'llm';
 }
 
 function baseUrlPlaceholder(type: ProviderType): string {
-  if (type === 'ollama') return '完整接口路径,如 http://localhost:11434/api/chat';
-  if (type === 'openai-compatible') return '完整接口路径,如 https://api.openai.com/v1/chat/completions';
+  if (type === 'llm') return '完整接口路径,如 https://api.openai.com/v1/chat/completions';
   return '默认官方端点,可改';
 }
 
@@ -145,10 +151,11 @@ async function addProvider() {
   providers.value.push({
     id,
     name: '新提供方',
-    type: 'openai-compatible',
-    baseUrl: DEFAULT_BASE_URL['openai-compatible'],
+    type: 'llm',
+    baseUrl: DEFAULT_BASE_URL['llm'],
     apiKey: '',
     model: 'gpt-4o-mini',
+    responseStyle: 'openai',
   });
   // popup 变体:新建卡片默认展开
   if (props.variant === 'popup') {
@@ -185,7 +192,7 @@ async function onTypeChange(p: ProviderConfig) {
   if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
     p.baseUrl = DEFAULT_BASE_URL[p.type];
   }
-  if (p.type !== 'openai-compatible') {
+  if (p.type !== 'llm') {
     p.responseStyle = 'openai';
   }
   const next = { ...testMsgs.value };
@@ -194,14 +201,19 @@ async function onTypeChange(p: ProviderConfig) {
   await saveProviders();
 }
 
-function responseStyleHint(p: ProviderConfig): string {
-  return p.responseStyle === 'anthropic'
-    ? '适用于原生 Anthropic Messages API 端点(如 Claude 官方 https://api.anthropic.com/v1/messages)'
-    : '适用于 OpenAI 兼容端点';
+function responseStyleHint(style: 'openai' | 'anthropic' | 'ollama'): string {
+  if (style === 'anthropic')
+    return '适用于原生 Anthropic Messages API 端点(如 https://api.anthropic.com/v1/messages)';
+  if (style === 'ollama')
+    return '适用于本地 Ollama 端点(如 http://localhost:11434/api/chat)';
+  return '适用于 OpenAI 兼容端点(如 https://api.openai.com/v1/chat/completions)';
 }
 
-async function onResponseStyleChange(p: ProviderConfig, style: 'openai' | 'anthropic') {
+async function onResponseStyleChange(p: ProviderConfig, style: 'openai' | 'anthropic' | 'ollama') {
   p.responseStyle = style;
+  if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
+    p.baseUrl = DEFAULT_BASE_URL_BY_STYLE[style];
+  }
   const next = { ...testMsgs.value };
   delete next[p.id];
   testMsgs.value = next;
@@ -380,11 +392,8 @@ function isCollapsed(id: string): boolean {
               @change="onTypeChange(p)"
             >
               <optgroup label="LLM 接口配置">
-                <option value="openai-compatible">
-                  OpenAI 兼容
-                </option>
-                <option value="ollama">
-                  Ollama
+                <option value="llm">
+                  LLM
                 </option>
               </optgroup>
               <optgroup label="传统翻译">
@@ -411,9 +420,9 @@ function isCollapsed(id: string): boolean {
               @change="saveProviders"
             >
           </div>
-          <!-- 响应风格单选:仅 openai-compatible 类型展示 -->
+          <!-- 响应风格单选:对所有 LLM 源(type='llm')展示 -->
           <div
-            v-if="p.type === 'openai-compatible'"
+            v-if="isLlmType(p.type)"
             class="row response-style-row"
             data-testid="response-style"
           >
@@ -438,8 +447,18 @@ function isCollapsed(id: string): boolean {
               >
               anthropic
             </label>
+            <label class="response-style-option">
+              <input
+                type="radio"
+                value="ollama"
+                :name="`response-style-${p.id}`"
+                :checked="p.responseStyle === 'ollama'"
+                @change="onResponseStyleChange(p, 'ollama')"
+              >
+              ollama
+            </label>
             <span class="hint response-style-hint">
-              {{ responseStyleHint(p) }}
+              {{ responseStyleHint(p.responseStyle ?? 'openai') }}
             </span>
           </div>
           <div class="row">

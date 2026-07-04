@@ -3,7 +3,7 @@ import type { TranslateChunk, TranslateRequest, TranslateResult } from '@/shared
 
 /**
  * 统一翻译源接口
- * LLM 类源（openai-compatible / ollama）与传统翻译类源（google / microsoft）均实现此接口。
+ * LLM 类源（llm，由 responseStyle 区分协议）与传统翻译类源（google / microsoft）均实现此接口。
  * 上层（background）仅通过此接口调用翻译，不感知具体源类型。
  */
 export interface TranslationProvider {

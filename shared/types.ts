@@ -3,8 +3,8 @@
 /** 源类型分类：LLM 类 / 传统翻译类 */
 export type ProviderCategory = 'llm' | 'traditional';
 
-/** 具体源类型（含传统翻译源占位，具体实现由功能事项 2/3） */
-export type ProviderType = 'openai-compatible' | 'ollama' | 'google' | 'microsoft';
+/** 具体源类型：LLM 类统一为 'llm'（由 responseStyle 区分协议格式）；传统翻译 google/microsoft 保持独立 */
+export type ProviderType = 'llm' | 'google' | 'microsoft';
 
 /** 翻译错误类型，四类互斥，供前端差异化反馈（契约供 #11 消费） */
 export type ErrorType = 'no-config' | 'network' | 'rate-limit' | 'unreachable';
@@ -14,7 +14,7 @@ export interface ProviderConfig {
   id: string;
   name: string;
   type: ProviderType;
-  /** 源类型分类，缺省时按 type 推断（openai-compatible/ollama → llm，google/microsoft → traditional） */
+  /** 源类型分类，缺省时按 type 推断（llm → llm，google/microsoft → traditional） */
   category?: ProviderCategory;
   /** 完整接口路径（如 https://api.openai.com/v1/chat/completions 或 http://localhost:11434/api/chat），代码不再追加 path */
   baseUrl: string;
@@ -22,8 +22,8 @@ export interface ProviderConfig {
   model: string;
   /** microsoft Azure Translator 区域（如 eastus、global）；有 Key 时携带 Ocp-Apim-Subscription-Region。google 不使用。缺省则不发送该 header。 */
   region?: string;
-  /** 响应风格：仅对 openai-compatible 类型有意义。缺省按 'openai'（向后兼容，存量配置无需迁移）。anthropic 走原生 Anthropic Messages API 协议。 */
-  responseStyle?: 'openai' | 'anthropic';
+  /** 响应风格：对所有 LLM 源(type='llm')生效，区分协议格式。缺省 'openai'（向后兼容）。openai → OpenAI 兼容；anthropic → 原生 Anthropic Messages API；ollama → 本地 Ollama 协议。 */
+  responseStyle?: 'openai' | 'anthropic' | 'ollama';
 }
 
 /** 翻译请求 */

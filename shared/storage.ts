@@ -21,9 +21,29 @@ async function set<T>(key: string, value: T): Promise<void> {
   await chrome.storage.local.set({ [key]: value });
 }
 
+/**
+ * 存量配置 on-read 迁移：将旧 type 子分组(openai-compatible/ollama)收敛为新 type='llm' + responseStyle。
+ * - 旧 type='ollama' → type='llm' + responseStyle='ollama'
+ * - 旧 type='openai-compatible' → type='llm' + responseStyle 取原值(anthropic 保留,缺省 openai)
+ * - type='llm' → 不变(已是新形态)
+ * 迁移在读出时即时完成，不回写存储，用户无感知。
+ * 注意:旧 type 值('openai-compatible'/'ollama')不在当前 ProviderType 联合中,
+ * 但可能存在于存量 chrome.storage.local 数据,因此按 string 比较。
+ */
+function migrateProvider(p: ProviderConfig): ProviderConfig {
+  const rawType = p.type as string;
+  if (rawType === 'ollama') {
+    return { ...p, type: 'llm', responseStyle: 'ollama' };
+  }
+  if (rawType === 'openai-compatible') {
+    return { ...p, type: 'llm', responseStyle: p.responseStyle ?? 'openai' };
+  }
+  return p;
+}
+
 export async function getProviders(): Promise<ProviderConfig[]> {
   const value = await get<ProviderConfig[] | null>(PROVIDERS_KEY, null);
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value) ? value.map(migrateProvider) : [];
 }
 
 export async function setProviders(providers: ProviderConfig[]): Promise<void> {
