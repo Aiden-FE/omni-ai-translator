@@ -6,3 +6,5 @@
 |------|------|
 | unified-adapter.md | 统一翻译源适配层 — 接口、注册路由、四类错误模型、LLM 迁移、传统 provider 有 Key/无 Key 双模式 + region 契约 |
 | streaming.md | LLM 翻译流式响应 — provider 流式契约、三源 SSE/NDJSON 解析、port 消息层、浮层渐进渲染 |
+| popup-settings.md | popup 设置入口与翻译源配置共享组件 — variant prop、生效源横幅、源卡片增删改、optgroup 分组、options/popup 互通 |
+| markdown-render.md | 翻译浮层译文 markdown 可读渲染 — 流式→done 渲染、轻量解析器 + DOMPurify sanitize、暗底 md 样式、prompt 保留结构 |
