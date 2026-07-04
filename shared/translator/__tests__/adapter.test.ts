@@ -53,7 +53,7 @@ describe('translateWithAdapter — 默认源与路由', () => {
   it('activeProviderId 不匹配任何 provider 与内置源 → no-config 错误', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'non-existent', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'other', name: 'other', type: 'openai-compatible', baseUrl: 'http://localhost', model: 'm' },
+      { id: 'other', name: 'other', type: 'llm', baseUrl: 'http://localhost', model: 'm' },
     ]);
 
     const result = await translateWithAdapter({ text: 'hello', targetLang: '中文' });
@@ -64,7 +64,7 @@ describe('translateWithAdapter — 默认源与路由', () => {
   it('有匹配的用户 provider → 路由到对应 provider 翻译', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'active-id', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'active-id', name: 'test', type: 'openai-compatible', baseUrl: 'http://localhost:9999/v1/chat/completions', model: 'm' },
+      { id: 'active-id', name: 'test', type: 'llm', baseUrl: 'http://localhost:9999/v1/chat/completions', model: 'm' },
     ]);
 
     // Mock fetch 返回成功
@@ -109,7 +109,7 @@ describe('testWithAdapter', () => {
     const config: ProviderConfig = {
       id: 'test-id',
       name: 'test',
-      type: 'openai-compatible',
+      type: 'llm',
       baseUrl: 'http://localhost:9999/v1/chat/completions',
       model: 'test-model',
     };
@@ -164,7 +164,7 @@ describe('getActiveSources', () => {
   it('合并内置免费源与用户源，activeProviderId 为 null → 解析默认 microsoft', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: null, defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'user-llm', name: '我的 LLM', type: 'openai-compatible', baseUrl: 'http://x', model: 'm' },
+      { id: 'user-llm', name: '我的 LLM', type: 'llm', baseUrl: 'http://x', model: 'm' },
     ]);
 
     const result = await getActiveSources();
@@ -179,7 +179,7 @@ describe('getActiveSources', () => {
   it('activeProviderId 已设置 → 返回用户选择的生效源', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'user-llm', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'user-llm', name: '我的 LLM', type: 'openai-compatible', baseUrl: 'http://x', model: 'm' },
+      { id: 'user-llm', name: '我的 LLM', type: 'llm', baseUrl: 'http://x', model: 'm' },
     ]);
 
     const result = await getActiveSources();
@@ -234,7 +234,7 @@ describe('translateWithAdapterStream', () => {
   it('LLM 源流式 → 调用 translateStream,onChunk 被调用并返回最终结果', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'llm-1', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'llm-1', name: 'test-llm', type: 'openai-compatible', baseUrl: 'http://localhost:9999/v1/chat/completions', model: 'm' },
+      { id: 'llm-1', name: 'test-llm', type: 'llm', baseUrl: 'http://localhost:9999/v1/chat/completions', model: 'm' },
     ]);
 
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -290,7 +290,7 @@ describe('translateWithAdapterStream', () => {
   it('无可用源 → no-config 错误,不调 onChunk', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'non-existent', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([
-      { id: 'other', name: 'other', type: 'openai-compatible', baseUrl: 'http://localhost', model: 'm' },
+      { id: 'other', name: 'other', type: 'llm', baseUrl: 'http://localhost', model: 'm' },
     ]);
 
     const onChunk = vi.fn();

@@ -285,3 +285,55 @@ test('传统源(microsoft)划词翻译一次性返回译文', async ({ context, 
   expect(Array.isArray(body)).toBe(true);
 });
 
+test('ollama 响应风格划词翻译落到 /api/chat 并返回 mock 译文', async ({ context, extensionId }) => {
+  // 1. 通过 options 页配置 ollama 风格提供方并启用
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const cards = optionsPage.locator('.provider-card');
+  const card = cards.last();
+  await card.locator('input[placeholder="名称"]').fill('ollama-mock');
+  // BaseURL 指向 mock server 的 Ollama /api/chat 路由
+  await card.getByTestId('base-url').fill(`${mockUrl}/api/chat`);
+  await card.locator('input[placeholder="模型名"]').fill('mock-model');
+  // 选择 ollama 响应风格
+  await card.getByTestId('response-style').locator('input[type="radio"][value="ollama"]').check();
+
+  // 连通性测试（复用 test-provider 通道，覆盖 ollama 风格）
+  await card.getByRole('button', { name: '测试连通' }).click();
+  await expect(card.locator('.test-msg')).toContainText('✅', { timeout: 5_000 });
+
+  // 启用该提供方
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  // 2. 打开测试页,选中 "Hello world" 并翻译
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  // 3. 断言译文浮层展示 mock 译文
+  const panel = page.locator('.llm-translator-panel');
+  await expect(panel).toBeVisible({ timeout: 15_000 });
+  await expect(panel).toContainText('你好,世界');
+
+  // 4. 断言请求体为 Ollama 格式（stream: true 流式翻译 + message.content 响应路径）
+  const body = getLastRequestBody() as {
+    model?: string;
+    stream?: boolean;
+    messages?: Array<{ content?: string }>;
+  } | null;
+  expect(body?.model).toBe('mock-model');
+  expect(body?.stream).toBe(true);
+  expect(body?.messages?.[0]?.content).toBeTruthy();
+});
+

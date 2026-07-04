@@ -7,7 +7,7 @@ function makeOpenAIConfig(overrides: Partial<ProviderConfig> = {}): ProviderConf
   return {
     id: 'test-llm',
     name: 'test-llm',
-    type: 'openai-compatible',
+    type: 'llm',
     baseUrl: 'http://localhost:9999/v1/chat/completions',
     model: 'test-model',
     ...overrides,
@@ -83,7 +83,7 @@ describe('LLM Provider 错误归一化', () => {
     expect(result.errorType).toBeUndefined();
   });
 
-  it('Ollama 类型成功响应 → 返回译文', async () => {
+  it('Ollama 响应风格成功响应 → 返回译文', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -91,10 +91,26 @@ describe('LLM Provider 错误归一化', () => {
         message: { content: '你好,世界' },
       }),
     }));
-    const provider = createLLMProvider(makeOpenAIConfig({ type: 'ollama' }));
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'ollama' }));
     const result = await provider.translate(baseReq);
     expect(result.translatedText).toBe('你好,世界');
     expect(result.errorType).toBeUndefined();
+  });
+
+  it('Ollama 响应风格请求体含 stream:false（非流式）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ message: { content: '你好' } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'ollama' }));
+    await provider.translate(baseReq);
+    const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(callBody.stream).toBe(false);
+    // Ollama 路径无 Authorization 头
+    const callHeaders = fetchMock.mock.calls[0][1].headers;
+    expect(callHeaders['Authorization']).toBeUndefined();
   });
 
   it('test() 默认发送 hello → 中文 请求', async () => {
@@ -363,7 +379,7 @@ describe('LLM Provider 流式翻译', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = createLLMProvider(makeOpenAIConfig({ type: 'ollama' }));
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'ollama' }));
     const chunks: string[] = [];
     const result = await provider.translateStream!(baseReq, (c) => chunks.push(c.deltaText));
 

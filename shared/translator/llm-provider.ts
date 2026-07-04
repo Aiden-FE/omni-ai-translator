@@ -321,8 +321,7 @@ async function callOllamaStream(
 
 /**
  * 创建 LLM 翻译源 provider 实例
- * 根据 provider.type 路由：ollama → callOllama；openai-compatible 按 responseStyle 分流
- * （anthropic → callAnthropic 原生 Anthropic Messages API；openai/缺省 → callOpenAICompatible）。
+ * 按 responseStyle 三路分发：ollama → callOllama；anthropic → callAnthropic；openai/缺省 → callOpenAICompatible。
  * 迁移自 shared/llm.ts，行为不变：相同输入产出相同 TranslateResult（新增 errorType 字段）。
  */
 export function createLLMProvider(config: ProviderConfig): TranslationProvider {
@@ -331,8 +330,9 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     type: 'llm' as const,
     async translate(req: TranslateRequest): Promise<TranslateResult> {
       try {
-        if (config.type === 'ollama') return await callOllama(config, req);
-        if (config.responseStyle === 'anthropic') return await callAnthropic(config, req);
+        const style = config.responseStyle ?? 'openai';
+        if (style === 'ollama') return await callOllama(config, req);
+        if (style === 'anthropic') return await callAnthropic(config, req);
         return await callOpenAICompatible(config, req);
       } catch (err) {
         const errorType = classifyError(err);
@@ -348,8 +348,9 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     },
     async translateStream(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult> {
       try {
-        if (config.type === 'ollama') return await callOllamaStream(config, req, onChunk);
-        if (config.responseStyle === 'anthropic') return await callAnthropicStream(config, req, onChunk);
+        const style = config.responseStyle ?? 'openai';
+        if (style === 'ollama') return await callOllamaStream(config, req, onChunk);
+        if (style === 'anthropic') return await callAnthropicStream(config, req, onChunk);
         return await callOpenAICompatibleStream(config, req, onChunk);
       } catch (err) {
         const errorType = classifyError(err);
