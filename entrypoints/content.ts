@@ -73,12 +73,18 @@ export default defineContentScript({
       document.body.appendChild(panelFrame);
 
       // about:blank 同源,可立即写 contentDocument;注入文档重置 + content.css 字符串
+      // overflow:hidden:iframe 尺寸由 syncSize 贴合内容,本就不该内部滚动;消除 sub-pixel 溢出引发的
+      // 上下/左右滚动条(垂直滚动条占宽度+panel max-content 不收缩→水平滚动条的连锁)。pre 等局部滚动用细窄半透明滚动条。
       const doc = panelFrame.contentDocument;
       if (!doc) return;
       doc.open();
       doc.write(
         '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
-          'html,body{margin:0;padding:0;background:transparent;}' +
+          'html,body{margin:0;padding:0;background:transparent;overflow:hidden;}' +
+          '::-webkit-scrollbar{width:6px;height:6px;}' +
+          '::-webkit-scrollbar-thumb{background:rgba(249,250,251,0.25);border-radius:3px;}' +
+          '::-webkit-scrollbar-track{background:transparent;}' +
+          '::-webkit-scrollbar-thumb:hover{background:rgba(249,250,251,0.4);}' +
           contentStyle +
           '</style></head><body></body></html>',
       );
