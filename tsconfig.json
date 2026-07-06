@@ -19,6 +19,7 @@
     }
   },
   "include": [
+    "env.d.ts",
     ".wxt/types/**/*.d.ts",
     "entrypoints/**/*",
     "shared/**/*",
