@@ -21,9 +21,22 @@
   background: #374151;
 }
 
-.llm-translator-panel {
+/* 浮层 iframe 容器(宿主 DOM):透明无边框,阴影与圆角由 iframe 元素承担,
+   避免内容被 iframe 视口裁剪;内部 panelRoot 按内容收缩包裹(max-width:360px)。 */
+.llm-translator-panel-frame {
   position: absolute;
   z-index: 2147483647;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+/* 浮层内容根(渲染在 iframe 文档内):box-shadow 移至 iframe 容器,避免被 iframe 视口裁剪 */
+.llm-translator-panel {
+  position: absolute;
   max-width: 360px;
   padding: 10px 12px;
   background: #1f2937;
@@ -31,7 +44,6 @@
   font-size: 14px;
   line-height: 1.5;
   border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
   font-family: system-ui, -apple-system, sans-serif;
 }
 

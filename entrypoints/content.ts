@@ -2,8 +2,15 @@
 // 交互模型：划词后出现一个浮动小触发按钮，点击触发才翻译，结果在浮层展示。
 // 目标语言：默认浏览器首选语言（navigator.language）。
 // 流式翻译：经 chrome.runtime.Port 长连接接收 chunk，浮层渐进渲染译文 + 闪烁光标。
+//
+// 样式隔离：译文浮层(panel)渲染进一个 about:blank iframe(同源,可直接写 contentDocument)。
+// iframe 是独立文档,宿主页面 CSS 无法穿透文档边界,彻底避免宿主对 p/code/h1 等语义标签
+// 的颜色规则覆盖浮层——此前 color:inherit(PR #45)/Shadow DOM(PR #46)方案仍受宿主样式影响,
+// 译文与暗底同色不可见。触发按钮(trigger)结构简单且自带显式色,保留在宿主 DOM;仅显示浮层做 iframe 隔离。
 
 import '@/assets/content.css';
+// content.css 以字符串注入浮层 iframe 文档(见 showPanel),不依赖宿主文档全局 CSS 穿透进 iframe。
+import contentStyle from '@/assets/content.css?inline';
 import { getSettings } from '@/shared/storage';
 import type { TranslateResult, StreamPortMessage } from '@/shared/types';
 import { errorFeedback } from '@/shared/translator/error';
@@ -13,7 +20,11 @@ export default defineContentScript({
   matches: ['<all_urls>'],
   main() {
     let trigger: HTMLDivElement | null = null;
-    let panel: HTMLDivElement | null = null;
+    // 浮层 iframe(宿主 DOM 中的容器元素)与其内部文档根(panelRoot,挂 .llm-translator-panel)
+    let panelFrame: HTMLIFrameElement | null = null;
+    let panelRoot: HTMLDivElement | null = null;
+    // 浮层内容自适应:监听 panelRoot 尺寸变化,同步 iframe 元素宽高,避免内容被裁剪或留大白边
+    let panelRO: ResizeObserver | null = null;
     let selectedText = '';
 
     async function getTargetLang(): Promise<string> {
@@ -40,39 +51,79 @@ export default defineContentScript({
 
     function clearAll() {
       trigger?.remove();
-      panel?.remove();
+      panelRO?.disconnect();
+      panelRO = null;
+      panelFrame?.remove();
+      panelFrame = null;
+      panelRoot = null;
       trigger = null;
-      panel = null;
       selectedText = '';
     }
 
-    function showPanel(content: string, x: number, y: number) {
-      panel = document.createElement('div');
-      panel.className = 'llm-translator-panel';
-      panel.setAttribute('aria-live', 'polite');
-      panel.textContent = content;
-      panel.style.left = `${x}px`;
-      panel.style.top = `${y}px`;
-      document.body.appendChild(panel);
+    /** 同步浮层 iframe 元素宽高到内部 panelRoot 尺寸(内容驱动,最大宽 360px+内边距) */
+    function syncPanelSize() {
+      if (!panelFrame || !panelRoot) return;
+      panelFrame.style.width = `${panelRoot.offsetWidth}px`;
+      panelFrame.style.height = `${panelRoot.offsetHeight}px`;
     }
 
-    /** 在浮层内渲染错误反馈（主行 + 引导次要行） */
+    function showPanel(content: string, x: number, y: number) {
+      // iframe 作为浮层容器挂在宿主 body;position:absolute 锚定文档原点,内部 panelRoot 沿用 pageX/pageY 定位
+      panelFrame = document.createElement('iframe');
+      panelFrame.className = 'llm-translator-panel-frame';
+      panelFrame.title = 'LLM 翻译结果';
+      panelFrame.style.left = `${x}px`;
+      panelFrame.style.top = `${y}px`;
+      document.body.appendChild(panelFrame);
+
+      // about:blank 同源,可立即写 contentDocument;注入文档重置 + content.css 字符串
+      const doc = panelFrame.contentDocument;
+      if (!doc) return;
+      doc.open();
+      doc.write(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
+          'html,body{margin:0;padding:0;background:transparent;}' +
+          contentStyle +
+          '</style></head><body></body></html>',
+      );
+      doc.close();
+
+      // panelRoot 挂 .llm-translator-panel;position:absolute 使其按内容收缩包裹(max-width:360px)
+      panelRoot = doc.createElement('div');
+      panelRoot.className = 'llm-translator-panel';
+      panelRoot.setAttribute('aria-live', 'polite');
+      panelRoot.textContent = content;
+      doc.body.appendChild(panelRoot);
+
+      // 内容自适应:用 iframe 自身窗口的 ResizeObserver 监听 panelRoot(与目标节点同 realm,最可靠),
+      // 流式文本增长/Markdown 渲染触发尺寸变化时同步 iframe 元素宽高,避免内容被裁剪或留白。
+      const iframeWin = panelFrame.contentWindow as (Window & { ResizeObserver: typeof ResizeObserver }) | null;
+      const IRO = iframeWin?.ResizeObserver;
+      if (IRO) {
+        panelRO = new IRO(syncPanelSize);
+        panelRO.observe(panelRoot);
+      }
+      syncPanelSize();
+    }
+
+    /** 在浮层内渲染错误反馈（主行 + 引导次要行）。元素须在 iframe 文档内创建,沿用 panelRoot 所属文档。 */
     function renderError(targetPanel: HTMLDivElement, result: TranslateResult) {
+      const doc = targetPanel.ownerDocument;
       if (result.errorType) {
         const { main, guidance } = errorFeedback(result.errorType);
-        const mainDiv = document.createElement('div');
+        const mainDiv = doc.createElement('div');
         mainDiv.className = 'llm-translator-error-main';
         mainDiv.textContent = `❌ ${main}`;
         targetPanel.appendChild(mainDiv);
         if (guidance) {
-          const hintDiv = document.createElement('div');
+          const hintDiv = doc.createElement('div');
           hintDiv.className = 'llm-translator-error-hint';
           hintDiv.textContent = guidance;
           targetPanel.appendChild(hintDiv);
         }
       } else {
         // 回退：无 errorType 时沿用旧逻辑
-        const errorDiv = document.createElement('div');
+        const errorDiv = doc.createElement('div');
         errorDiv.className = 'llm-translator-error-main';
         errorDiv.textContent = `❌ ${result.error}`;
         targetPanel.appendChild(errorDiv);
@@ -83,8 +134,9 @@ export default defineContentScript({
       trigger?.remove();
       trigger = null;
       showPanel('翻译中…', x, y);
-      // 捕获当前 panel 引用，防止后续 clearAll/new doTranslate 改变 module-level panel 后旧 port 回调误操作
-      const currentPanel = panel;
+      // 捕获当前浮层引用,防止后续 clearAll/new doTranslate 改变 module-level 引用后旧 port 回调误操作
+      const currentRoot = panelRoot;
+      const currentDoc = panelFrame?.contentDocument ?? null;
       const targetLang = await getTargetLang();
 
       // 经 port 长连接发起流式翻译
@@ -103,20 +155,20 @@ export default defineContentScript({
 
       /** 首次 chunk 到达时初始化流式渲染结构：清空「翻译中…」，创建文本容器 + 光标 */
       function initStreamingUI() {
-        if (!currentPanel || firstChunkReceived) return;
+        if (!currentRoot || !currentDoc || firstChunkReceived) return;
         firstChunkReceived = true;
-        currentPanel.textContent = '';
+        currentRoot.textContent = '';
 
-        textContainer = document.createElement('span');
+        textContainer = currentDoc.createElement('span');
         textContainer.className = 'llm-translator-stream-text';
 
-        cursor = document.createElement('span');
+        cursor = currentDoc.createElement('span');
         cursor.className = 'llm-translator-cursor';
         cursor.textContent = '▋';
         cursor.setAttribute('aria-hidden', 'true');
 
-        currentPanel.appendChild(textContainer);
-        currentPanel.appendChild(cursor);
+        currentRoot.appendChild(textContainer);
+        currentRoot.appendChild(cursor);
       }
 
       /** requestAnimationFrame 合批：将 pendingDelta 刷入 DOM */
@@ -156,22 +208,22 @@ export default defineContentScript({
           }
           removeCursor();
           // 以 done.result 为准（含完整译文）
-          if (currentPanel) {
+          if (currentRoot && currentDoc) {
             if (firstChunkReceived && textContainer && msg.result.translatedText) {
               // done 阶段:markdown 渲染(解析 → sanitize → innerHTML)
               // 移除流式 span,创建 md 渲染容器注入 sanitize 后的 HTML
               textContainer.remove();
-              const mdContainer = document.createElement('div');
+              const mdContainer = currentDoc.createElement('div');
               mdContainer.className = 'llm-translator-md-render';
               mdContainer.innerHTML = renderMarkdown(msg.result.translatedText);
-              currentPanel.appendChild(mdContainer);
+              currentRoot.appendChild(mdContainer);
             } else if (!firstChunkReceived) {
               // 无 chunk 直接 done（理论上不会发生，但防御处理）
-              currentPanel.textContent = '';
-              const mdContainer = document.createElement('div');
+              currentRoot.textContent = '';
+              const mdContainer = currentDoc.createElement('div');
               mdContainer.className = 'llm-translator-md-render';
               mdContainer.innerHTML = renderMarkdown(msg.result.translatedText ?? '');
-              currentPanel.appendChild(mdContainer);
+              currentRoot.appendChild(mdContainer);
             }
           }
           port.disconnect();
@@ -180,28 +232,28 @@ export default defineContentScript({
           if (rafId !== null) cancelAnimationFrame(rafId);
           flushPending();
           removeCursor();
-          if (currentPanel) {
+          if (currentRoot) {
             // 保留已渲染译文 + 追加错误提示行
             if (!firstChunkReceived) {
               // 未收到任何 chunk，清空「翻译中…」再显示错误
-              currentPanel.textContent = '';
+              currentRoot.textContent = '';
             }
-            renderError(currentPanel, msg.result);
+            renderError(currentRoot, msg.result);
           }
           port.disconnect();
         }
       });
 
       port.onDisconnect.addListener(() => {
-        if (!finished && currentPanel) {
+        if (!finished && currentRoot) {
           // SW 回收等异常路径 → 归入 network 错误
           if (rafId !== null) cancelAnimationFrame(rafId);
           flushPending();
           removeCursor();
           if (!firstChunkReceived) {
-            currentPanel.textContent = '';
+            currentRoot.textContent = '';
           }
-          renderError(currentPanel, {
+          renderError(currentRoot, {
             translatedText: '',
             error: '翻译连接中断',
             errorType: 'network',
@@ -213,8 +265,9 @@ export default defineContentScript({
     // 划词后显示触发按钮
     document.addEventListener('mouseup', (e: MouseEvent) => {
       // 点击发生在已有 trigger/panel 上时不重建,避免误清除
+      // (浮层在 iframe 内,宿主事件不穿透 iframe;此判断仅覆盖点中 iframe 元素本身的少见情形)
       const target = e.target as Node;
-      if ((trigger && trigger.contains(target)) || (panel && panel.contains(target))) {
+      if ((trigger && trigger.contains(target)) || (panelFrame && panelFrame.contains(target))) {
         return;
       }
       const selection = window.getSelection();
@@ -247,11 +300,11 @@ export default defineContentScript({
       document.body.appendChild(trigger);
     });
 
-    // 点击空白处清除
+    // 点击空白处清除(浮层在 iframe 内,iframe 捕获其区域内事件,宿主 mousedown 仅在点宿主空白时触发)
     document.addEventListener('mousedown', (e) => {
       const target = e.target as Node;
       const onTrigger = trigger && trigger.contains(target);
-      const onPanel = panel && panel.contains(target);
+      const onPanel = panelFrame && panelFrame.contains(target);
       if (!onTrigger && !onPanel) {
         clearAll();
       }
