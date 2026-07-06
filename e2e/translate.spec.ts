@@ -58,7 +58,7 @@ test('划词后出现触发按钮,点击后浮层展示 mock 译文', async ({ c
 
   // 4. 点击触发按钮,等待译文浮层
   await trigger.click();
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('你好,世界');
 });
@@ -92,7 +92,7 @@ test('配置的默认目标语言生效,prompt 使用用户配置值', async ({ 
   await expect(trigger).toBeVisible({ timeout: 5_000 });
   await trigger.click();
 
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
 
   // 3. 断言 mock server 收到的 prompt 包含用户配置的目标语言
@@ -138,7 +138,7 @@ test('microsoft 有 Key 源启用后,划词翻译落到官方端点并携带 reg
   await trigger.click();
 
   // 3. 断言译文浮层展示 mock 译文
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('你好,世界');
 
@@ -187,7 +187,7 @@ test('anthropic 响应风格划词翻译落到 /v1/messages 并携带 x-api-key 
   await trigger.click();
 
   // 3. 断言译文浮层展示 mock 译文
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('你好,世界');
 
@@ -234,7 +234,7 @@ test('OpenAI 流式翻译浮层渐进渲染译文', async ({ context, extensionI
   await trigger.click();
 
   // 3. 等待浮层出现
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
 
   // 4. 流式渲染期间应出现光标元素（渐进渲染标志）
@@ -276,7 +276,7 @@ test('传统源(microsoft)划词翻译一次性返回译文', async ({ context, 
   await trigger.click();
 
   // 3. 断言译文浮层展示 mock 译文（非流式回退一次性返回）
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('你好,世界');
 
@@ -322,7 +322,7 @@ test('ollama 响应风格划词翻译落到 /api/chat 并返回 mock 译文', as
   await trigger.click();
 
   // 3. 断言译文浮层展示 mock 译文
-  const panel = page.locator('.llm-translator-panel');
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
   await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel).toContainText('你好,世界');
 
