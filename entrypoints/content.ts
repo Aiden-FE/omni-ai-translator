@@ -23,8 +23,6 @@ export default defineContentScript({
     // 浮层 iframe(宿主 DOM 中的容器元素)与其内部文档根(panelRoot,挂 .llm-translator-panel)
     let panelFrame: HTMLIFrameElement | null = null;
     let panelRoot: HTMLDivElement | null = null;
-    // 浮层内容自适应:监听 panelRoot 尺寸变化,同步 iframe 元素宽高,避免内容被裁剪或留大白边
-    let panelRO: ResizeObserver | null = null;
     let selectedText = '';
 
     async function getTargetLang(): Promise<string> {
@@ -51,8 +49,6 @@ export default defineContentScript({
 
     function clearAll() {
       trigger?.remove();
-      panelRO?.disconnect();
-      panelRO = null;
       panelFrame?.remove();
       panelFrame = null;
       panelRoot = null;
@@ -88,21 +84,14 @@ export default defineContentScript({
       );
       doc.close();
 
-      // panelRoot 挂 .llm-translator-panel;position:absolute 使其按内容收缩包裹(max-width:360px)
+      // panelRoot 挂 .llm-translator-panel;width:max-content 让宽度由内容决定(见 content.css),不依赖 iframe 宽度,打破塌陷循环
       panelRoot = doc.createElement('div');
       panelRoot.className = 'llm-translator-panel';
       panelRoot.setAttribute('aria-live', 'polite');
       panelRoot.textContent = content;
       doc.body.appendChild(panelRoot);
 
-      // 内容自适应:用 iframe 自身窗口的 ResizeObserver 监听 panelRoot(与目标节点同 realm,最可靠),
-      // 流式文本增长/Markdown 渲染触发尺寸变化时同步 iframe 元素宽高,避免内容被裁剪或留白。
-      const iframeWin = panelFrame.contentWindow as (Window & { ResizeObserver: typeof ResizeObserver }) | null;
-      const IRO = iframeWin?.ResizeObserver;
-      if (IRO) {
-        panelRO = new IRO(syncPanelSize);
-        panelRO.observe(panelRoot);
-      }
+      // 初始同步 iframe 宽高到 panelRoot 尺寸;后续内容变更由 doTranslate 内 syncSize 显式同步(确定性,不依赖 RO 跨 realm 时序)
       syncPanelSize();
     }
 
@@ -137,6 +126,14 @@ export default defineContentScript({
       // 捕获当前浮层引用,防止后续 clearAll/new doTranslate 改变 module-level 引用后旧 port 回调误操作
       const currentRoot = panelRoot;
       const currentDoc = panelFrame?.contentDocument ?? null;
+      const currentFrame = panelFrame;
+      // 显式同步当前浮层 iframe 宽高到 panelRoot 尺寸(内容驱动,确定性;每次内容变更后调用,避免高度溢出)
+      const syncSize = () => {
+        if (currentFrame && currentRoot) {
+          currentFrame.style.width = `${currentRoot.offsetWidth}px`;
+          currentFrame.style.height = `${currentRoot.offsetHeight}px`;
+        }
+      };
       const targetLang = await getTargetLang();
 
       // 经 port 长连接发起流式翻译
@@ -169,6 +166,7 @@ export default defineContentScript({
 
         currentRoot.appendChild(textContainer);
         currentRoot.appendChild(cursor);
+        syncSize();
       }
 
       /** requestAnimationFrame 合批：将 pendingDelta 刷入 DOM */
@@ -177,6 +175,7 @@ export default defineContentScript({
           translatedText += pendingDelta;
           textContainer.textContent = translatedText;
           pendingDelta = '';
+          syncSize();
         }
         rafId = null;
       }
@@ -225,6 +224,7 @@ export default defineContentScript({
               mdContainer.innerHTML = renderMarkdown(msg.result.translatedText ?? '');
               currentRoot.appendChild(mdContainer);
             }
+            syncSize();
           }
           port.disconnect();
         } else if (msg.type === 'error') {
@@ -239,6 +239,7 @@ export default defineContentScript({
               currentRoot.textContent = '';
             }
             renderError(currentRoot, msg.result);
+            syncSize();
           }
           port.disconnect();
         }
@@ -258,6 +259,7 @@ export default defineContentScript({
             error: '翻译连接中断',
             errorType: 'network',
           });
+          syncSize();
         }
       });
     }

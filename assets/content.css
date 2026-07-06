@@ -34,9 +34,11 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
-/* 浮层内容根(渲染在 iframe 文档内):box-shadow 移至 iframe 容器,避免被 iframe 视口裁剪 */
+/* 浮层内容根(渲染在 iframe 文档内):box-shadow 移至 iframe 容器,避免被 iframe 视口裁剪。
+   width:max-content 让宽度由内容决定且不依赖 iframe 当前宽度(打破"iframe 窄→available 窄→panel 收缩→iframe 更窄"的塌陷循环),
+   max-width:360px 上限内换行;不用 position:absolute(iframe 已定位,absolute 的 shrink-to-fit 受包含块=iframe 视口约束会引发循环)。 */
 .llm-translator-panel {
-  position: absolute;
+  width: max-content;
   max-width: 360px;
   padding: 10px 12px;
   background: #1f2937;
