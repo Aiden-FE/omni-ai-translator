@@ -52,6 +52,8 @@
 - 跨浏览器（Firefox / Edge）兼容性适配（WXT 框架预留能力，但第一版只在 Chrome 验证）。
 - 用户账号体系与云端同步。
 
+> 注（2026-07-06 更新）：上述为第一版（v0.1）非目标，本身不变；随产品演进部分已重规划——「商店上架」转为 v0.3 in-scope（免费分发作为增长渠道），「付费分发」仍为非目标；「跨浏览器」纳入 v0.3 一并打通；「用户账号体系与云端同步」进一步延后至免费产品成熟、变现渐进引入时再建（非"永不做"）。详见 [product-wiki/roadmap/index.md](product-wiki/roadmap/index.md)、[product-wiki/business/PRICING-PLAN.md](product-wiki/business/PRICING-PLAN.md)。
+
 ## 6. 关键风险
 
 | 风险 | 说明 | 应对 |

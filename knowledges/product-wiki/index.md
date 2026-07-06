@@ -10,6 +10,6 @@
 - [business/](business/index.md) — 商业模式与营收（变现方案）
 - [privacy/](privacy/index.md) — 隐私声明
 - [releases/](releases/) — 版本需求文档
-  - [v0.2/](releases/v0.2/index.md) — 翻译源配置闭环（进行中）
+  - [v0.2/](releases/v0.2/index.md) — 翻译源配置闭环（已完成）
 
 _各子目录文档由 `prodflow-knowledge-product` 在产品知识沉淀阶段补充。_
