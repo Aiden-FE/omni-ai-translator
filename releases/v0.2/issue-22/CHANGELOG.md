@@ -36,6 +36,6 @@
 
 ## 部署注意事项
 
-- **发布前事项（不在本任务代码范围）**：隐私声明需补充原生 Anthropic 端点文本外传文案（见迭代主文档 `knowledges/product-wiki/releases/v0.2/index.md` 隐私登记项）。当前隐私声明第 5 节仅列「OpenAI 兼容接口 / 本地 Ollama」，需在发布前用 prodflow-prd revise 或 privacy-policy 更新，明示原生 Anthropic 端点文本外传（数据流同既有 LLM 提供方，仅协议/厂商补充）。
+- **发布前事项（不在本任务代码范围）**：隐私声明需补充原生 Anthropic 端点文本外传文案（见迭代主文档 `releases/v0.2/index.md` 隐私登记项）。当前隐私声明第 5 节仅列「OpenAI 兼容接口 / 本地 Ollama」，需在发布前用 prodflow-prd revise 或 privacy-policy 更新，明示原生 Anthropic 端点文本外传（数据流同既有 LLM 提供方，仅协议/厂商补充）。
 - **可选真实联调**：真实 Anthropic 端点联调需用户提供 Claude API Key + 端点，作为手动验收。无真实 Key 时 e2e 用 mock 路由完成，不阻塞交付。
 - **跨域 host_permissions**：Anthropic 端点域名需在 manifest `host_permissions` 声明，沿用现有动态源 host 处理，不硬编码厂商域名。

@@ -5,7 +5,7 @@
 | 文档类型 | 需求文档（开发 Issue 视角的 PRD 摘要） |
 | 状态 | approved（无人值守自动批准） |
 | 关联 Issue | #19 |
-| 关联 PRD | #3 功能事项 3（[knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md](../../../../knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md)） |
+| 关联 PRD | #3 功能事项 3（[releases/v0.2/3-traditional-apikey-config/PRD.md](../3-traditional-apikey-config/PRD.md)） |
 | 上游依赖 | #18（已合并到 master，PR #20） |
 
 ## 1. 需求来源

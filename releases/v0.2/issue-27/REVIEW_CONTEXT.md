@@ -23,7 +23,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #4 (source-picker-ui) |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/4-source-picker-ui/PRD.md` |
+| PRD 文档 | `releases/v0.2/4-source-picker-ui/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 |
 | DESIGN | `releases/v0.2/issue-27/DESIGN.md` |

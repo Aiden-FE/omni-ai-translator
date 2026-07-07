@@ -15,7 +15,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #42 — https://github.com/Aiden-FE/llm-translator/issues/42 |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/9-llm-type-unify/PRD.md` |
+| PRD 文档 | `releases/v0.2/9-llm-type-unify/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 |
 | DESIGN | `releases/v0.2/issue-43/DESIGN.md` |

@@ -32,7 +32,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #3（https://github.com/Aiden-FE/llm-translator/issues/3） |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md` |
+| PRD 文档 | `releases/v0.2/3-traditional-apikey-config/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环（https://github.com/Aiden-FE/llm-translator/milestone/1） |
 | DESIGN | `releases/v0.2/issue-19/DESIGN.md` |
@@ -46,6 +46,6 @@
 | 基线分支 | master |
 | 推荐合并顺序 | 本任务在 #18 之后合并（#18 已合并，可直接合并本 PR） |
 | Stacked MR | 否 |
-| 依赖契约或接口文档 | PRD `knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md`；#18 DESIGN `releases/v0.2/issue-18/DESIGN.md`、CHANGELOG `releases/v0.2/issue-18/CHANGELOG.md`；关键契约：`ProviderConfig.region?: string`（可选，microsoft 有 Key 场景使用，google 不使用）；microsoft 有 Key 时后端 `callMicrosoftWithKey` 读 `config.region`（trim 后非空）携带 `Ocp-Apim-Subscription-Region` header（region 为空/纯空白则不发）；apiKey 留空走免 Key 兜底，填入走官方 API |
+| 依赖契约或接口文档 | PRD `releases/v0.2/3-traditional-apikey-config/PRD.md`；#18 DESIGN `releases/v0.2/issue-18/DESIGN.md`、CHANGELOG `releases/v0.2/issue-18/CHANGELOG.md`；关键契约：`ProviderConfig.region?: string`（可选，microsoft 有 Key 场景使用，google 不使用）；microsoft 有 Key 时后端 `callMicrosoftWithKey` 读 `config.region`（trim 后非空）携带 `Ocp-Apim-Subscription-Region` header（region 为空/纯空白则不发）；apiKey 留空走免 Key 兜底，填入走官方 API |
 
 > 说明：本 PR 仅创建，不自行合并——合并由协调器在 prodflow-review 审查后统一执行。

@@ -6,11 +6,11 @@
 | 所属 PRD Issue | #4（source-picker-ui） |
 | 迭代版本 | v0.2 |
 | 改动范围 | 前端（`entrypoints/options/App.vue`） |
-| 关联 PRD 文档 | `knowledges/product-wiki/releases/v0.2/4-source-picker-ui/PRD.md` |
+| 关联 PRD 文档 | `releases/v0.2/4-source-picker-ui/PRD.md` |
 
 ## 1. 需求来源
 
-完整 PRD 已由 prodflow-prd 产出，见 `knowledges/product-wiki/releases/v0.2/4-source-picker-ui/PRD.md`。本文档不重写 PRD，仅引用并补充 Issue #16 范围澄清与无人值守自动决策结论。
+完整 PRD 已由 prodflow-prd 产出，见 `releases/v0.2/4-source-picker-ui/PRD.md`。本文档不重写 PRD，仅引用并补充 Issue #16 范围澄清与无人值守自动决策结论。
 
 ## 2. 核心需求（引用 PRD #4）
 

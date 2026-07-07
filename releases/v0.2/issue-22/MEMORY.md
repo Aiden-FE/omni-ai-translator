@@ -8,8 +8,8 @@
 | 基础分支 | master |
 | 任务 worktree | /home/admin/dev/prodflow/ai-projects/llm-translator/.worktrees/master-issue-22 |
 | PRD Issue | #6 |
-| PRD 文档 | knowledges/product-wiki/releases/v0.2/5-llm-anthropic-style/PRD.md |
-| 迭代主文档 | knowledges/product-wiki/releases/v0.2/index.md |
+| PRD 文档 | releases/v0.2/5-llm-anthropic-style/PRD.md |
+| 迭代主文档 | releases/v0.2/index.md |
 | ADR-001 | knowledges/adr/001-unified-translator-adapter-layer.md |
 | 执行模式 | 无人值守（默认自动决策并留痕） |
 

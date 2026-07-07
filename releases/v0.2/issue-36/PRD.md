@@ -4,7 +4,7 @@
 
 ## 需求来源
 
-本任务源自 PRD Issue #31 [v0.2-8] 翻译译文 markdown 可读渲染,完整 PRD 见 `knowledges/product-wiki/releases/v0.2/8-md-render/PRD.md`。本文档为开发任务 #36 的需求确认与澄清补充,不重写原 PRD。
+本任务源自 PRD Issue #31 [v0.2-8] 翻译译文 markdown 可读渲染,完整 PRD 见 `releases/v0.2/8-md-render/PRD.md`。本文档为开发任务 #36 的需求确认与澄清补充,不重写原 PRD。
 
 ## 需求确认
 
@@ -27,7 +27,7 @@
 - 流式期间增量 markdown 渲染(部分 md 容错)——未来版本。
 - 代码块复制按钮——未来版本。
 - 不触碰 #35 的文件(popup/options/shared-storage/builtin-sources)。
-- 不修改 `knowledges/product-wiki/releases/v0.2/index.md`(协调器统一管理)。
+- 不修改 `releases/v0.2/index.md`(协调器统一管理)。
 
 ### 验收标准(来自 PRD #31)
 

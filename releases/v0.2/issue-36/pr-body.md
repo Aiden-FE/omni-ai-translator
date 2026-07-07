@@ -41,7 +41,7 @@ Closes #36
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #31 [v0.2-8] 翻译译文 markdown 可读渲染 — https://github.com/Aiden-FE/llm-translator/issues/31 |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/8-md-render/PRD.md` |
+| PRD 文档 | `releases/v0.2/8-md-render/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 |
 | DESIGN | `releases/v0.2/issue-36/DESIGN.md` |

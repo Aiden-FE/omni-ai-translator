@@ -23,7 +23,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #4（source-picker-ui）、#6（llm-anthropic-style） |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/4-source-picker-ui/PRD.md`、`knowledges/product-wiki/releases/v0.2/5-llm-anthropic-style/PRD.md` |
+| PRD 文档 | `releases/v0.2/4-source-picker-ui/PRD.md`、`releases/v0.2/5-llm-anthropic-style/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 |
 | DESIGN | `releases/v0.2/issue-28/DESIGN.md` |

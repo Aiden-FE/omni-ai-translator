@@ -1,0 +1,234 @@
+# PRD — 统一翻译源适配层（unified-adapter）
+
+| 项 | 内容 |
+|---|---|
+| 文档类型 | 需求文档（PRD） |
+| 状态 | draft |
+| 负责人 |  |
+| 创建日期 | 2026-07-01 |
+| 最近更新 | 2026-07-01 |
+| 适用范围 | LLM Translator v0.2 — 功能事项 1 |
+| 关联材料 | [../../../knowledges/startup-summary.md](../../../knowledges/startup-summary.md)、[../../../knowledges/product-wiki/strategy/index.md](../../../knowledges/product-wiki/strategy/index.md)、[../../../knowledges/product-wiki/roadmap/index.md](../../../knowledges/product-wiki/roadmap/index.md)、[../index.md](../index.md) |
+
+---
+
+## 1. 摘要
+
+本 PRD 定义 LLM Translator 的「统一翻译源适配层」：把现有只支持 LLM 的适配逻辑抽象升级为通用的翻译源接口，让 LLM 类源（OpenAI 兼容 / Ollama）与传统翻译类源（Google / 微软）都作为可插拔的 provider 接入，上层划词翻译只面向统一接口调用。这是 v0.2「翻译源配置闭环」的基础设施，使后续免 Key 兜底、传统 API Key 配置等功能得以在此之上落地。
+
+## 2. 联系人
+
+| 角色 | 负责人 | 备注 |
+|---|---|---|
+| 产品 / 负责人 | 待定 | 本迭代由 prodflow-sprint-open 推进 |
+| 研发（前端/扩展） | 待定 | MV3 + WXT + Vue 3 + TS |
+| UX | 待定 | UX 章节待 issue 创建后补全 |
+
+## 3. 背景
+
+LLM Translator 第一版（v0.1）已实现划词翻译 MVP：划词→浮动触发按钮→点击→调用配置的 LLM→浮层展示译文。v0.1 的翻译源只有 LLM 一种类型，且明确「不内置任何模型接口」，用户必须自行配置 OpenAI 兼容接口或本地 Ollama 才能用。
+
+这带来两个问题：
+- **首次使用门槛高**：用户必须先有 API Key 或本地模型，否则插件无法翻译。普通阅读用户被挡在门外。
+- **翻译源类型单一**：现有 `shared/llm.ts` 只适配 LLM 调用，传统翻译接口（Google / 微软等）调用方式、参数、错误模型与 LLM 差异很大，无法直接塞进现有逻辑。
+
+v0.2 决定引入传统翻译接口作为「免 Key 兜底」——用户未配置任何模型时也能开箱即用。但翻译源种类多、差异大，如果上层（background/content）直接对接每种源，会堆满 if-else、难以维护。因此需要先建立一个**统一翻译源适配层**：定义一致接口，把不同源的差异封装在各自 provider 内部。
+
+本 PRD 只负责定义这个适配层抽象与路由机制；免 Key 兜底源的具体实现由功能事项 2（builtin-fallback）承担，传统 API Key 配置由功能事项 3（traditional-apikey-config）承担，配置页选择 UI 由功能事项 4（source-picker-ui）承担。本 PRD 是这三项的地基。
+
+**为什么现在做**：v0.1 已验证划词闭环，v0.2 要扩源，适配层是扩源的前提，必须先于其它三项落地。
+
+## 4. 目标
+
+**目标**：建立统一翻译源适配层，使上层翻译调用与具体源类型解耦，新源可通过实现接口快速接入，且 v0.1 划词链路行为不退化。
+
+**对齐愿景**：产品策略中「模型无关的适配层设计，新模型快速接入」是核心防御性能力。本 PRD 把这条原则从「LLM 适配层」升级为「翻译源适配层」，为后续接入任意翻译源（传统 API、新 LLM、未来翻译服务）铺路。
+
+**关键结果（SMART）**：
+
+| 编号 | 关键结果 | 衡量方式 |
+|---|---|---|
+| KR1 | 统一 `TranslationProvider` 接口定义完成，至少 2 类 provider（LLM、传统）可在其上注册并被路由 | 代码审查 + 类型定义 |
+| KR2 | 现有 LLM 适配（openai-compatible / ollama）迁移到新接口，行为不变 | v0.1 e2e 用例全部通过 |
+| KR3 | 上层（background）调用翻译时，不感知具体源类型，仅通过统一入口拿 `TranslateResult` | 代码审查：background 无源类型分支 |
+| KR4 | 统一错误模型覆盖配置缺失 / 网络错误 / 限流 / 源不可达四类，每类返回明确可读提示 | 单元测试覆盖四类错误路径 |
+| KR5 | v0.1 划词翻译 e2e 回归通过 | Playwright e2e 全绿 |
+
+## 5. 细分市场
+
+本 PRD 服务于产品既有两类用户，但重点改善**普通阅读用户**的首次体验：
+
+- **普通阅读用户**（待完成任务：阅读外文页面，想要快速看懂）：v0.1 要求他们先配 Key 才能用，门槛过高。适配层使兜底源成为可能，让这类用户开箱即用。
+- **技术用户 / 开发者**（待完成任务：自带 Key、接本地模型、深度定制）：适配层让他们未来也能在同一框架下接入更多源，定制能力不丢失。
+
+**约束**：
+- MV3 Service Worker 会被回收，状态不依赖内存，配置走 `chrome.storage`。
+- content-script 不直接 fetch 第三方接口，翻译统一由 background 调用适配层。
+- 跨域请求需在 manifest 声明 host_permissions（动态源域名）。
+
+## 6. 价值主张
+
+| 客户任务 / 需求 | 客户获得 | 客户避免的痛点 | 我们做得更好的地方 |
+|---|---|---|---|
+| 想用不同翻译源（LLM 或传统） | 同一插件内源可切换，接口一致 | 每换一种源就要换一套逻辑 / 换个插件 | 适配层让新源快速接入，选择权交给用户 |
+| 想让插件可持续发展 | 架构上预留扩源能力 | 重构成本随源数量上升 | 模型无关适配层是产品策略明确的防御性设计 |
+| 想要稳定的翻译调用 | 统一错误模型，失败有明确提示 | 失败时只看到模糊报错，不知如何处理 | 区分四类错误并给出可读提示与切换建议 |
+
+## 7. 解决方案
+
+### 7.1 UX / 原型
+
+本 PRD 是底层基础设施，无直接用户可见界面。用户侧的源选择交互由功能事项 4（source-picker-ui）承担。本 PRD 的「交互」体现在错误反馈：当某源失败时，划词浮层展示明确错误提示（如「翻译源不可达，请在配置页切换源」），由 content.ts 浮层承接，错误文案由本适配层的统一错误模型产出。
+
+> 详细 UX 设计（差异性交互、状态、反馈、可访问性、视觉原型）待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+
+### 7.2 核心功能
+
+**7.2.1 统一翻译源接口**
+
+定义 `TranslationProvider` 接口，所有源（LLM 类、传统类）实现同一契约：
+
+- `id`：源唯一标识
+- `type`：源类型分类（llm / traditional）
+- `translate(req: TranslateRequest): Promise<TranslateResult>`：执行翻译
+- `test(req?: TranslateRequest): Promise<TranslateResult>`：连通性测试（发送最小请求）
+
+`TranslateRequest` / `TranslateResult` 沿用现有 `shared/types.ts` 定义，保持向上兼容。
+
+**7.2.2 Provider 注册与路由**
+
+- 建立源注册表：LLM provider（openai-compatible、ollama，迁移自现有 `shared/llm.ts`）与传统 provider（google、microsoft，由功能事项 2/3 实现）统一注册。
+- 路由逻辑：上层调用翻译时，适配层读取当前生效源配置（`settings` 中的当前源标识），从注册表取出对应 provider，调用其 `translate`。
+- 当前生效源解析规则：优先用户显式选择并启用的源；若未配置任何源，返回「无可用源」错误（兜底源由功能事项 2 注入，本 PRD 不硬编码兜底逻辑，但接口允许注册「兜底 provider」）。
+
+**7.2.3 统一错误模型**
+
+将错误归一化为 `TranslateResult.error` 上的可读提示，区分四类：
+
+| 错误类型 | 触发场景 | 用户可读提示（示例） |
+|---|---|---|
+| 配置缺失 | 未配置任何源，或当前源未启用 | 「未配置可用翻译源，请在配置页选择或添加源」 |
+| 网络错误 | fetch 抛异常、超时 | 「翻译请求失败，请检查网络或源地址」 |
+| 限流 | 源返回 429 或等价信号 | 「翻译源繁忙（限流），请稍后再试或在配置页切换源」 |
+| 源不可达 | 源返回 4xx/5xx、域名不可达（如 Google 在大陆不可达） | 「翻译源不可达，请在配置页切换到其它源」 |
+
+本轮**不做**自动降级：失败只给提示，由用户在配置页人工切换。
+
+**7.2.4 既有 LLM 适配迁移**
+
+将 `shared/llm.ts` 的 `callOpenAICompatible` / `callOllama` 迁移为 LLM provider 实现，`translate(provider, req)` 入口改为适配层统一入口。迁移遵循「行为不变」：相同输入产出相同 `TranslateResult`，保证 v0.1 划词链路不退化。
+
+### 7.3 技术
+
+- 技术栈：Manifest V3 + WXT + Vue 3 + TypeScript。
+- 模块位置：适配层放 `shared/`（建议 `shared/translator/` 或扩展 `shared/llm.ts`），由 background 调用，content 不直接接触。
+- 存储：源配置与当前生效源仍走 `chrome.storage.local`（`shared/storage.ts`），适配层只读不写。
+- 类型：扩展 `shared/types.ts`，`ProviderType` 扩展或新增源类型分类字段，保持 `ProviderConfig` 向后兼容（旧 LLM 配置可平滑读取）。
+- 跨域：传统源域名需在 manifest `host_permissions` 声明（动态 / 通配处理由功能事项 2/3 落实）。
+
+### 7.4 假设
+
+| 假设 | 验证方式 | 失败信号 |
+|---|---|---|
+| 现有 LLM 适配可平滑迁移到新接口而不改行为 | v0.1 e2e 回归 | e2e 用例失败 |
+| LLM 类与传统类源可共用 `TranslateRequest/Result` 抽象 | 代码审查 + 传统 provider 实现（功能事项 2/3） | 传统源需要完全不同的请求/响应结构无法归一 |
+| 免 Key 公共端点的错误可被归入四类错误模型 | 功能事项 2 实现时验证 | 出现无法归类的错误形态 |
+| 上层 background 调用点单一，迁移影响面可控 | 代码审查 | 调用点分散，迁移成本超预期 |
+
+## 8. 发布
+
+**时间范围**：约 1–1.5 周（本 PRD 是地基，优先于功能事项 2/3/4）。
+
+**第一版（v0.2 本 PRD 范围）**：
+- 统一 `TranslationProvider` 接口
+- LLM provider 迁移（openai-compatible / ollama）
+- 传统 provider 抽象（google / microsoft 的接口占位，具体实现由功能事项 2/3）
+- 源注册表与路由
+- 统一错误模型（四类）
+- v0.1 划词 e2e 回归通过
+
+**未来版本**：
+- 多源自动降级与优先级列表（v0.3+）
+- 更多源类型接入（由适配层支撑，无需改上层）
+
+## 本轮不做
+
+| 功能 | 延后原因 | 预计版本 |
+|---|---|---|
+| 多源自动降级与优先级 | 增加状态管理复杂度，超三周风险 | v0.3+ |
+| 免 Key 兜底源具体实现 | 由功能事项 2 承担 | v0.2 |
+| 传统 API Key 配置 | 由功能事项 3 承担 | v0.2 |
+| 配置页源选择 UI | 由功能事项 4 承担 | v0.2 |
+
+## 验收标准
+
+| 验收项 | 验收条件 | 优先级 |
+|---|---|---|
+| 统一接口 | `TranslationProvider` 接口定义完成，LLM 与传统 provider 均可注册 | P0 |
+| LLM 迁移 | openai-compatible / ollama 迁移到新接口，行为不变 | P0 |
+| 路由 | 上层调用经适配层路由到当前生效源，background 无源类型分支 | P0 |
+| 错误模型 | 四类错误均有可读提示，单元测试覆盖 | P0 |
+| 划词回归 | v0.1 划词翻译 e2e 全绿 | P0 |
+
+## UX 设计
+
+### UX 依据
+
+- Issue: `#1`（https://github.com/Aiden-FE/llm-translator/issues/1）
+- 版本: v0.2
+- 知识来源: [knowledges/ux/interaction-patterns.md](../../../knowledges/ux/interaction-patterns.md)（划词浮层状态反馈）、[knowledges/ux/design-system.md](../../../knowledges/ux/design-system.md)（浮层视觉）、[knowledges/ux/accessibility.md](../../../knowledges/ux/accessibility.md)（对比度、非颜色依赖）
+- 设计假设: 四类错误文案可被普通用户理解并据此采取行动（配置/切换源）；该假设待 UX 评审与用户验证
+
+### 视觉设计
+
+> 本 PRD 为底层适配层，无新增独立用户界面，沿用现有划词浮层视觉（见 [knowledges/ux/design-system.md](../../../knowledges/ux/design-system.md)「翻译浮层」）。不单独产出视觉原型；视觉差异仅体现在浮层错误文案上。
+
+### 交互逻辑（差异）
+
+本 PRD 无独立界面，UX 体现为「统一错误模型」经现有划词浮层反馈。通用划词流程（选中→触发按钮→浮层→关闭）引用 [knowledges/ux/interaction-patterns.md](../../../knowledges/ux/interaction-patterns.md)，不重复展开。本 PRD 的差异在于**将现有浮层失败的笼统「❌ <错误信息>」细化为四类差异化反馈**：
+
+| 错误类型 | 浮层反馈（文案示例） | 可操作性引导 |
+|---|---|---|
+| 配置缺失 | ❌ 未配置可用翻译源 | 引导：请在配置页选择或添加源 |
+| 网络错误 | ❌ 翻译请求失败 | 引导：请检查网络或源地址 |
+| 限流 | ❌ 翻译源繁忙（限流） | 引导：请稍后再试或在配置页切换源 |
+| 源不可达 | ❌ 翻译源不可达 | 引导：请在配置页切换到其它源 |
+
+> 注：v0.1 浮层失败仅显示「❌ <error>」，error 为底层原始信息（如 `HTTP 429: ...`）。本 PRD 将原始 error 归一化为上述可读文案，引导文案作为浮层次要行展示。
+
+### 业务约束
+
+- 错误归一化由适配层产出，浮层只负责展示，不自行判别错误类型。
+- 本轮**不做自动降级**：失败仅提示，不自动切换到其它源；引导文案指向「人工切换」。
+- 四类错误须互斥可判别：适配层返回的 `TranslateResult.error` 须能让浮层区分类型（建议 error 携带类型标识或文案前缀固定）。
+
+### 状态变化（差异）
+
+浮层状态在 v0.1 基础上扩展失败态的子状态：
+
+| 状态 | 反馈 |
+|---|---|
+| 待触发 | 圆形「译」按钮（沿用） |
+| 加载 | 「翻译中…」（沿用） |
+| 成功 | 译文文本（沿用） |
+| 失败-配置缺失 | ❌ 未配置可用翻译源 + 引导 |
+| 失败-网络 | ❌ 翻译请求失败 + 引导 |
+| 失败-限流 | ❌ 翻译源繁忙 + 引导 |
+| 失败-源不可达 | ❌ 翻译源不可达 + 引导 |
+
+### 设备适配（差异）
+
+无差异。浮层宽度自适应沿用 [knowledges/ux/design-system.md](../../../knowledges/ux/design-system.md) 响应式规则。错误引导文案较长时浮层自动换行，最大宽度 360px 不变。
+
+### 可访问性（差异）
+
+- 错误反馈不依赖颜色区分类型，沿用「❌」文字前缀 + 可读文案（符合 [knowledges/ux/accessibility.md](../../../knowledges/ux/accessibility.md)「不依赖纯图标」）。
+- 浮层深色背景 `#1F2937` + 浅色文字 `#F9FAFB` 对比度满足 WCAG AA（沿用）。
+- 引导文案作为次要信息，字号/颜色对比度同样需满足 AA，不使用纯色暗示可点击（本轮浮层引导为纯文本，不可点击跳转配置页——配置页需用户手动打开）。
+
+### 验收补充
+
+- 四类错误在浮层均显示对应可读文案与引导，且互斥可判别。
+- 错误反馈不依赖颜色，含「❌」文字前缀。
+- 浮层错误文案对比度满足 WCAG AA。
+- v0.1 划词成功/加载/触发流程行为不退化（回归）。

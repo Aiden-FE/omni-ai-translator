@@ -7,11 +7,11 @@
 | 版本 | v0.2 |
 | 创建日期 | 2026-07-03 |
 | 适用范围 | LLM Translator v0.2 功能事项 5 — 研发任务 #22 |
-| 上游 PRD | [knowledges/product-wiki/releases/v0.2/5-llm-anthropic-style/PRD.md](../../../../../knowledges/product-wiki/releases/v0.2/5-llm-anthropic-style/PRD.md) |
+| 上游 PRD | [releases/v0.2/5-llm-anthropic-style/PRD.md](../5-llm-anthropic-style/PRD.md) |
 
 ## 1. 需求来源
 
-本任务由 PRD Issue #6 驱动，完整 PRD 已由 prodflow-prd 落档于 `knowledges/product-wiki/releases/v0.2/5-llm-anthropic-style/PRD.md`。本文件引用该 PRD 并补充研发任务 #22 的实现范围与验收细化，不重写需求。
+本任务由 PRD Issue #6 驱动，完整 PRD 已由 prodflow-prd 落档于 `releases/v0.2/5-llm-anthropic-style/PRD.md`。本文件引用该 PRD 并补充研发任务 #22 的实现范围与验收细化，不重写需求。
 
 **PRD 核心目标**：在不影响既有 openai 风格源的前提下，让 LLM 适配层支持原生 Anthropic Messages API 端点，用户通过一个「响应风格」配置项即可切换。
 

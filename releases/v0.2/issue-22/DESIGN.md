@@ -6,7 +6,7 @@
 | 版本 | v0.2 |
 | 创建日期 | 2026-07-03 |
 | 适用范围 | LLM Translator v0.2 功能事项 5 — 研发任务 #22 |
-| 关联 ADR | [ADR-001 统一适配层](../../../../../knowledges/adr/001-unified-translator-adapter-layer.md) |
+| 关联 ADR | [ADR-001 统一适配层](../../../knowledges/adr/001-unified-translator-adapter-layer.md) |
 
 ## 1. 背景与目标
 

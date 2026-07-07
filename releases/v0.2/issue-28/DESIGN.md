@@ -34,11 +34,11 @@ PRD #30 计划把配置 UI 迁到 popup 并用 optgroup 分组（interaction-pat
 
 ### 可访问性
 
-- optgroup 的 `label` 属性提供分组语义，屏幕阅读器可读出分组名（符合 [knowledges/ux/accessibility.md](../../../../ux/accessibility.md)「不依赖纯图标传达信息，关键状态均有文字说明」）。
+- optgroup 的 `label` 属性提供分组语义，屏幕阅读器可读出分组名（符合 [knowledges/ux/accessibility.md](../../../knowledges/ux/accessibility.md)「不依赖纯图标传达信息，关键状态均有文字说明」）。
 - select 保留原生键盘交互（Tab 聚焦、方向键选择），符合 accessibility.md「设置页所有可操作元素可通过 Tab 聚焦与操作」。
 - 分组不改变 value，条件字段渲染（isLlmType 判断 model 字段显示）与 Tab 顺序不受影响。
 - 无新增颜色/图标依赖，对比度沿用设计系统（design-system.md：页面边框 #E5E7EB/#D1D5DB，输入框圆角 4px）。
 
 ### 视觉原型
 
-本修复无独立视觉原型，沿用现有配置页源卡片视觉（design-system.md「提供方卡片」：边框 + 圆角，纵向排列，行内排列输入框与操作按钮）。optgroup 分组标题由浏览器原生样式渲染。原型参照：[knowledges/ux/prototypes/v0.2-source-picker.html](../../../../ux/prototypes/v0.2-source-picker.html)（PRD #4 配置页原型）。
+本修复无独立视觉原型，沿用现有配置页源卡片视觉（design-system.md「提供方卡片」：边框 + 圆角，纵向排列，行内排列输入框与操作按钮）。optgroup 分组标题由浏览器原生样式渲染。原型参照：[knowledges/ux/prototypes/v0.2-source-picker.html](../../../knowledges/ux/prototypes/v0.2-source-picker.html)（PRD #4 配置页原型）。

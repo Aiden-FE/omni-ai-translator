@@ -50,6 +50,6 @@
 
 由 prodflow-workers 协调器补做（worker 子 agent 无 Skill 工具，Step5b 知识沉淀由主会话接管）：
 
-- **ADR**：新增 [ADR-002 — LLM 翻译流式响应采用 Port 长连接 + ReadableStream](../../../../adr/002-llm-streaming-port-and-readablestream.md)，记录 translate 流程 port 化、三源流式解析统一、可选 `translateStream` 契约的决策与备选方案（sendMessage 分块 / content 直接 fetch 均否决）。
-- **Feature**：新增 [streaming.md](../../../../feature/translator/streaming.md)，记录 LLM 流式翻译的功能目标、业务规则、浮层状态流转、port 协议与相关文件。
+- **ADR**：新增 [ADR-002 — LLM 翻译流式响应采用 Port 长连接 + ReadableStream](../../../knowledges/adr/002-llm-streaming-port-and-readablestream.md)，记录 translate 流程 port 化、三源流式解析统一、可选 `translateStream` 契约的决策与备选方案（sendMessage 分块 / content 直接 fetch 均否决）。
+- **Feature**：新增 [streaming.md](../../../knowledges/feature/translator/streaming.md)，记录 LLM 流式翻译的功能目标、业务规则、浮层状态流转、port 协议与相关文件。
 - **索引**：更新 `knowledges/adr/index.md`、`knowledges/feature/translator/index.md`。

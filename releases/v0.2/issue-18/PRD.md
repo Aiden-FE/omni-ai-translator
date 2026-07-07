@@ -5,7 +5,7 @@
 | 文档类型 | 需求文档（开发任务级，引用 PRD Issue #3 功能事项 3） |
 | 状态 | approved（无人值守自动批准） |
 | 关联 Issue | #18（https://github.com/Aiden-FE/llm-translator/issues/18） |
-| 关联 PRD | #3 — knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md |
+| 关联 PRD | #3 — releases/v0.2/3-traditional-apikey-config/PRD.md |
 | 迭代版本 | v0.2 |
 | 负责层 | 后端（shared 层） |
 

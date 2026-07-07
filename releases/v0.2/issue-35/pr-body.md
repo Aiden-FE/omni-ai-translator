@@ -25,7 +25,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #30 (https://github.com/Aiden-FE/llm-translator/issues/30) |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/7-popup-settings/PRD.md` |
+| PRD 文档 | `releases/v0.2/7-popup-settings/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 (https://github.com/Aiden-FE/llm-translator/milestone/1) |
 | DESIGN | `releases/v0.2/issue-35/DESIGN.md` |

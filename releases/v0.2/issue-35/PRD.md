@@ -55,7 +55,7 @@
 
 ## 5. 技术参考
 
-- PRD 文档:`knowledges/product-wiki/releases/v0.2/7-popup-settings/PRD.md`
+- PRD 文档:`releases/v0.2/7-popup-settings/PRD.md`
 - UX 设计系统:`knowledges/ux/design-system.md`、`interaction-patterns.md`、`accessibility.md`
 - 视觉原型:`knowledges/ux/prototypes/v0.2-popup-settings.html`
 - 复用消息通道:get-active-sources / set-active-source / test-provider

@@ -33,7 +33,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #4 https://github.com/Aiden-FE/llm-translator/issues/4 |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/4-source-picker-ui/PRD.md` |
+| PRD 文档 | `releases/v0.2/4-source-picker-ui/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环 (https://github.com/Aiden-FE/llm-translator/milestone/1) |
 | DESIGN | `releases/v0.2/issue-16/DESIGN.md` |

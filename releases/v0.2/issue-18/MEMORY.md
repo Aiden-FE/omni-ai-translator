@@ -30,7 +30,7 @@
 - 推荐合并顺序：本任务 #18 先于 #19 合并
 - 是否 stacked MR：否
 - 当前允许 base 分支：master
-- 依赖契约/接口文档：PRD 文档 knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md
+- 依赖契约/接口文档：PRD 文档 releases/v0.2/3-traditional-apikey-config/PRD.md
 
 ## 现状代码关键信息
 

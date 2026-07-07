@@ -29,7 +29,7 @@
 | 项 | 内容 |
 |---|---|
 | PRD Issue | #3（https://github.com/Aiden-FE/llm-translator/issues/3） |
-| PRD 文档 | `knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md` |
+| PRD 文档 | `releases/v0.2/3-traditional-apikey-config/PRD.md` |
 | 版本号 | v0.2 |
 | 里程碑 | v0.2 - 翻译源配置闭环（https://github.com/Aiden-FE/llm-translator/milestone/1） |
 | DESIGN | `releases/v0.2/issue-18/DESIGN.md` |
@@ -43,4 +43,4 @@
 | 基线分支 | master |
 | 推荐合并顺序 | 本任务 #18 先于 #19 合并 |
 | Stacked MR | 否 |
-| 依赖契约或接口文档 | PRD `knowledges/product-wiki/releases/v0.2/3-traditional-apikey-config/PRD.md`；DESIGN 决议 region 方案 A：ProviderConfig 新增可选 `region?: string`，microsoft 有 Key 时全局端点携带 `Ocp-Apim-Subscription-Key` + `Ocp-Apim-Subscription-Region: config.region`；google 无 region 概念 |
+| 依赖契约或接口文档 | PRD `releases/v0.2/3-traditional-apikey-config/PRD.md`；DESIGN 决议 region 方案 A：ProviderConfig 新增可选 `region?: string`，microsoft 有 Key 时全局端点携带 `Ocp-Apim-Subscription-Key` + `Ocp-Apim-Subscription-Region: config.region`；google 无 region 概念 |

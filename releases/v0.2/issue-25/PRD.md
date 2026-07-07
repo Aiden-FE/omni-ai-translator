@@ -11,7 +11,7 @@
 
 ## 需求来源
 
-PRD Issue #24 已落档完整 PRD（`knowledges/product-wiki/releases/v0.2/6-llm-streaming/PRD.md`），包含 8 段结构 + UX 设计章节。开发任务 #25 从该 PRD 拆出，为全栈端到端交付。本文件引用 PRD 关键内容并补充开发澄清。
+PRD Issue #24 已落档完整 PRD（`releases/v0.2/6-llm-streaming/PRD.md`），包含 8 段结构 + UX 设计章节。开发任务 #25 从该 PRD 拆出，为全栈端到端交付。本文件引用 PRD 关键内容并补充开发澄清。
 
 ## 需求摘要
 
