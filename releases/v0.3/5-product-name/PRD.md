@@ -131,3 +131,16 @@ UI 品牌呈现的交互与视觉细节（popup/options 顶部品牌字样位置
 ## UX 设计
 
 > 品牌名呈现于 popup/options 顶部与 manifest，随 1-ui-rewrite 重构落地；无独立交互流程，UX 章节从简。
+
+## 定稿记录（2026-07-07）
+
+- **正式产品名**：`Omni AI Translator`
+- **决策**：候选批次评审选定。`Omni` 修饰词呼应产品「模型无关 / 任意源（云端 / 本地 / 传统源）」的差异化（非空洞修饰），且 `AI Translator` 关键词全命中、SEO 最强；贴合 roadmap「AI Translator + 区分词」方向。
+- **检索状态**：Web 重名检索工具未返回实质结果（inconclusive）；Chrome Web Store 重名 + 商标（USPTO / 中国商标网，class 9/42）正式检索**待用户手动完成**，为上架前硬门禁（KR3）。
+- **三处同步状态**：
+  - ✅ manifest.name（`wxt.config.ts:12`）→ `Omni AI Translator`
+  - ✅ manifest.description `基于 LLM 的浏览器翻译插件` → `AI 驱动的浏览器翻译插件`（与品牌去 LLM 化一致）
+  - ✅ README 仓库名 / 产品名对应说明已补
+  - ⏳ UI 品牌字样（popup/options 顶部）→ 随第 1 项 ui-rewrite(#49) 落地，品牌名用 `Omni AI Translator`
+  - ⏳ Chrome 商店名 → 随第 6 项 store-listing(#54) 落地
+- **未改动**：仓库名 `Aiden-FE/llm-translator` 保持不变；内部知识库（knowledges/*）与 v0.2 历史 PRD 中的 "LLM Translator" 为内部项目代号，不作批量替换。

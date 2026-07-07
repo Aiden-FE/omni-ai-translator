@@ -1,6 +1,8 @@
-# LLM Translator
+# Omni AI Translator
 
-基于 LLM 的 Chrome 浏览器翻译插件，支持配置云端或本地大模型接口，通过 LLM 实现高质量翻译。
+AI 驱动的 Chrome 浏览器翻译插件，支持配置云端或本地大模型接口，通过 AI 实现高质量翻译。
+
+> 仓库名 `llm-translator` 为内部代号；正式产品名为 **Omni AI Translator**（v0.3 起定稿，见 [releases/v0.3/5-product-name/PRD.md](releases/v0.3/5-product-name/PRD.md)）。
 
 > 状态：立项阶段（v0.1 规划中）。第一版聚焦**划词翻译** + **LLM 提供方配置**。
 
