@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-07 |
-| **最近更新** | 2026-07-07（sprint-open Phase 4 完成：7 份 PRD 已由 prodflow-prd create 模式生成 draft，8 段齐全 + UX 占位；待 Phase 5 创建 Issue 后 revise 补全 UX 章节；脚手架待提交推送） |
+| **最近更新** | 2026-07-07（sprint-open 完成：脚手架已推送 master @ 435214b；里程碑 #2 创建 due 2026-07-29；7 个 PRD Issue #49-55 创建带 PRD label；1-ui-rewrite/2-visual-theme UX 章节已补全，3/4/5/6/7 标无界面或不适用） |
 | **开发周期估算** | ~3–3.5 周（美化工作流 ‖ 发布基建工作流并行；接受略超 3 周理论上限，用户已确认） |
 | **闭环业务链** | 用户从 Chrome/Firefox/Edge 商店发现 AI Translator（产品名定稿 + Listing 素材 + 合规披露）→ 安装（自动化发布流水线上架）→ 划词/配置翻译源 → 看到美化后全新视觉体验（shadcn/tailwind 重构 + 明亮鲜艳主题）→ 获得译文 |
 | **关联材料** | [../../knowledges/product-wiki/strategy/index.md](../../knowledges/product-wiki/strategy/index.md)、[../../knowledges/product-wiki/roadmap/index.md](../../knowledges/product-wiki/roadmap/index.md)、[../../knowledges/ux/design-system.md](../../knowledges/ux/design-system.md)、[../../knowledges/startup-summary.md](../../knowledges/startup-summary.md) |
@@ -82,5 +82,5 @@
 |---|---|
 | **里程碑标题** | `v0.3 - 商店首发与 UI 美化` |
 | **仓库** | Aiden-FE/llm-translator（GitHub） |
-| **截止日期** | 2026-07-30（基于 ~3–3.5 周估算，待用户确认） |
-| **里程碑链接** |  |
+| **截止日期** | 2026-07-29（里程碑 due_on，约 3 周） |
+| **里程碑链接** | https://github.com/Aiden-FE/llm-translator/milestone/2 |

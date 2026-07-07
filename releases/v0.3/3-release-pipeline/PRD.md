@@ -1,6 +1,6 @@
 # PRD:自动化发布流水线（3-release-pipeline）
 
-> 版本:v0.3 第 3 项 · 优先级 P0 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 3 项 · 优先级 P0 · 关联 Issue #51 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -135,4 +135,4 @@
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+> 本项为纯基建（GitHub Actions CI/CD 流水线），无应用内用户界面，UX 章节不适用。流程与配置见 Solution 7.2。

@@ -1,6 +1,6 @@
 # PRD:正式产品名定稿（5-product-name）
 
-> 版本:v0.3 第 5 项 · 优先级 P0 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 5 项 · 优先级 P0 · 关联 Issue #53 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -130,4 +130,4 @@ UI 品牌呈现的交互与视觉细节（popup/options 顶部品牌字样位置
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+> 品牌名呈现于 popup/options 顶部与 manifest，随 1-ui-rewrite 重构落地；无独立交互流程，UX 章节从简。

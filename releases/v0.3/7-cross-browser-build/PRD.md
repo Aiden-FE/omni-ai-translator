@@ -1,6 +1,6 @@
 # PRD:跨浏览器构建发布（7-cross-browser-build）
 
-> 版本:v0.3 第 7 项 · 优先级 P1 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 7 项 · 优先级 P1 · 关联 Issue #55 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -109,4 +109,4 @@
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+> 本项为跨浏览器构建发布，无应用内用户界面，UX 章节不适用。

@@ -1,6 +1,6 @@
 # PRD:商店 Listing 素材（6-store-listing）
 
-> 版本:v0.3 第 6 项 · 优先级 P1 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 6 项 · 优先级 P1 · 关联 Issue #54 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -149,4 +149,4 @@
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+> 本项为商店 Listing 素材（图标/截图/描述/关键词），无应用内用户界面，UX 章节不适用。截图视觉依赖 1-ui-rewrite + 2-visual-theme 完成。

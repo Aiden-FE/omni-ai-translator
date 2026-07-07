@@ -1,5 +1,5 @@
 # PRD:UI 设计系统重构（1-ui-rewrite）
-> 版本:v0.3 第 1 项 · 优先级 P0 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 1 项 · 优先级 P0 · 关联 Issue #49 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -137,4 +137,54 @@ v0.2 已稳定的契约（provider 契约、storage 契约、消息层、流式 
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+本项为纯重构，UX 章节聚焦「交互行为不变 + 设计系统基座就位 + 可访问性不退化」，不涉及新交互设计。交互模式详见 `knowledges/ux/interaction-patterns.md`，可访问性约束见 `knowledges/ux/accessibility.md`，色板与设计 token 方向见 `knowledges/ux/design-system.md`。
+
+**差异性交互**
+
+本轮不引入任何新交互，四类组件迁移到 tailwind + shadcn/ui 后行为与 v0.2 逐一对齐：
+
+- 翻译浮层：选区右下方出现 → 点击触发按钮后浮层替换显示「翻译中…」→ 流式渐进渲染 → done 阶段 Markdown 渲染 → 错误态显示 ❌ + 引导文案；点击浮层外 / 新选区触发 / 选区清空 → 移除。显示/隐藏时机与位置计算（`pageX+8, pageY+8`、最大宽 360px、z-index 2147483647）不变。
+- 划词触发按钮：圆形「译」字按钮，划词释放后出现、点击后消失；`mouseup` 触发、空选区 / 超 5000 字符不出现。仅样式由硬编码迁到 token 驱动。
+- popup 弹出：点击工具栏 icon 弹出（固定 400×600），内含生效源横幅、源卡片（可折叠）、连通性测试、目标语言、底部「打开全部设置」跳 options。交互流沿用 v0.2-7。
+- options 配置流：源卡片增删改 / 启用切换（自有源再次点击回兜底）/ 4 类源类型下拉（LLM 类显示模型名、传统类不显示、切换类型自动替换默认 baseUrl）/ 连通性测试 inline 展示 / 目标语言自由填写。全部复用 v0.2 既有交互，仅渲染组件换为 shadcn-vue。
+
+**状态流转**
+
+沿用 v0.2 状态机，仅视觉表现随新设计系统：
+
+- 触发按钮：`idle`（圆形「译」字，token 驱动底色）→ `hover`（token 驱动 hover 色，替代硬编码 `#374151`）→ `active`（点击后消失，浮层接管）。
+- 浮层：`loading`（「翻译中…」）→ `streaming`（流式渐进渲染译文 + 光标，Port 通信逻辑不变）→ `done`（Markdown 渲染完成）→ `error`（❌ + 错误文案）。
+- 连通性测试：`idle` → `testing`（按钮置 loading）→ `success`（✅ 译文 inline，`ok` 着色）/ `error`（❌ 错误，`err` 着色）。
+- 生效源横幅：`builtin`（免 Key 兜底态 + 隐私提示 + 引导锚点）↔ `custom`（自有源态 + 源名称），`role="status"` + `data-state` 两态切换不变。
+
+**反馈**
+
+- 翻译中：浮层「翻译中…」文案 + 流式光标，反馈形式不变。
+- 成功：浮层流式渲染译文 + done 阶段 Markdown 渲染，与 v0.2 一致。
+- 失败：沿用 v0.2 四类 `errorType` 差异化反馈（未配置提供方 / 网络错误 / HTTP 错误码 / 其他），文案与引导不变；错误色由 token `destructive` 驱动（替代硬编码 `#DC2626`）。
+- 连通性测试：✅/❌ + 译文或错误信息 inline 展示，按 `ok`/`err` 着色（token 驱动 success/destructive）。
+- 视觉表现（色值、圆角、阴影、间距）随新设计系统 token 统一，但反馈语义与时机零变化。
+
+**可访问性**
+
+依据 `knowledges/ux/accessibility.md`，重构后须保持或提升现有可达性，不得退化：
+
+- 色彩对比度：浮层深色背景配浅色文字、错误/成功色不作为唯一区分手段（同时有 ❌/✅ 文字），迁移到 token 后对比度仍须满足 WCAG AA；token 值在第 1 阶段沿用当前冷色调（值不变），第 2 项 visual-theme 替换色板时须重新校验对比度。
+- 键盘可达：options / popup 所有可操作元素（Input、Button、Select、源卡片操作）通过 Tab 聚焦与操作；shadcn-vue 组件（基于 radix-vue）自带键盘语义，迁移后可达性不低于 v0.2。浮层为鼠标交互产物，本轮不强求键盘可达（与 v0.2 一致）。
+- 浮层 aria 属性：浮层容器保留 `role="status"`（流式更新通告）与错误态 `aria-live`；触发按钮补齐 `aria-label`（「翻译选中文本」）。
+- 焦点管理：popup/options 内 shadcn-vue Select / Dialog 等组件自带焦点陷阱与还原；连通性测试按钮 loading 态禁用并保留焦点。
+- `prefers-reduced-motion`：流式光标、hover 过渡等动效须响应 `prefers-reduced-motion: reduce` 降级（shadcn-vue / tailwind 默认支持，迁移时显式确认）。
+- 文字：不依赖纯图标传达关键状态，输入框保留 placeholder 说明用途（与 v0.2 一致）。
+
+**业务约束**
+
+- 纯重构，不增删任何功能：四类组件交互流程、操作路径、反馈语义与 v0.2 完全一致，仅渲染层换为 tailwind + shadcn/ui。
+- provider / storage / message 契约不变：`shared/types.ts`、`shared/storage.ts`、`shared/translator/*`、流式 Port 通信、`test-provider` / `get-active-sources` / `set-active-source` 消息通道全部不动。
+- v0.2 e2e 全绿不退化：划词翻译 e2e（翻译流程、流式渲染、错误反馈、Markdown 渲染）、popup / options 配置操作回归均须通过，行为零退化。
+- 组件样式统一 token 驱动，消除硬编码：`assets/content.css`、`entrypoints/popup/App.vue`、`entrypoints/options/App.vue`、`shared/ui/SourceConfigPanel.vue` 中的 `#1F2937`/`#F9FAFB`/`#E5E7EB`/`#D1D5DB`/`#6B7280`/`#374151`/`#93C5FD` 等色值全部迁移到 tailwind 配置的 design token（CSS 变量）或工具类。
+- iframe 隔离策略不变：浮层 `about:blank` iframe + `content.css?inline` 注入模式保留，tailwind 编译产物 / token CSS 变量注入 iframe 文档；触发按钮保留 `.llm-translator-*` 前缀策略防宿主样式污染。
+- popup 固定 400×600（MV3 限制）、options 最大 720px 居中、浮层最大宽 360px——尺寸约束不变。
+
+**视觉原型**
+
+视觉原型与色板 token 待 `prodflow-ux-spec` / `web-design-engineer` 阶段产出（见 `knowledges/ux/design-system.md` 顶部「v0.3 主题改造方向」）。本轮（第 1 项 1-ui-rewrite）聚焦设计系统基座搭建：tailwind 配置的 design token 体系就位、四类组件迁移到 token 驱动渲染、token 值暂沿用当前冷色调（保持视觉不变）。主题色板（适度明亮鲜艳、弃用纯灰白黑冷色、引入有彩色主色 / 强调色）属第 2 项 visual-theme，直接基于本项 token 体系替换色值即可全应用联动。

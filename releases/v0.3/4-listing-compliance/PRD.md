@@ -1,6 +1,6 @@
 # PRD:上架合规准备（4-listing-compliance）
 
-> 版本:v0.3 第 4 项 · 优先级 P0 · 关联 Issue 待创建 · 创建日期 2026-07-07 · 状态 draft
+> 版本:v0.3 第 4 项 · 优先级 P0 · 关联 Issue #52 · 创建日期 2026-07-07 · 状态 draft
 
 ## 1. 摘要
 
@@ -166,4 +166,4 @@ host_permissions 逐条用途说明：
 
 ## UX 设计
 
-> UX 章节待 issue 创建后由 prodflow-prd revise 模式补全（参考 prodflow-ux-evaluate 技能产出）。
+> 本项无应用内用户界面（Chrome Web Store 后台表单填报），UX 章节不适用。权限声明与隐私实践表见 Solution 7.2。
