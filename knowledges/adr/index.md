@@ -11,3 +11,4 @@
 | 003 | [译文 markdown 渲染采用轻量自实现解析器 + DOMPurify](003-markdown-render-sanitize.md) | accepted |
 | 004 | [popup 与 options 共享源配置组件采用 variant prop 变体控制](004-shared-component-variant.md) | accepted |
 | 005 | [responseStyle 作为 LLM 协议区分器,取代 type 子分组](005-response-style-as-llm-protocol-discriminator.md) | accepted |
+| 006 | [视觉主题采用 token-first 单一事实源策略](006-token-first-visual-theme.md) | accepted |
