@@ -2,9 +2,6 @@ packages:
   - .
 
 allowBuilds:
+  esbuild: true
+  spawn-sync: true
   vue-demi: true
-
-onlyBuiltDependencies:
-  - esbuild
-  - spawn-sync
-  - vue-demi

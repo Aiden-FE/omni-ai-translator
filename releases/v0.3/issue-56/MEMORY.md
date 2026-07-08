@@ -79,7 +79,7 @@
 
 - `pnpm install --frozen-lockfile` 在沙箱内 postinstall 执行 `wxt prepare` 时出现 `spawn EPERM`；已按规则请求非沙箱执行。
 - 非沙箱第二次安装因 pnpm 无 TTY 清理提示失败，使用 `CI=true` 后成功恢复依赖并完成 `wxt prepare`。
-- pnpm v11 不再读取 `package.json` 中的 `pnpm.onlyBuiltDependencies`，需在 `pnpm-workspace.yaml` 中配置 `onlyBuiltDependencies` 与 `allowBuilds.vue-demi: true`，否则 `vue-demi` build script 会被拦截。
+- pnpm v11 不再读取 `package.json` 中的 `pnpm.onlyBuiltDependencies`，且旧的 `onlyBuiltDependencies` 不能替代 `allowBuilds`；需在 `pnpm-workspace.yaml` 的 `allowBuilds` 中显式允许 `esbuild`、`spawn-sync`、`vue-demi`，否则 CI 会在 `pnpm install --frozen-lockfile` 阶段触发 `ERR_PNPM_IGNORED_BUILDS`。
 - `pnpm e2e` 首次失败是 Playwright Chromium 缺失；第一次 `pnpm e2e:install` 超时留下 `C:\Users\aiden\AppData\Local\ms-playwright\__dirlock`，删除陈旧锁后执行 `pnpm exec playwright install chromium` 成功，再跑 e2e 通过。
 - 当前环境没有可派发子 agent 的 Task 类工具；Step4 子 agent 驱动开发要求降级为当前会话分段执行，并通过测试、e2e 与后续审查补足质量门禁。
 
@@ -138,11 +138,21 @@
 ### runbook - pnpm 与 Playwright e2e 环境处理
 
 - Issue ID：#56。
-- 场景：在 Windows + pnpm v11 + WXT 项目中恢复依赖和运行 e2e 时，可能遇到无 TTY 清理提示、build script 拦截、Playwright Chromium 缺失或 stale `__dirlock`。
+- 场景：在 Windows + pnpm v11 + WXT 项目中恢复依赖和运行 e2e 时，可能遇到无 TTY 清理提示、`strictDepBuilds` build script 拦截、Playwright Chromium 缺失或 stale `__dirlock`。
 - 操作步骤：
   1. 使用 `CI=true pnpm install --frozen-lockfile` 恢复依赖，避免无 TTY prompt。
-  2. 在 `pnpm-workspace.yaml` 中维护 `onlyBuiltDependencies` 与 `allowBuilds.vue-demi: true`。
+  2. pnpm 11 不再使用旧的 `onlyBuiltDependencies` 白名单；在 `pnpm-workspace.yaml` 的 `allowBuilds` 中维护 `esbuild: true`、`spawn-sync: true`、`vue-demi: true`。
   3. 如果 `pnpm e2e` 提示 Chromium 缺失，运行 `pnpm exec playwright install chromium` 或 `pnpm e2e:install`。
   4. 如果 Playwright 安装超时留下 `C:\Users\aiden\AppData\Local\ms-playwright\__dirlock`，确认无安装进程后删除 stale lock 再重跑安装。
 - 相关文件：`pnpm-workspace.yaml`、`package.json`、`e2e/translate.spec.ts`。
 - 建议沉淀路径：`knowledges/runbook/testing/playwright-e2e-setup.md`。
+
+## PR #58 CI 修正记录
+
+- Issue ID：#56。
+- 触发场景：PR #58 首轮 CI 在 `pnpm install --frozen-lockfile` 阶段失败，未进入 `pnpm typecheck`、`pnpm lint` 或 `pnpm e2e`。
+- CI 错误：`ERR_PNPM_IGNORED_BUILDS`，涉及 `esbuild@0.21.3`、`esbuild@0.23.0`、`spawn-sync@1.0.15`。
+- 根因：`pnpm-workspace.yaml` 仍保留 pnpm 11 已废弃的 `onlyBuiltDependencies`，但这些包没有显式列入 `allowBuilds`；在 `strictDepBuilds` 下默认被拒绝执行 build script。
+- 修正：移除 `onlyBuiltDependencies`，并在 `allowBuilds` 中显式声明 `esbuild: true`、`spawn-sync: true`、`vue-demi: true`。
+- 验证要求：重新执行 `pnpm install --frozen-lockfile`、`pnpm typecheck`、`pnpm lint`，e2e 可行时执行并记录结果。
+- 实际验证：`CI=true pnpm install --frozen-lockfile` 通过，`esbuild` 与 `spawn-sync` postinstall 均执行完成；`CI=true pnpm typecheck` 通过；`CI=true pnpm lint` 通过；`CI=true pnpm e2e` 通过，7 tests passed。

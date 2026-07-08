@@ -46,5 +46,12 @@ Issue #56 完成 v0.3 UI 设计系统重构基座：引入 tailwindcss + shadcn-
 ## 部署注意事项
 
 - 依赖恢复需使用 pnpm lockfile；在当前环境中使用 `CI=true pnpm install --frozen-lockfile` 避免无 TTY 清理提示。
-- pnpm v11 需要在 `pnpm-workspace.yaml` 中声明 `onlyBuiltDependencies` 与 `allowBuilds.vue-demi: true`，否则 `vue-demi` build script 会被拦截。
+- pnpm v11 需要在 `pnpm-workspace.yaml` 的 `allowBuilds` 中显式声明允许执行 build script 的依赖；本任务允许 `esbuild`、`spawn-sync` 与 `vue-demi`。
 - 首次运行 e2e 的机器若缺少 Playwright Chromium，需要先执行 `pnpm exec playwright install chromium` 或项目脚本 `pnpm e2e:install`。
+
+## CI 修正记录
+
+- PR #58 首轮 CI 在 `pnpm install --frozen-lockfile` 阶段失败，尚未进入 typecheck、lint 或 e2e。
+- 失败原因是 pnpm 11 的 `strictDepBuilds` 不再使用旧的 `onlyBuiltDependencies` 白名单；`esbuild@0.21.3`、`esbuild@0.23.0`、`spawn-sync@1.0.15` 未出现在 `allowBuilds` 中，因此触发 `ERR_PNPM_IGNORED_BUILDS`。
+- 已将 `pnpm-workspace.yaml` 调整为仅使用 `allowBuilds`，显式允许 `esbuild: true`、`spawn-sync: true`、`vue-demi: true`，并移除废弃的 `onlyBuiltDependencies`。
+- 修正后重新验证：`CI=true pnpm install --frozen-lockfile` 通过；`CI=true pnpm typecheck` 通过；`CI=true pnpm lint` 通过；`CI=true pnpm e2e` 通过，7 tests passed。
