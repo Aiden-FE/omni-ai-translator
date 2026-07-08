@@ -1,15 +1,15 @@
 :root {
-  --translator-panel-background: 215 28% 17%;
-  --translator-panel-foreground: 210 20% 98%;
-  --translator-panel-muted: 220 13% 84%;
-  --translator-panel-code: 217 19% 27%;
-  --translator-panel-quote: 220 9% 46%;
-  --translator-panel-link: 213 94% 80%;
-  --translator-trigger-background: 215 28% 17%;
-  --translator-trigger-foreground: 210 20% 98%;
-  --translator-trigger-hover: 217 19% 27%;
-  --translator-shadow: 0 4px 16px hsl(0 0% 0% / 0.25);
-  --translator-trigger-shadow: 0 2px 8px hsl(0 0% 0% / 0.3);
+  --translator-panel-background: 195 62% 16%;
+  --translator-panel-foreground: 40 100% 97%;
+  --translator-panel-muted: 39 30% 82%;
+  --translator-panel-code: 194 42% 24%;
+  --translator-panel-quote: 174 48% 48%;
+  --translator-panel-link: 42 100% 72%;
+  --translator-trigger-background: 174 84% 27%;
+  --translator-trigger-foreground: 0 0% 100%;
+  --translator-trigger-hover: 174 88% 22%;
+  --translator-shadow: 0 18px 44px hsl(196 72% 12% / 0.28);
+  --translator-trigger-shadow: 0 8px 20px hsl(174 84% 20% / 0.32);
   --translator-radius: 8px;
 }
 
