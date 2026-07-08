@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-07 |
-| **最近更新** | 2026-07-08（#49 ui-rewrite 已通过 PR #58 合并到 master；tailwindcss + shadcn-vue 基座、design token 体系、popup/options/content 样式迁移完成；#50 visual-theme 可基于该基座继续执行） |
+| **最近更新** | 2026-07-08（#49 ui-rewrite 经 PR #58/#59 合并到 master；tailwindcss + shadcn-vue 基座、design token 体系、popup/options/content 样式迁移完成；#50 visual-theme 经 PR #60 合并到 master，sunlit teal 明亮主题 token 全应用落地、warning/info 语义色补齐、design-system 单测锁定 token） |
 | **开发周期估算** | ~3–3.5 周（美化工作流 ‖ 发布基建工作流并行；接受略超 3 周理论上限，用户已确认） |
 | **闭环业务链** | 用户从 Chrome/Firefox/Edge 商店发现 AI Translator（产品名定稿 + Listing 素材 + 合规披露）→ 安装（自动化发布流水线上架）→ 划词/配置翻译源 → 看到美化后全新视觉体验（shadcn/tailwind 重构 + 明亮鲜艳主题）→ 获得译文 |
 | **关联材料** | [../../knowledges/product-wiki/strategy/index.md](../../knowledges/product-wiki/strategy/index.md)、[../../knowledges/product-wiki/roadmap/index.md](../../knowledges/product-wiki/roadmap/index.md)、[../../knowledges/ux/design-system.md](../../knowledges/ux/design-system.md)、[../../knowledges/startup-summary.md](../../knowledges/startup-summary.md) |
@@ -32,7 +32,7 @@
 | 编号 | 概要标题 | 优先级 | PRD 文档 | 状态 | 闭环路径说明 |
 |---|---|---|---|---|---|
 | 1 | ui-rewrite | P0 | `./1-ui-rewrite/PRD.md` | done | 引入 tailwindcss + shadcn/ui，重构翻译浮层/触发按钮/options 配置页/popup 全套组件到新设计系统；划词与配置链路全部基于新组件系统渲染 |
-| 2 | visual-theme | P0 | `./2-visual-theme/PRD.md` | draft | 弃灰白黑冷色，定适度明亮鲜艳主题（主色/强调/语义色），产出设计 token 并应用；全应用视觉焕新（依赖 1） |
+| 2 | visual-theme | P0 | `./2-visual-theme/PRD.md` | done | 弃灰白黑冷色，定适度明亮鲜艳主题（主色/强调/语义色），产出设计 token 并应用；全应用视觉焕新（依赖 1） |
 | 3 | release-pipeline | P0 | `./3-release-pipeline/PRD.md` | draft | GitHub Actions 自动打包 + 版本标签 + 发行说明 + Chrome Web Store API 上架；push tag → CI 打包 → 自动上架 Chrome 商店 |
 | 4 | listing-compliance | P0 | `./4-listing-compliance/PRD.md` | draft | 商店隐私实践表/权限声明/数据用途披露（基于 v0.2 已更新隐私声明）；商店合规字段通过审核 |
 | 5 | product-name | P0 | `./5-product-name/PRD.md` | draft | "AI Translator"+区分词定稿，同步 manifest/UI/商店品牌名；全产品统一品牌名 |
