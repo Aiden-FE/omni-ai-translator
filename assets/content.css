@@ -1,3 +1,18 @@
+:root {
+  --translator-panel-background: 215 28% 17%;
+  --translator-panel-foreground: 210 20% 98%;
+  --translator-panel-muted: 220 13% 84%;
+  --translator-panel-code: 217 19% 27%;
+  --translator-panel-quote: 220 9% 46%;
+  --translator-panel-link: 213 94% 80%;
+  --translator-trigger-background: 215 28% 17%;
+  --translator-trigger-foreground: 210 20% 98%;
+  --translator-trigger-hover: 217 19% 27%;
+  --translator-shadow: 0 4px 16px hsl(0 0% 0% / 0.25);
+  --translator-trigger-shadow: 0 2px 8px hsl(0 0% 0% / 0.3);
+  --translator-radius: 8px;
+}
+
 .llm-translator-trigger {
   position: absolute;
   z-index: 2147483647;
@@ -6,23 +21,26 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #1f2937;
-  color: #f9fafb;
+  background: hsl(var(--translator-trigger-background));
+  color: hsl(var(--translator-trigger-foreground));
   font-size: 13px;
   font-weight: 600;
-  border-radius: 50%;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  border-radius: 9999px;
+  box-shadow: var(--translator-trigger-shadow);
   cursor: pointer;
   user-select: none;
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .llm-translator-trigger:hover {
-  background: #374151;
+  background: hsl(var(--translator-trigger-hover));
 }
 
-/* 浮层 iframe 容器(宿主 DOM):透明无边框,阴影与圆角由 iframe 元素承担,
-   避免内容被 iframe 视口裁剪;内部 panelRoot 按内容收缩包裹(max-width:360px)。 */
+.llm-translator-trigger:focus-visible {
+  outline: 2px solid hsl(var(--translator-trigger-foreground));
+  outline-offset: 2px;
+}
+
 .llm-translator-panel-frame {
   position: absolute;
   z-index: 2147483647;
@@ -30,55 +48,54 @@
   margin: 0;
   padding: 0;
   background: transparent;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  border-radius: var(--translator-radius);
+  box-shadow: var(--translator-shadow);
 }
 
-/* 浮层内容根(渲染在 iframe 文档内):box-shadow 移至 iframe 容器,避免被 iframe 视口裁剪。
-   width:max-content 让宽度由内容决定且不依赖 iframe 当前宽度(打破"iframe 窄→available 窄→panel 收缩→iframe 更窄"的塌陷循环),
-   max-width:360px 上限内换行;不用 position:absolute(iframe 已定位,absolute 的 shrink-to-fit 受包含块=iframe 视口约束会引发循环)。 */
 .llm-translator-panel {
   width: max-content;
   max-width: 360px;
   padding: 10px 12px;
-  background: #1f2937;
-  color: #f9fafb;
+  background: hsl(var(--translator-panel-background));
+  color: hsl(var(--translator-panel-foreground));
   font-size: 14px;
   line-height: 1.5;
-  border-radius: 8px;
-  font-family: system-ui, -apple-system, sans-serif;
+  border-radius: var(--translator-radius);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-/* 错误态主行：❌ + 可读主文案（沿用 panel 文字颜色，对比度满足 WCAG AA） */
 .llm-translator-error-main {
-  color: #f9fafb;
+  color: hsl(var(--translator-panel-foreground));
   font-size: 14px;
 }
 
-/* 错误态引导次要行：较小字号、稍暗颜色，对比度 ≥ 4.5:1（WCAG AA），纯文本不可点击 */
 .llm-translator-error-hint {
   margin-top: 4px;
-  color: #d1d5db;
+  color: hsl(var(--translator-panel-muted));
   font-size: 12px;
   line-height: 1.4;
   cursor: default;
   user-select: none;
 }
 
-/* 流式光标：闪烁竖线 ▋，流式进行中显示，定稿移除（辅助视觉，非唯一状态指示） */
 .llm-translator-cursor {
   display: inline-block;
-  color: #f9fafb;
+  color: hsl(var(--translator-panel-foreground));
   animation: llm-translator-blink 1s step-end infinite;
 }
 
 @keyframes llm-translator-blink {
-  0%, 50% { opacity: 1; }
-  51%, 100% { opacity: 0; }
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  51%,
+  100% {
+    opacity: 0;
+  }
 }
 
-/* markdown 渲染容器：done 阶段替换流式 span，注入 sanitize 后的 md HTML。
-   暗底适配（对照原型 v0.2-md-render.html），代码块稍浅底 #374151，最大宽 360px 内换行。 */
 .llm-translator-md-render {
   word-wrap: break-word;
 }
@@ -91,9 +108,20 @@
   font-weight: 600;
 }
 
-.llm-translator-md-render h1 { font-size: 16px; }
-.llm-translator-md-render h2 { font-size: 15px; }
-.llm-translator-md-render h3 { font-size: 14px; }
+.llm-translator-md-render h1 {
+  font-size: 16px;
+}
+
+.llm-translator-md-render h2 {
+  font-size: 15px;
+}
+
+.llm-translator-md-render h3,
+.llm-translator-md-render h4,
+.llm-translator-md-render h5,
+.llm-translator-md-render h6 {
+  font-size: 14px;
+}
 
 .llm-translator-md-render h4,
 .llm-translator-md-render h5,
@@ -101,7 +129,6 @@
   margin: 0.3em 0 0.1em;
   line-height: 1.3;
   font-weight: 600;
-  font-size: 14px;
 }
 
 .llm-translator-md-render p {
@@ -120,7 +147,7 @@
 
 .llm-translator-md-render strong {
   font-weight: 600;
-  color: #fff;
+  color: hsl(var(--translator-panel-foreground));
 }
 
 .llm-translator-md-render em {
@@ -130,13 +157,13 @@
 .llm-translator-md-render code {
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 12.5px;
-  background: #374151;
+  background: hsl(var(--translator-panel-code));
   padding: 1px 5px;
   border-radius: 4px;
 }
 
 .llm-translator-md-render pre {
-  background: #374151;
+  background: hsl(var(--translator-panel-code));
   border-radius: 6px;
   padding: 10px 12px;
   margin: 0.4em 0;
@@ -150,13 +177,19 @@
 }
 
 .llm-translator-md-render blockquote {
-  border-left: 3px solid #6b7280;
+  border-left: 3px solid hsl(var(--translator-panel-quote));
   margin: 0.4em 0;
   padding: 0.1em 0 0.1em 10px;
-  color: #d1d5db;
+  color: hsl(var(--translator-panel-muted));
 }
 
 .llm-translator-md-render a {
-  color: #93c5fd;
+  color: hsl(var(--translator-panel-link));
   text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-translator-cursor {
+    animation: none;
+  }
 }

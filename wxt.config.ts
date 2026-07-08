@@ -1,4 +1,5 @@
 import { defineConfig } from 'wxt';
+import tailwindcss from '@tailwindcss/vite';
 import vue from '@vitejs/plugin-vue';
 
 // WXT 配置：Chrome MV3 扩展
@@ -6,7 +7,7 @@ import vue from '@vitejs/plugin-vue';
 export default defineConfig({
   // 注册 Vue 插件以处理 .vue 文件
   vite: () => ({
-    plugins: [vue()],
+    plugins: [tailwindcss(), vue()],
   }),
   manifest: {
     name: 'Omni AI Translator',
