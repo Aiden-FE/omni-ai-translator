@@ -82,9 +82,9 @@ export default defineContentScript({
         '<!DOCTYPE html><html><head><meta charset="utf-8"><style>' +
           'html,body{margin:0;padding:0;background:transparent;overflow:hidden;}' +
           '::-webkit-scrollbar{width:6px;height:6px;}' +
-          '::-webkit-scrollbar-thumb{background:rgba(249,250,251,0.25);border-radius:3px;}' +
+          '::-webkit-scrollbar-thumb{background:hsl(var(--translator-panel-foreground)/0.25);border-radius:3px;}' +
           '::-webkit-scrollbar-track{background:transparent;}' +
-          '::-webkit-scrollbar-thumb:hover{background:rgba(249,250,251,0.4);}' +
+          '::-webkit-scrollbar-thumb:hover{background:hsl(var(--translator-panel-foreground)/0.4);}' +
           contentStyle +
           '</style></head><body></body></html>',
       );
@@ -93,6 +93,7 @@ export default defineContentScript({
       // panelRoot 挂 .llm-translator-panel;width:max-content 让宽度由内容决定(见 content.css),不依赖 iframe 宽度,打破塌陷循环
       panelRoot = doc.createElement('div');
       panelRoot.className = 'llm-translator-panel';
+      panelRoot.setAttribute('role', 'status');
       panelRoot.setAttribute('aria-live', 'polite');
       panelRoot.textContent = content;
       doc.body.appendChild(panelRoot);
@@ -288,6 +289,7 @@ export default defineContentScript({
       trigger.className = 'llm-translator-trigger';
       trigger.textContent = '译';
       trigger.title = '翻译选中文本';
+      trigger.setAttribute('aria-label', '翻译选中文本');
       trigger.style.left = `${e.pageX + 8}px`;
       trigger.style.top = `${e.pageY + 8}px`;
       // 阻止 mousedown/mouseup 冒泡,防止 document 监听器误触发重建或清除

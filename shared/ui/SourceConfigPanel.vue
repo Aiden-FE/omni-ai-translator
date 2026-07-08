@@ -1,11 +1,7 @@
 <script setup lang="ts">
 /**
- * 共享翻译源配置面板 — popup 与 options 共用
- * Issue #35: 从 entrypoints/options/App.vue 抽取,消除双份维护
- *
- * variant:
- *   'popup'  — 适配 400×600 尺寸,卡片可折叠,配置自有源为全宽按钮,底部「打开全部设置」
- *   'options' — 全功能页,max-width 720px,配置自有源为横幅内锚点
+ * 共享翻译源配置面板 — popup 与 options 共用。
+ * 本文件只迁移渲染层到 tailwind + shadcn-vue 基础组件,业务契约保持不变。
  */
 import { ref, computed, onMounted, nextTick } from 'vue';
 import type {
@@ -17,6 +13,12 @@ import type {
 } from '@/shared/types';
 import { getProviders, setProviders, getSettings, setSettings } from '@/shared/storage';
 import { DEFAULT_ACTIVE_SOURCE_ID } from '@/shared/translator/builtin-sources';
+import Button from '@/shared/ui/components/button/Button.vue';
+import Card from '@/shared/ui/components/card/Card.vue';
+import Input from '@/shared/ui/components/input/Input.vue';
+import Label from '@/shared/ui/components/label/Label.vue';
+import Select from '@/shared/ui/components/select/Select.vue';
+import Badge from '@/shared/ui/components/badge/Badge.vue';
 
 const props = withDefaults(defineProps<{
   variant?: 'popup' | 'options';
@@ -24,7 +26,6 @@ const props = withDefaults(defineProps<{
   variant: 'options',
 });
 
-// ===== 状态 =====
 const providers = ref<ProviderConfig[]>([]);
 const activeSourceId = ref<string>(DEFAULT_ACTIVE_SOURCE_ID);
 const allSources = ref<ProviderConfig[]>([]);
@@ -32,22 +33,20 @@ const targetLang = ref('');
 const testMsgs = ref<Record<string, string>>({});
 const bannerTestMsg = ref('');
 const browserLang = ref(navigator.language || '');
-
-// 卡片折叠状态(popup 变体用),按 provider id 索引;默认展开活跃卡、折叠非活跃
 const collapsedCards = ref<Record<string, boolean>>({});
 
-// ===== 常量 =====
 const DEFAULT_BASE_URL: Record<ProviderType, string> = {
   llm: 'https://api.openai.com/v1/chat/completions',
   google: 'https://translation.googleapis.com',
   microsoft: 'https://api.cognitive.microsofttranslator.com/translate',
 };
-/** 响应风格 → 默认 baseUrl（LLM 源切换响应风格时联动替换） */
+
 const DEFAULT_BASE_URL_BY_STYLE: Record<string, string> = {
   openai: 'https://api.openai.com/v1/chat/completions',
   anthropic: 'https://api.anthropic.com/v1/messages',
   ollama: 'http://localhost:11434/api/chat',
 };
+
 const KNOWN_DEFAULT_BASE_URLS = new Set([
   'https://api.openai.com',
   'http://localhost:11434',
@@ -57,7 +56,6 @@ const KNOWN_DEFAULT_BASE_URLS = new Set([
 ]);
 const FALLBACK_SOURCE_ID = DEFAULT_ACTIVE_SOURCE_ID;
 
-// ===== 计算属性 =====
 function isLlmType(type: ProviderType): boolean {
   return type === 'llm';
 }
@@ -95,7 +93,6 @@ function defaultTargetLang(): string {
   return map[lang] ?? map[lang.split('-')[0]] ?? lang;
 }
 
-// ===== 消息封装 =====
 function sendMessage<T>(message: Message): Promise<T> {
   return chrome.runtime.sendMessage(message) as Promise<T>;
 }
@@ -106,28 +103,23 @@ async function loadActiveSources() {
   allSources.value = r.sources;
 }
 
-// ===== 生命周期 =====
-const targetLangInput = ref<HTMLInputElement | null>(null);
+const targetLangInput = ref<InstanceType<typeof Input> | null>(null);
 
 onMounted(async () => {
   await loadActiveSources();
   providers.value = await getProviders();
   const s = await getSettings();
   targetLang.value = s.defaultTargetLang || defaultTargetLang();
-  // popup 变体:打开即聚焦首个可交互项
+
   if (props.variant === 'popup') {
     await nextTick();
     targetLangInput.value?.focus();
-  }
-  // popup 变体:默认折叠非活跃卡片
-  if (props.variant === 'popup') {
     for (const p of providers.value) {
       collapsedCards.value[p.id] = p.id !== activeSourceId.value;
     }
   }
 });
 
-/** 暴露给父组件:聚焦首个可交互项 + 添加提供方(popup footer 用) */
 defineExpose({
   focusFirst() {
     targetLangInput.value?.focus();
@@ -135,7 +127,6 @@ defineExpose({
   addProvider,
 });
 
-// ===== 数据操作 =====
 async function saveProviders() {
   await setProviders(providers.value);
   await loadActiveSources();
@@ -157,14 +148,13 @@ async function addProvider() {
     model: 'gpt-4o-mini',
     responseStyle: 'openai',
   });
-  // popup 变体:新建卡片默认展开
+
   if (props.variant === 'popup') {
     collapsedCards.value[id] = false;
   }
   await saveProviders();
 }
 
-// 兜底态「配置自有源」:新建提供方卡片并聚焦名称输入(focus 自动滚动入视口)
 async function configureOwnSource() {
   await addProvider();
   await nextTick();
@@ -245,7 +235,12 @@ function isErr(msg: string): boolean {
   return msg.startsWith('❌');
 }
 
-// 卡片折叠切换(popup 变体)
+function messageVariant(msg: string): 'success' | 'destructive' | 'secondary' {
+  if (isOk(msg)) return 'success';
+  if (isErr(msg)) return 'destructive';
+  return 'secondary';
+}
+
 function toggleCollapse(id: string) {
   collapsedCards.value[id] = !collapsedCards.value[id];
 }
@@ -256,178 +251,195 @@ function isCollapsed(id: string): boolean {
 </script>
 
 <template>
-  <div :class="['source-config', `source-config--${variant}`]">
-    <!-- 目标语言 -->
-    <section class="lang-section">
-      <label
-        class="lang-label"
-        for="target-lang-input"
-      >默认目标语言</label>
-      <input
+  <div
+    class="source-config flex flex-col gap-3 text-sm text-foreground"
+    :class="variant === 'popup' ? 'source-config--popup' : 'source-config--options'"
+  >
+    <section class="space-y-2">
+      <Label for="target-lang-input">默认目标语言</Label>
+      <Input
         id="target-lang-input"
         ref="targetLangInput"
         v-model="targetLang"
         placeholder="留空则使用浏览器首选语言"
         @change="saveTargetLang"
-      >
-      <p class="hint">
+      />
+      <p class="text-xs leading-5 text-muted-foreground">
         留空时自动使用浏览器首选语言({{ browserLang }})。
       </p>
     </section>
 
-    <!-- 翻译源管理 -->
-    <section class="source-section">
-      <h2 v-if="variant === 'options'">
-        翻译源管理
-      </h2>
-      <p class="hint">
-        未配置时使用免 Key 兜底翻译;配置自有源后覆盖兜底。
-      </p>
-
-      <!-- 当前生效源横幅 -->
+    <section class="space-y-3">
       <div
-        class="effective"
+        v-if="variant === 'options'"
+        class="space-y-1"
+      >
+        <h2 class="text-base font-semibold text-foreground">
+          翻译源管理
+        </h2>
+        <p class="text-xs leading-5 text-muted-foreground">
+          未配置时使用免 Key 兜底翻译;配置自有源后覆盖兜底。
+        </p>
+      </div>
+
+      <Card
+        class="flex items-start gap-3 p-3"
+        :class="isFallback ? 'bg-muted' : 'bg-card'"
         :data-state="isFallback ? 'fallback' : 'active'"
         role="status"
         :aria-label="`当前生效:${isFallback ? '免 Key 兜底' : activeSourceName}`"
       >
         <span
-          class="effective__dot"
+          class="mt-1.5 h-2 w-2 flex-none rounded-full"
+          :class="isFallback ? 'bg-muted-foreground' : 'bg-success'"
           aria-hidden="true"
         />
-        <div class="effective__body">
-          <div class="effective__label">
+        <div class="min-w-0 flex-1">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             当前生效
           </div>
-          <div class="effective__value">
+          <div class="mt-0.5 truncate text-sm font-semibold text-foreground">
             {{ isFallback ? '免 Key 兜底' : activeSourceName }}
           </div>
-          <div
-            v-if="isFallback"
-            class="effective__note"
-          >
-            未配置自有源,待翻译文本将外传到 Google / 微软完成翻译。
-          </div>
-          <div
-            v-else
-            class="effective__note"
-          >
-            翻译请求将发送到该翻译源。
+          <div class="mt-1 text-xs leading-5 text-muted-foreground">
+            <template v-if="isFallback">
+              未配置自有源,待翻译文本将外传到 Google / 微软完成翻译。
+            </template>
+            <template v-else>
+              翻译请求将发送到该翻译源。
+            </template>
           </div>
         </div>
-        <!-- options 变体:横幅内「配置自有源」锚点 -->
-        <a
+        <Button
           v-if="isFallback && variant === 'options'"
-          class="effective__action"
-          href="#"
-          @click.prevent="configureOwnSource"
-        >配置自有源 →</a>
-      </div>
+          variant="link"
+          size="sm"
+          class="h-auto px-0 py-0"
+          @click="configureOwnSource"
+        >
+          配置自有源 →
+        </Button>
+      </Card>
 
-      <!-- 兜底态:测试连通 + inline 结果 -->
       <div
         v-if="isFallback"
-        class="banner-test"
+        class="flex items-center gap-2"
       >
-        <button @click="testBuiltin">
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="bannerTestMsg === '测试中…'"
+          @click="testBuiltin"
+        >
           测试连通
-        </button>
-        <span
+        </Button>
+        <Badge
           v-if="bannerTestMsg"
           class="test-msg inline"
-          :class="{ ok: isOk(bannerTestMsg), err: isErr(bannerTestMsg) }"
-        >{{ bannerTestMsg }}</span>
+          :variant="messageVariant(bannerTestMsg)"
+        >
+          {{ bannerTestMsg }}
+        </Badge>
       </div>
 
-      <!-- popup 变体:兜底态全宽「配置自有源」按钮 -->
-      <button
+      <Button
         v-if="isFallback && variant === 'popup'"
-        class="configure-btn"
+        class="w-full"
         @click="configureOwnSource"
       >
         + 配置自有源
-      </button>
+      </Button>
 
-      <!-- 源卡片 -->
-      <div
+      <Card
         v-for="p in providers"
         :key="p.id"
-        class="provider-card"
+        class="provider-card overflow-hidden"
+        :class="activeSourceId === p.id ? 'ring-1 ring-primary' : ''"
         :data-active="activeSourceId === p.id"
         :data-collapsed="variant === 'popup' ? isCollapsed(p.id) : false"
       >
-        <!-- 卡片头部 -->
         <div
-          class="card__head"
-          :class="{ 'card__head--clickable': variant === 'popup' }"
+          class="flex items-center gap-2 p-3"
+          :class="variant === 'popup' ? 'cursor-pointer' : ''"
+          :aria-expanded="variant === 'popup' ? !isCollapsed(p.id) : undefined"
           @click="variant === 'popup' ? toggleCollapse(p.id) : undefined"
         >
-          <input
+          <Input
             v-model="p.name"
+            class="min-w-0 flex-1"
             placeholder="名称"
             @click.stop
             @change="saveProviders"
-          >
-          <button
-            :class="{ active: activeSourceId === p.id }"
+          />
+          <Button
+            size="sm"
+            :variant="activeSourceId === p.id ? 'default' : 'outline'"
             @click.stop="activate(p.id)"
           >
             {{ activeSourceId === p.id ? '已启用' : '启用' }}
-          </button>
-          <button @click.stop="removeProvider(p.id)">
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            @click.stop="removeProvider(p.id)"
+          >
             删除
-          </button>
+          </Button>
           <span
             v-if="variant === 'popup'"
-            class="card__chevron"
+            class="grid h-5 w-5 flex-none place-items-center text-xs text-muted-foreground transition-transform"
+            :class="isCollapsed(p.id) ? '' : 'rotate-90'"
             aria-hidden="true"
-          >▸</span>
+          >
+            ▸
+          </span>
         </div>
 
-        <!-- 卡片主体 -->
-        <div class="card__body">
-          <div class="row">
-            <select
-              v-model="p.type"
-              @change="onTypeChange(p)"
-            >
-              <optgroup label="LLM 接口配置">
-                <option value="llm">
-                  LLM
-                </option>
-              </optgroup>
-              <optgroup label="传统翻译">
-                <option value="google">
-                  Google 翻译
-                </option>
-                <option value="microsoft">
-                  微软翻译
-                </option>
-              </optgroup>
-            </select>
-          </div>
-          <div class="row">
-            <input
+        <div
+          v-show="variant !== 'popup' || !isCollapsed(p.id)"
+          class="flex flex-col gap-2 px-3 pb-3"
+        >
+          <Select
+            v-model="p.type"
+            @change="onTypeChange(p)"
+          >
+            <optgroup label="LLM 接口配置">
+              <option value="llm">
+                LLM
+              </option>
+            </optgroup>
+            <optgroup label="传统翻译">
+              <option value="google">
+                Google 翻译
+              </option>
+              <option value="microsoft">
+                微软翻译
+              </option>
+            </optgroup>
+          </Select>
+
+          <div class="grid gap-2 sm:grid-cols-2">
+            <Input
               v-model="p.baseUrl"
               data-testid="base-url"
               :placeholder="baseUrlPlaceholder(p.type)"
               @change="saveProviders"
-            >
-            <input
+            />
+            <Input
               v-if="isLlmType(p.type)"
               v-model="p.model"
               placeholder="模型名"
               @change="saveProviders"
-            >
+            />
           </div>
-          <!-- 响应风格单选:对所有 LLM 源(type='llm')展示 -->
+
           <div
             v-if="isLlmType(p.type)"
-            class="row response-style-row"
+            class="flex flex-wrap items-center gap-2 rounded-md bg-muted p-2"
             data-testid="response-style"
           >
-            <span class="response-style-label">响应风格</span>
-            <label class="response-style-option">
+            <span class="text-xs font-medium text-muted-foreground">响应风格</span>
+            <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
                 type="radio"
                 value="openai"
@@ -437,7 +449,7 @@ function isCollapsed(id: string): boolean {
               >
               openai
             </label>
-            <label class="response-style-option">
+            <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
                 type="radio"
                 value="anthropic"
@@ -447,7 +459,7 @@ function isCollapsed(id: string): boolean {
               >
               anthropic
             </label>
-            <label class="response-style-option">
+            <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
                 type="radio"
                 value="ollama"
@@ -457,348 +469,52 @@ function isCollapsed(id: string): boolean {
               >
               ollama
             </label>
-            <span class="hint response-style-hint">
+            <span class="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
               {{ responseStyleHint(p.responseStyle ?? 'openai') }}
             </span>
           </div>
-          <div class="row">
-            <input
+
+          <div class="grid gap-2 sm:grid-cols-[1fr_auto]">
+            <Input
               v-model="p.apiKey"
               type="password"
               :placeholder="apiKeyPlaceholder(p.type)"
               @change="saveProviders"
+            />
+            <Button
+              variant="outline"
+              :disabled="testMsgs[p.id] === '测试中…'"
+              @click="testProvider(p)"
             >
-            <button @click="testProvider(p)">
               测试连通
-            </button>
+            </Button>
           </div>
-          <!-- microsoft 有 Key 场景:region 输入框 -->
-          <div
+
+          <Input
             v-if="p.type === 'microsoft' && p.apiKey"
-            class="row"
-          >
-            <input
-              v-model="p.region"
-              data-testid="region"
-              placeholder="Azure 区域,如 eastus"
-              @change="saveProviders"
-            >
-          </div>
-          <p
+            v-model="p.region"
+            data-testid="region"
+            placeholder="Azure 区域,如 eastus"
+            @change="saveProviders"
+          />
+
+          <Badge
             v-if="testMsgs[p.id]"
-            class="test-msg inline"
-            :class="{ ok: isOk(testMsgs[p.id]), err: isErr(testMsgs[p.id]) }"
+            class="test-msg inline w-fit"
+            :variant="messageVariant(testMsgs[p.id])"
           >
             {{ testMsgs[p.id] }}
-          </p>
+          </Badge>
         </div>
-      </div>
+      </Card>
 
-      <!-- 添加提供方(options 变体:按钮在卡片列表后;popup 变体由父组件 footer 渲染) -->
-      <button
+      <Button
         v-if="variant === 'options'"
-        class="add-btn add-btn--options"
+        variant="dashed"
         @click="addProvider"
       >
         + 添加提供方
-      </button>
+      </Button>
     </section>
   </div>
 </template>
-
-<style scoped>
-/* ===== 共享基础样式 ===== */
-.source-config {
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
-  color: #111827;
-}
-
-.lang-section {
-  margin-bottom: 12px;
-}
-.lang-label {
-  display: block;
-  font-size: 12px;
-  font-weight: 600;
-  color: #111827;
-  margin-bottom: 4px;
-}
-
-.source-section {
-  margin-bottom: 0;
-}
-
-h2 {
-  font-size: 16px;
-  font-weight: 600;
-  margin: 0 0 8px;
-}
-
-.hint {
-  margin: 4px 0 12px;
-  font-size: 12px;
-  color: #6b7280;
-  line-height: 1.6;
-}
-
-/* ===== 当前生效源横幅 ===== */
-.effective {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 12px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  transition: border-color 160ms ease, background 160ms ease;
-}
-.effective__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #6b7280;
-  margin-top: 6px;
-  flex: none;
-}
-.effective[data-state="active"] .effective__dot {
-  background: #16a34a;
-}
-.effective__body {
-  flex: 1;
-  min-width: 0;
-}
-.effective__label {
-  font-size: 11px;
-  color: #6b7280;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.effective__value {
-  font-size: 14px;
-  font-weight: 600;
-  color: #111827;
-  margin-top: 1px;
-}
-.effective__note {
-  font-size: 12px;
-  color: #4b5563;
-  margin-top: 2px;
-  line-height: 1.55;
-}
-.effective__action {
-  font-size: 12px;
-  font-weight: 600;
-  color: #1f2937;
-  text-decoration: none;
-  white-space: nowrap;
-  padding-top: 1px;
-}
-.effective__action:hover {
-  text-decoration: underline;
-}
-.effective[data-state="fallback"] {
-  background: #f3f4f6;
-  border-color: #d1d5db;
-}
-.effective[data-state="active"] {
-  background: #fff;
-}
-
-/* ===== 兜底态「配置自有源」全宽按钮(popup) ===== */
-.configure-btn {
-  width: 100%;
-  padding: 9px;
-  margin-bottom: 12px;
-  border: 1px solid #1f2937;
-  border-radius: 4px;
-  background: #1f2937;
-  color: #fff;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-.configure-btn:hover {
-  background: #374151;
-}
-
-/* ===== 横幅兜底态测试连通 ===== */
-.banner-test {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-/* ===== 源卡片 ===== */
-.provider-card {
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  margin-bottom: 8px;
-  background: #fff;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-  overflow: hidden;
-}
-.provider-card[data-active="true"] {
-  border-color: #1f2937;
-  box-shadow: 0 0 0 1px #1f2937;
-}
-.card__head {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px 12px;
-}
-.card__head--clickable {
-  cursor: pointer;
-}
-.card__chevron {
-  width: 20px;
-  height: 20px;
-  display: grid;
-  place-items: center;
-  color: #6b7280;
-  font-size: 12px;
-  transition: transform 160ms ease;
-  flex: none;
-}
-.provider-card[data-collapsed="false"] .card__chevron {
-  transform: rotate(90deg);
-}
-.card__body {
-  padding: 0 12px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.provider-card[data-collapsed="true"] .card__body {
-  display: none;
-}
-.row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-}
-.row > input,
-.row > select {
-  flex: 1;
-  min-width: 0;
-}
-
-/* ===== 响应风格单选 ===== */
-.response-style-label {
-  font-size: 13px;
-  color: #374151;
-  white-space: nowrap;
-  padding-top: 1px;
-}
-.response-style-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 13px;
-  color: #1f2937;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.response-style-option input {
-  flex: none;
-  width: auto;
-}
-.response-style-hint {
-  margin: 0;
-  flex: 1;
-  min-width: 0;
-}
-
-/* ===== 通用控件 ===== */
-input,
-select,
-button {
-  font-family: inherit;
-  font-size: 13px;
-  color: inherit;
-}
-input,
-select {
-  padding: 6px 8px;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  background: #fff;
-}
-input {
-  flex: 1;
-  min-width: 0;
-}
-input:focus,
-select:focus,
-button:focus-visible {
-  outline: 2px solid #1f2937;
-  outline-offset: 1px;
-  border-color: #1f2937;
-}
-button {
-  padding: 6px 10px;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
-  background: #fff;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-  white-space: nowrap;
-}
-button:hover {
-  background: #f3f4f6;
-}
-button.active {
-  background: #1f2937;
-  color: #fff;
-  border-color: #1f2937;
-}
-button.active:hover {
-  background: #374151;
-}
-
-/* ===== 测试结果 inline ===== */
-.test-msg {
-  font-size: 12px;
-  color: #4b5563;
-}
-.test-msg.inline {
-  margin: 0;
-}
-.test-msg.ok {
-  color: #16a34a;
-}
-.test-msg.err {
-  color: #dc2626;
-}
-
-/* ===== 添加提供方按钮 ===== */
-.add-btn {
-  padding: 9px;
-  border: 1px dashed #d1d5db;
-  background: transparent;
-  border-radius: 4px;
-  color: #6b7280;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-.add-btn:hover {
-  background: #f3f4f6;
-  color: #111827;
-}
-.add-btn--options {
-  width: auto;
-  border-style: solid;
-  border-color: #d1d5db;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * {
-    transition: none !important;
-  }
-}
-</style>
