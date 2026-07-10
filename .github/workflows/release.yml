@@ -1,0 +1,251 @@
+# Chrome Extension Release Pipeline (Issue #63)
+#
+# Responds to GitHub Release "published" events (created by prodflow-release-deploy).
+# Builds, packages, and uploads Chrome MV3 extension zip to the Release,
+# then publishes to Chrome Web Store (skipped for prerelease / dry-run).
+#
+# Triggers:
+#   - release [published]: automatic, when a GitHub Release is published
+#   - workflow_dispatch:   manual, with tag + dry-run inputs
+#
+# Dry-run mode (workflow_dispatch, dry-run=true):
+#   Verifies version consistency, builds, packages, uploads zip to GitHub Release.
+#   Skips Chrome Web Store upload. The specified tag must correspond to an
+#   existing GitHub Release (created by prodflow-release-deploy or manually).
+#
+# Prerelease handling:
+#   prerelease Releases run build + package + Release asset upload,
+#   but skip Chrome Web Store upload.
+#
+# Required GitHub Secrets (for store upload only):
+#   CHROME_CLIENT_ID      - Google OAuth2 client ID
+#   CHROME_CLIENT_SECRET  - Google OAuth2 client secret
+#   CHROME_REFRESH_TOKEN  - OAuth2 refresh token
+#   CHROME_ITEM_ID        - Chrome Web Store extension ID (EXTENSION_ID)
+#   CHROME_PUBLISHER_ID   - Chrome Web Store publisher ID
+#
+#   Secret setup guide: https://github.com/fregante/chrome-webstore-upload-keys
+#
+# Troubleshooting:
+#   - Version mismatch: ensure tag (vX.Y.Z), package.json version, and
+#     wxt.config.ts manifest.version all match (without the "v" prefix).
+#   - Missing secrets: configure in Repository Settings -> Secrets and variables -> Actions.
+#   - "Release not found": the tag must correspond to an existing GitHub Release.
+#   - Store upload fails: verify OAuth credentials are valid and not expired.
+
+name: Release Chrome Extension
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.3.0) - must correspond to an existing GitHub Release'
+        required: true
+        type: string
+      dry-run:
+        description: 'Dry-run: skip Chrome Web Store upload'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-chrome-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release-chrome:
+    name: Build & Publish Chrome Extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # ----------------------------------------------------------------
+      # Determine release context: tag, prerelease flag, and whether
+      # store upload should run.
+      # ----------------------------------------------------------------
+      - name: Determine release context
+        id: ctx
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            PRERELEASE="${{ github.event.release.prerelease }}"
+          else
+            TAG="${{ inputs.tag }}"
+            PRERELEASE="false"
+          fi
+
+          # Store upload runs only for formal (non-prerelease) releases,
+          # or manual triggers with dry-run=false.
+          if [ "$PRERELEASE" = "true" ]; then
+            UPLOAD_STORE="false"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            UPLOAD_STORE="true"
+          elif [ "${{ inputs.dry-run }}" = "false" ]; then
+            UPLOAD_STORE="true"
+          else
+            UPLOAD_STORE="false"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "upload_store=$UPLOAD_STORE" >> "$GITHUB_OUTPUT"
+
+          echo "=== Release Context ==="
+          echo "Event: ${{ github.event_name }}"
+          echo "Tag: $TAG"
+          echo "Prerelease: $PRERELEASE"
+          echo "Upload to store: $UPLOAD_STORE"
+
+      # ----------------------------------------------------------------
+      # Version consistency check: tag vs package.json vs wxt manifest.
+      # Fails with a clear, non-sensitive error if any mismatch.
+      # ----------------------------------------------------------------
+      - name: Verify version consistency
+        env:
+          TAG: ${{ steps.ctx.outputs.tag }}
+        run: |
+          # Extract SemVer from tag (strip leading 'v')
+          TAG_VERSION="${TAG#v}"
+
+          # Read version from package.json
+          PKG_VERSION=$(node -p "require('./package.json').version")
+
+          # Read version from wxt.config.ts manifest (version: 'x.y.z')
+          MANIFEST_VERSION=$(grep -oP "version:\s*['\"]\K[^'\"]+" wxt.config.ts | head -1)
+
+          echo "Tag version:          $TAG_VERSION"
+          echo "package.json version: $PKG_VERSION"
+          echo "manifest version:     $MANIFEST_VERSION"
+
+          if [ -z "$MANIFEST_VERSION" ]; then
+            echo "::error::Could not extract version from wxt.config.ts"
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Version mismatch: tag ($TAG_VERSION) != package.json ($PKG_VERSION)"
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "::error::Version mismatch: tag ($TAG_VERSION) != wxt.config.ts manifest ($MANIFEST_VERSION)"
+            exit 1
+          fi
+
+          echo "✓ All versions consistent: $TAG_VERSION"
+
+      # ----------------------------------------------------------------
+      # Build and package Chrome MV3 extension.
+      # ----------------------------------------------------------------
+      - name: Build Chrome MV3 extension
+        run: pnpm build
+
+      - name: Package Chrome MV3 zip
+        run: pnpm zip
+
+      - name: Locate zip artifact
+        id: zip
+        run: |
+          ZIP_FILE=$(find .output -name "*-chrome.zip" -print -quit)
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::No Chrome zip found in .output/"
+            ls -la .output/ || true
+            exit 1
+          fi
+          echo "path=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+          echo "Found zip: $ZIP_FILE"
+
+      # ----------------------------------------------------------------
+      # Upload zip to the existing GitHub Release.
+      # Does NOT create a tag or Release (prodflow-release-deploy does that).
+      # ----------------------------------------------------------------
+      - name: Upload zip to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ctx.outputs.tag }}
+        run: |
+          gh release upload "$TAG" "${{ steps.zip.outputs.path }}" --clobber
+          echo "✓ Uploaded ${{ steps.zip.outputs.path }} to Release $TAG"
+
+      # ----------------------------------------------------------------
+      # Store upload: skipped for prerelease and dry-run.
+      # ----------------------------------------------------------------
+      - name: Skip Chrome Web Store upload
+        if: steps.ctx.outputs.upload_store == 'false'
+        run: |
+          echo "→ Skipping Chrome Web Store upload"
+          if [ "${{ steps.ctx.outputs.prerelease }}" = "true" ]; then
+            echo "  Reason: prerelease Release"
+          else
+            echo "  Reason: dry-run mode (workflow_dispatch with dry-run=true)"
+          fi
+
+      # ----------------------------------------------------------------
+      # Verify required secrets are present before store upload.
+      # Only prints variable NAMES (never values) on failure.
+      # ----------------------------------------------------------------
+      - name: Check Chrome Web Store secrets
+        if: steps.ctx.outputs.upload_store == 'true'
+        env:
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          EXTENSION_ID: ${{ secrets.CHROME_ITEM_ID }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+        run: |
+          MISSING=""
+          [ -z "$CLIENT_ID" ] && MISSING="$MISSING CHROME_CLIENT_ID"
+          [ -z "$CLIENT_SECRET" ] && MISSING="$MISSING CHROME_CLIENT_SECRET"
+          [ -z "$REFRESH_TOKEN" ] && MISSING="$MISSING CHROME_REFRESH_TOKEN"
+          [ -z "$EXTENSION_ID" ] && MISSING="$MISSING CHROME_ITEM_ID"
+          [ -z "$PUBLISHER_ID" ] && MISSING="$MISSING CHROME_PUBLISHER_ID"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Missing required GitHub Secrets:$MISSING"
+            echo ""
+            echo "Configure in: Repository Settings -> Secrets and variables -> Actions"
+            echo ""
+            echo "Required secrets for Chrome Web Store upload:"
+            echo "  CHROME_CLIENT_ID      - Google OAuth2 client ID"
+            echo "  CHROME_CLIENT_SECRET  - Google OAuth2 client secret"
+            echo "  CHROME_REFRESH_TOKEN  - OAuth2 refresh token"
+            echo "  CHROME_ITEM_ID        - Chrome Web Store extension ID"
+            echo "  CHROME_PUBLISHER_ID   - Chrome Web Store publisher ID"
+            echo ""
+            echo "Guide: https://github.com/fregante/chrome-webstore-upload-keys"
+            exit 1
+          fi
+          echo "✓ All required Chrome Web Store secrets are present"
+
+      # ----------------------------------------------------------------
+      # Upload and publish extension to Chrome Web Store.
+      # Uses chrome-webstore-upload-cli v4 (Chrome Web Store API v2).
+      # Credentials are passed via environment variables only.
+      # ----------------------------------------------------------------
+      - name: Upload and publish to Chrome Web Store
+        if: steps.ctx.outputs.upload_store == 'true'
+        env:
+          EXTENSION_ID: ${{ secrets.CHROME_ITEM_ID }}
+          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+        run: |
+          npx --yes chrome-webstore-upload-cli@4 --source "${{ steps.zip.outputs.path }}"
+          echo "✓ Extension uploaded and published to Chrome Web Store"
