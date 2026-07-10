@@ -24,6 +24,6 @@ export default defineConfig({
       // 用户自配云端 LLM 端点(https://*),SW 跨域 fetch 绕过 CORS (#29)
       'https://*/*',
     ],
-    permissions: ['storage', 'activeTab', 'contextMenus'],
+    permissions: ['storage', 'activeTab'],
   },
 });
