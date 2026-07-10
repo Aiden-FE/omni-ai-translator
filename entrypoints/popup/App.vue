@@ -24,7 +24,7 @@ onMounted(() => {
   <div
     class="flex h-[600px] w-[400px] flex-col overflow-hidden rounded-lg border border-border bg-background text-foreground shadow-2xl"
     role="dialog"
-    aria-label="LLM Translator 设置"
+    aria-label="Omni AI Translator 设置"
   >
     <header class="flex h-12 flex-none items-center gap-2 bg-primary px-4 text-primary-foreground">
       <div
@@ -33,7 +33,7 @@ onMounted(() => {
       >
         译
       </div>
-      <span class="min-w-0 flex-1 truncate text-sm font-semibold">LLM Translator</span>
+      <span class="min-w-0 flex-1 truncate text-sm font-semibold">Omni AI Translator</span>
     </header>
 
     <ScrollArea class="flex-1 px-4 py-3">
