@@ -100,4 +100,24 @@ AMO 需要 sources.zip (源码包) — WXT zip:firefox 可能已生成
 
 ## 待沉淀知识
 
-（Step5b 填充）
+### 1. 三浏览器发布矩阵架构（适合 feature/runbook 沉淀）
+- GitHub Actions matrix strategy `[chrome, firefox, edge]` + `fail-fast: false` 实现三浏览器并行构建
+- 单 job 内 `case` 语句分发浏览器目标，避免重复 step 定义
+- 共享步骤（checkout/setup/version-check/upload-to-release）+ 浏览器特定步骤（build/zip/store-upload）
+- 三浏览器 zip 上传同一 GitHub Release（`gh release upload --clobber`）
+- 知识沉淀:待补
+
+### 2. AMO/Edge API 接入与 Secret 约定（适合 runbook 沉淀）
+- AMO: `web-ext sign --source-dir <built-dir> --channel listed`，需 AMO_API_KEY + AMO_API_SECRET
+- Edge: REST API 三步流程（Azure AD token -> upload package -> publish），需 EDGE_PRODUCT_ID/CLIENT_ID/CLIENT_SECRET/TENANT_ID
+- Chrome: `chrome-webstore-upload-cli@4`（#63 已有），5个 CHROME_* Secrets
+- 每个浏览器独立 Secrets 校验，缺失时仅打印变量名不打印值
+- 知识沉淀:待补
+
+### 3. dry-run/prerelease 门禁设计（适合 ADR 沉淀）
+- `upload_store` 标志由 release 事件类型 + prerelease + dry-run 三因素决定
+- prerelease -> 所有浏览器跳过商店上传
+- dry-run=true -> 所有浏览器跳过商店上传
+- 正式 Release / dry-run=false -> 各浏览器检查各自 Secrets 后上传
+- `fail-fast: false` 确保单个浏览器失败不阻断其他
+- 知识沉淀:待补

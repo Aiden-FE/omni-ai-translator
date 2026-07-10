@@ -21,9 +21,9 @@
 - [x] 15. 新增 AMO 上传 step（web-ext sign --source-dir .output/firefox-mv2/ --channel listed）
 - [x] 16. 新增 Edge Secrets 校验 step（EDGE_PRODUCT_ID/CLIENT_ID/CLIENT_SECRET/TENANT_ID）
 - [x] 17. 新增 Edge 上传 step（curl: 获取 token -> 上传包 -> 发布）
-- [ ] 18. 运行 pnpm build && pnpm build:firefox && pnpm build:edge 验证构建
-- [ ] 19. 运行 pnpm typecheck && pnpm lint 验证代码质量
-- [ ] 20. YAML 语法校验（python yaml.safe_load 或 actionlint）
-- [ ] 21. 自审：workflow 语法、Secret 不打印、三浏览器矩阵正确、prerelease/dry-run 门禁、不破坏 Chrome 逻辑
-- [ ] 22. 写 CHANGELOG.md
-- [ ] 23. 更新 MEMORY.md 待沉淀知识
+- [x] 18. 运行 pnpm build && pnpm build:firefox && pnpm build:edge 验证构建
+- [x] 19. 运行 pnpm typecheck && pnpm lint 验证代码质量
+- [x] 20. YAML 语法校验（python yaml.safe_load 或 actionlint）
+- [x] 21. 自审：workflow 语法、Secret 不打印、三浏览器矩阵正确、prerelease/dry-run 门禁、不破坏 Chrome 逻辑
+- [x] 22. 写 CHANGELOG.md
+- [x] 23. 更新 MEMORY.md 待沉淀知识
