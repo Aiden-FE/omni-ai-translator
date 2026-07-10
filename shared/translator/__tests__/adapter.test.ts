@@ -9,7 +9,7 @@ import {
 } from '../index';
 import type { ProviderConfig } from '@/shared/types';
 
-// Mock chrome.storage.local — 模拟 storage 模块
+// Mock browser.storage.local — 模拟 storage 模块
 vi.mock('@/shared/storage', () => ({
   getSettings: vi.fn(),
   getProviders: vi.fn(),

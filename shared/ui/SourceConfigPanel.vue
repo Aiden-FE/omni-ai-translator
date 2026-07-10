@@ -94,7 +94,7 @@ function defaultTargetLang(): string {
 }
 
 function sendMessage<T>(message: Message): Promise<T> {
-  return chrome.runtime.sendMessage(message) as Promise<T>;
+  return browser.runtime.sendMessage(message) as Promise<T>;
 }
 
 async function loadActiveSources() {

@@ -1,4 +1,4 @@
-// 存储模块 — 统一封装 chrome.storage.local 访问
+// 存储模块 — 统一封装 browser.storage.local 访问
 // Key 严禁外泄，仅存本地。详见 knowledges/context/development/coding-standard.md
 
 import type { ProviderConfig, Settings } from './types';
@@ -13,12 +13,12 @@ const DEFAULT_SETTINGS: Settings = {
 };
 
 async function get<T>(key: string, fallback: T): Promise<T> {
-  const result = await chrome.storage.local.get(key);
+  const result = await browser.storage.local.get(key);
   return (result[key] as T) ?? fallback;
 }
 
 async function set<T>(key: string, value: T): Promise<void> {
-  await chrome.storage.local.set({ [key]: value });
+  await browser.storage.local.set({ [key]: value });
 }
 
 /**
@@ -28,7 +28,7 @@ async function set<T>(key: string, value: T): Promise<void> {
  * - type='llm' → 不变(已是新形态)
  * 迁移在读出时即时完成，不回写存储，用户无感知。
  * 注意:旧 type 值('openai-compatible'/'ollama')不在当前 ProviderType 联合中,
- * 但可能存在于存量 chrome.storage.local 数据,因此按 string 比较。
+ * 但可能存在于存量 browser.storage.local 数据,因此按 string 比较。
  */
 function migrateProvider(p: ProviderConfig): ProviderConfig {
   const rawType = p.type as string;

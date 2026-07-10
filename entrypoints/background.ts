@@ -14,48 +14,38 @@ import {
 import type { Message, StreamPortMessage } from '@/shared/types';
 
 export default defineBackground(() => {
-  chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
-    // 异步处理需返回 true 保持消息通道开启
-    (async () => {
-      try {
-        switch (message.type) {
-          case 'translate': {
-            sendResponse(await translateWithAdapter(message.payload));
-            return;
-          }
-          case 'test-provider': {
-            sendResponse(await testWithAdapter(message.payload));
-            return;
-          }
-          case 'get-settings': {
-            sendResponse(await getSettings());
-            return;
-          }
-          case 'get-providers': {
-            sendResponse(await getProviders());
-            return;
-          }
-          case 'get-active-sources': {
-            sendResponse(await getActiveSources());
-            return;
-          }
-          case 'set-active-source': {
-            await setActiveSource(message.payload.id);
-            sendResponse({ ok: true });
-            return;
-          }
-          default:
-            sendResponse({ error: 'unknown message type' });
+  browser.runtime.onMessage.addListener(async (message: Message) => {
+    try {
+      switch (message.type) {
+        case 'translate': {
+          return await translateWithAdapter(message.payload);
         }
-      } catch (err) {
-        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+        case 'test-provider': {
+          return await testWithAdapter(message.payload);
+        }
+        case 'get-settings': {
+          return await getSettings();
+        }
+        case 'get-providers': {
+          return await getProviders();
+        }
+        case 'get-active-sources': {
+          return await getActiveSources();
+        }
+        case 'set-active-source': {
+          await setActiveSource(message.payload.id);
+          return { ok: true };
+        }
+        default:
+          return { error: 'unknown message type' };
       }
-    })();
-    return true;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
-  // 流式翻译 port 长连接：content-script 经 chrome.runtime.connect({name:'translate-stream'}) 建连
-  chrome.runtime.onConnect.addListener((port) => {
+  // 流式翻译 port 长连接：content-script 经 browser.runtime.connect({name:'translate-stream'}) 建连
+  browser.runtime.onConnect.addListener((port) => {
     if (port.name !== 'translate-stream') return;
 
     port.onMessage.addListener((msg: StreamPortMessage) => {

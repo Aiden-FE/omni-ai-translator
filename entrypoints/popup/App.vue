@@ -8,7 +8,7 @@ import ScrollArea from '@/shared/ui/components/scroll-area/ScrollArea.vue';
 const panel = ref<InstanceType<typeof SourceConfigPanel> | null>(null);
 
 function openOptions() {
-  chrome.runtime.openOptionsPage();
+  browser.runtime.openOptionsPage();
 }
 
 function handleAddProvider() {
