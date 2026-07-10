@@ -61,5 +61,31 @@
 ## 执行进度
 
 - [x] Step4: contextMenus 已从 wxt.config.ts 移除; 4 份合规材料已落档至 releases/v0.3/4-listing-compliance/
-- [ ] Step5: 待构建验证与测试
+- [x] Step5: build/typecheck/lint/e2e 全部通过; manifest 确认不含 contextMenus; CHANGELOG 已写
 - [ ] Step6: 待提交与建 PR
+
+## 测试结果
+
+- pnpm build: 通过，manifest.json permissions=["storage","activeTab"]，无 contextMenus
+- pnpm typecheck: 通过
+- pnpm lint: 通过
+- pnpm e2e: 7/7 通过(划词翻译、配置、microsoft/google/anthropic/openai/ollama 全链路回归)
+
+## 待沉淀知识
+
+> 知识沉淀:待补 - 以下要点适合在协调器主会话通过 prodflow-knowledge-* 技能沉淀
+
+### 权限基线 (context: 权限管理)
+
+- LLM Translator Chrome MV3 manifest 权限基线: permissions=[storage, activeTab]; content script matches=[<all_urls>]; host_permissions=[localhost, 127.0.0.1, translate.googleapis.com, edge.microsoft.com, api.cognitive.microsofttranslator.com, https://*/*]
+- contextMenus 权限已确认未使用并在 #64 移除; 未来新增权限须同步更新合规材料
+- 权限清理方法: grep 全代码库确认无 chrome.{permission} API 调用 -> 从 wxt.config.ts 移除 -> build 后检查 manifest.json -> e2e 回归
+
+### 隐私数据流 (feature: 数据流向)
+
+- 默认翻译源: 微软翻译免 Key 公共端点(全新安装显式默认值，非隐式回退)
+- 待翻译文本仅按需透传当前生效翻译源，翻译后不持久化
+- API Key 仅存 chrome.storage.local，不上传
+- 无分析/追踪 SDK/Cookie/译文历史
+- 用户可选本地模型(Ollama)使文本不外传
+- 合规材料归档位置: releases/v0.3/4-listing-compliance/
