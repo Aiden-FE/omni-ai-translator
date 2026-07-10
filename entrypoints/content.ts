@@ -1,7 +1,7 @@
 // Content Script — 划词翻译
 // 交互模型：划词后出现一个浮动小触发按钮，点击触发才翻译，结果在浮层展示。
 // 目标语言：默认浏览器首选语言（navigator.language）。
-// 流式翻译：经 chrome.runtime.Port 长连接接收 chunk，浮层渐进渲染译文 + 闪烁光标。
+// 流式翻译：经 browser.runtime.Port 长连接接收 chunk，浮层渐进渲染译文 + 闪烁光标。
 //
 // 样式隔离：译文浮层(panel)渲染进一个 about:blank iframe(同源,可直接写 contentDocument)。
 // iframe 是独立文档,宿主页面 CSS 无法穿透文档边界,彻底避免宿主对 p/code/h1 等语义标签
@@ -144,7 +144,7 @@ export default defineContentScript({
       const targetLang = await getTargetLang();
 
       // 经 port 长连接发起流式翻译
-      const port = chrome.runtime.connect({ name: 'translate-stream' });
+      const port = browser.runtime.connect({ name: 'translate-stream' });
       port.postMessage({ type: 'request', text: selectedText, targetLang });
 
       let translatedText = '';

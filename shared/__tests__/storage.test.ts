@@ -3,13 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getProviders } from '../storage';
 import type { ProviderConfig } from '../types';
 
-// Mock chrome.storage.local
+// Mock browser.storage.local
 function mockStorage(providers: ProviderConfig[] | null): void {
   const store: Record<string, unknown> = {};
   if (providers !== null) {
     store['llm_translator:providers'] = providers;
   }
-  vi.stubGlobal('chrome', {
+  vi.stubGlobal('browser', {
     storage: {
       local: {
         get: vi.fn(async (key: string) => ({ [key]: store[key] })),
