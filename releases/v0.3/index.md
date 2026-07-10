@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-07 |
-| **最近更新** | 2026-07-10（prodflow-workers Batch2 完成:#66 商店Listing PR#73、#67 跨浏览器 PR#72 待合并,功能事项 6/7 标 reviewing;Batch1 #63/#64/#65 已合并,功能事项 3/4/5 标 done;#68 blocked-by-upstream 待 #67 合并后启动 Batch3） |
+| **最近更新** | 2026-07-10（prodflow-workers Batch3 #68 完成 PR#74 待合并(多浏览器发布矩阵+AMO/Edge);#66/#67 已合并->item6 done;item7 #67已合并/#68 PR#74待合并 reviewing;6 个研发任务 PR 全创建,待 #74 合并后最终收尾:知识沉淀+index 翻 done+关闭 PRD#51-#55） |
 | **开发周期估算** | ~3–3.5 周（美化工作流 ‖ 发布基建工作流并行；接受略超 3 周理论上限，用户已确认） |
 | **闭环业务链** | 用户从 Chrome/Firefox/Edge 商店发现 AI Translator（产品名定稿 + Listing 素材 + 合规披露）→ 安装（自动化发布流水线上架）→ 划词/配置翻译源 → 看到美化后全新视觉体验（shadcn/tailwind 重构 + 明亮鲜艳主题）→ 获得译文 |
 | **关联材料** | [../../knowledges/product-wiki/strategy/index.md](../../knowledges/product-wiki/strategy/index.md)、[../../knowledges/product-wiki/roadmap/index.md](../../knowledges/product-wiki/roadmap/index.md)、[../../knowledges/ux/design-system.md](../../knowledges/ux/design-system.md)、[../../knowledges/startup-summary.md](../../knowledges/startup-summary.md) |
@@ -36,7 +36,7 @@
 | 3 | release-pipeline | P0 | `./3-release-pipeline/PRD.md` | done | GitHub Actions 自动打包 + Chrome Web Store API 上架；研发任务 #63（后端,PR #71 已合并）：`prodflow-release-deploy` 发布正式 GitHub Release → CI 打包并上传 Release 资产 → 自动上架 Chrome 商店 |
 | 4 | listing-compliance | P0 | `./4-listing-compliance/PRD.md` | done | 商店隐私实践表/权限声明/数据用途披露；研发任务 #64（后端,PR #70 已合并）：合规材料落档 → 移除未用 `contextMenus` → 构建与划词链路回归 |
 | 5 | product-name | P0 | `./5-product-name/PRD.md` | done | "AI Translator"+区分词定稿，同步 manifest/UI/商店品牌名；研发任务 #65（前端,PR #69 已合并）：统一 popup/options 品牌字样并完成 manifest/README/UI 一致性回归 |
-| 6 | store-listing | P1 | `./6-store-listing/PRD.md` | reviewing | 商店 Listing 素材：图标/截图/描述/分类/关键词；研发任务 #66（前端，依赖 #65）：归档 16/32/48/128px 图标、3 张 1280×800 商店截图与 Listing 文案 |
+| 6 | store-listing | P1 | `./6-store-listing/PRD.md` | done | 商店 Listing 素材：图标/截图/描述/分类/关键词；研发任务 #66（前端，依赖 #65）：归档 16/32/48/128px 图标、3 张 1280×800 商店截图与 Listing 文案 |
 | 7 | cross-browser-build | P1 | `./7-cross-browser-build/PRD.md` | reviewing | WXT 打通 Firefox/Edge 构建 + 上架；研发任务 #67（前端，依赖 #64）：差异化 manifest、统一 `browser.*` API 与三浏览器 smoke；研发任务 #68（后端，依赖 #63/#67）：三浏览器构建矩阵、Release 资产与 AMO/Edge 发布 |
 
 ## 本轮不做
