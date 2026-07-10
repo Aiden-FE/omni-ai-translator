@@ -48,4 +48,23 @@
 
 ## 待沉淀知识
 
-（Step5b 补充）
+### 1. feature: Chrome 扩展自动发布流水线架构
+- **类型**: feature
+- **Issue ID**: #63
+- **关键摘要**: release.yml 响应 GitHub Release published 事件，自动构建 Chrome MV3 扩展并上传到 Chrome Web Store。架构为：release event -> 版本校验 -> build -> zip -> Release 资产上传 -> 商店上传（prerelease/dry-run 跳过）。使用 chrome-webstore-upload-cli@4，5 个 GitHub Secrets 注入凭据。
+- **相关文件**: `.github/workflows/release.yml`, `releases/v0.3/issue-63/DESIGN.md`
+- **建议沉淀路径**: `knowledges/feature/release-pipeline/chrome-publish.md`（新建 feature/release-pipeline/ 目录）
+
+### 2. runbook: Chrome Web Store 发布 Secrets 配置与故障排查
+- **类型**: runbook
+- **Issue ID**: #63
+- **关键摘要**: 5 个必需 GitHub Secrets（CHROME_CLIENT_ID、CHROME_CLIENT_SECRET、CHROME_REFRESH_TOKEN、CHROME_ITEM_ID、CHROME_PUBLISHER_ID）的申请与配置流程；dry-run 模式用法；版本不一致、Secret 缺失、Release 不存在等常见失败排查。
+- **相关文件**: `.github/workflows/release.yml`（顶部注释含完整排障指南）
+- **建议沉淀路径**: `knowledges/runbook/chrome-release/index.md`（新建 runbook/chrome-release/ 目录）
+
+### 3. adr: release event 驱动而非 tag push 驱动的发布流水线
+- **类型**: adr
+- **Issue ID**: #63
+- **关键摘要**: 选择 `on: release [published]` 而非 `on: push [tags: v*]` 作为触发器，因为 Release 由 prodflow-release-deploy 创建（含 RELEASE-NOTES 聚合），tag push 与 Release 创建之间有时间差。响应 Release 事件确保 RELEASE-NOTES 已就绪。prerelease 通过 `github.event.release.prerelease` 区分，天然支持跳过商店上传。
+- **相关文件**: `.github/workflows/release.yml`, `releases/v0.3/3-release-pipeline/PRD.md`
+- **建议沉淀路径**: `knowledges/adr/007-release-event-driven-pipeline.md`
