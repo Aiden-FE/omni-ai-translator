@@ -7,7 +7,7 @@
 | **状态** | draft |
 | **负责人** |  |
 | **创建日期** | 2026-07-07 |
-| **最近更新** | 2026-07-09（#51 release-pipeline 已拆解研发任务 #63；#52 listing-compliance 已拆解研发任务 #64；#53 product-name 已拆解研发任务 #65；#54 store-listing 已拆解研发任务 #66；#55 cross-browser-build 已拆解研发任务 #67/#68：跨浏览器构建与运行时适配 → 多商店发布流水线） |
+| **最近更新** | 2026-07-10（prodflow-workers 编排 #51-#55：Batch1 #63/#64/#65 完成 Step1-6,PR #71/#70/#69 待合并,功能事项 3/4/5 标 reviewing；#66/#67/#68 blocked-by-upstream(after-upstream-merged),待上游 PR 合并后启动 Batch2/3） |
 | **开发周期估算** | ~3–3.5 周（美化工作流 ‖ 发布基建工作流并行；接受略超 3 周理论上限，用户已确认） |
 | **闭环业务链** | 用户从 Chrome/Firefox/Edge 商店发现 AI Translator（产品名定稿 + Listing 素材 + 合规披露）→ 安装（自动化发布流水线上架）→ 划词/配置翻译源 → 看到美化后全新视觉体验（shadcn/tailwind 重构 + 明亮鲜艳主题）→ 获得译文 |
 | **关联材料** | [../../knowledges/product-wiki/strategy/index.md](../../knowledges/product-wiki/strategy/index.md)、[../../knowledges/product-wiki/roadmap/index.md](../../knowledges/product-wiki/roadmap/index.md)、[../../knowledges/ux/design-system.md](../../knowledges/ux/design-system.md)、[../../knowledges/startup-summary.md](../../knowledges/startup-summary.md) |
@@ -33,9 +33,9 @@
 |---|---|---|---|---|---|
 | 1 | ui-rewrite | P0 | `./1-ui-rewrite/PRD.md` | done | 引入 tailwindcss + shadcn/ui，重构翻译浮层/触发按钮/options 配置页/popup 全套组件到新设计系统；划词与配置链路全部基于新组件系统渲染 |
 | 2 | visual-theme | P0 | `./2-visual-theme/PRD.md` | done | 弃灰白黑冷色，定适度明亮鲜艳主题（主色/强调/语义色），产出设计 token 并应用；全应用视觉焕新（依赖 1） |
-| 3 | release-pipeline | P0 | `./3-release-pipeline/PRD.md` | draft | GitHub Actions 自动打包 + Chrome Web Store API 上架；研发任务 #63（后端）：`prodflow-release-deploy` 发布正式 GitHub Release → CI 打包并上传 Release 资产 → 自动上架 Chrome 商店 |
-| 4 | listing-compliance | P0 | `./4-listing-compliance/PRD.md` | draft | 商店隐私实践表/权限声明/数据用途披露；研发任务 #64（后端）：合规材料落档 → 移除未用 `contextMenus` → 构建与划词链路回归 |
-| 5 | product-name | P0 | `./5-product-name/PRD.md` | draft | "AI Translator"+区分词定稿，同步 manifest/UI/商店品牌名；研发任务 #65（前端）：统一 popup/options 品牌字样并完成 manifest/README/UI 一致性回归 |
+| 3 | release-pipeline | P0 | `./3-release-pipeline/PRD.md` | reviewing | GitHub Actions 自动打包 + Chrome Web Store API 上架；研发任务 #63（后端,PR #71 待合并）：`prodflow-release-deploy` 发布正式 GitHub Release → CI 打包并上传 Release 资产 → 自动上架 Chrome 商店 |
+| 4 | listing-compliance | P0 | `./4-listing-compliance/PRD.md` | reviewing | 商店隐私实践表/权限声明/数据用途披露；研发任务 #64（后端,PR #70 待合并）：合规材料落档 → 移除未用 `contextMenus` → 构建与划词链路回归 |
+| 5 | product-name | P0 | `./5-product-name/PRD.md` | reviewing | "AI Translator"+区分词定稿，同步 manifest/UI/商店品牌名；研发任务 #65（前端,PR #69 待合并）：统一 popup/options 品牌字样并完成 manifest/README/UI 一致性回归 |
 | 6 | store-listing | P1 | `./6-store-listing/PRD.md` | draft | 商店 Listing 素材：图标/截图/描述/分类/关键词；研发任务 #66（前端，依赖 #65）：归档 16/32/48/128px 图标、3 张 1280×800 商店截图与 Listing 文案 |
 | 7 | cross-browser-build | P1 | `./7-cross-browser-build/PRD.md` | draft | WXT 打通 Firefox/Edge 构建 + 上架；研发任务 #67（前端，依赖 #64）：差异化 manifest、统一 `browser.*` API 与三浏览器 smoke；研发任务 #68（后端，依赖 #63/#67）：三浏览器构建矩阵、Release 资产与 AMO/Edge 发布 |
 
