@@ -1,6 +1,6 @@
 {
   "name": "llm-translator",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "基于 LLM 的 Chrome 浏览器翻译插件，支持配置云端/本地大模型接口，提供划词翻译等能力。",
   "private": true,
   "type": "module",

@@ -18,7 +18,7 @@ export default defineConfig({
     const baseManifest = {
       name: 'Omni AI Translator',
       description: 'AI 驱动的浏览器翻译插件，支持配置云端/本地大模型接口',
-      version: '0.1.0',
+      version: '0.3.0',
       // 调用第三方 LLM 接口所需的权限；本地模型走 localhost
       // 内置免 Key 免费翻译源（google/microsoft）公共端点，确保 background 可跨域请求
       host_permissions: [

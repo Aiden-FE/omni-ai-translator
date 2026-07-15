@@ -1,0 +1,58 @@
+# Deploy Privacy Policy page to GitHub Pages
+#
+# Publishes docs/ (currently the privacy policy page) to GitHub Pages so the
+# extension has a public, stable URL for its Privacy Policy - required by the
+# Chrome Web Store listing.
+#
+# Trigger: push to master that touches docs/ or this workflow.
+# Setup (one-time, user action): Repository Settings -> Pages -> Source:
+#   "GitHub Actions".
+#
+# Public URL after deployment:
+#   https://aiden-fe.github.io/omni-ai-translator/privacy
+
+name: Deploy Privacy Page
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Pages artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload docs/ as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
