@@ -26,7 +26,6 @@ Firefox 另外生成 `sources.zip`（AMO 要求提交源码包）。
 - `CHROME_CLIENT_SECRET` - OAuth client secret
 - `CHROME_REFRESH_TOKEN` - OAuth refresh token
 - `CHROME_ITEM_ID` - 扩展 item ID（首次手动上传后获取）
-- `CHROME_PUBLISHER_ID` - 发布者 ID
 
 ### AMO (Firefox)
 
