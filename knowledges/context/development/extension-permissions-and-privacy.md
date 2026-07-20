@@ -1,13 +1,13 @@
 # 扩展权限与隐私数据流
 
-扩展权限基线为 `storage` 与 `activeTab`（`contextMenus` 已确认未使用并移除）。`host_permissions` 覆盖翻译 API 端点与用户自配云端 LLM 端点。隐私数据流设计遵循最小化原则：待翻译文本按需仅发送当前生效翻译源，API Key 与设置仅存 `chrome.storage.local`，无分析/追踪/Cookie/译文历史持久化。
+扩展权限基线为 `storage`（`activeTab` 与 `contextMenus` 均已确认未使用并移除）。`host_permissions` 覆盖翻译 API 端点与用户自配云端 LLM 端点。隐私数据流设计遵循最小化原则：待翻译文本按需仅发送当前生效翻译源，API Key 与设置仅存 `chrome.storage.local`，无分析/追踪/Cookie/译文历史持久化。
 
 ## 权限基线
 
-- `permissions: ['storage', 'activeTab']` - 三浏览器一致。
+- `permissions: ['storage']` - 三浏览器一致。
   - `storage` - 存储用户配置与 API Key（`chrome.storage.local`）。
-  - `activeTab` - 划词翻译时获取当前页面选中文本。
-- `contextMenus` - 已移除，经确认未使用。减少商店审核权限质询。
+- `activeTab` - 已移除(v0.3.1)。划词翻译靠 content script 在页面上下文内 `window.getSelection()` 读取选中文本,不需要 activeTab;全项目无 `chrome.tabs`/`chrome.action` 调用。Chrome Web Store 审核拒信(参考 ID: Purple Potassium)指出其请求但未使用。
+- `contextMenus` - 已移除,经确认未使用。减少商店审核权限质询。
 
 ## host_permissions
 

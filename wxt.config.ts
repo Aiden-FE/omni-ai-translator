@@ -18,7 +18,7 @@ export default defineConfig({
     const baseManifest = {
       name: 'Omni AI Translator',
       description: 'AI 驱动的浏览器翻译插件，支持配置云端/本地大模型接口',
-      version: '0.3.0',
+      version: '0.3.1',
       // 调用第三方 LLM 接口所需的权限；本地模型走 localhost
       // 内置免 Key 免费翻译源（google/microsoft）公共端点，确保 background 可跨域请求
       host_permissions: [
@@ -30,7 +30,9 @@ export default defineConfig({
         // 用户自配云端 LLM 端点(https://*),SW 跨域 fetch 绕过 CORS (#29)
         'https://*/*',
       ],
-      permissions: ['storage', 'activeTab'],
+      // activeTab 已移除(v0.3.1):划词靠 content script + window.getSelection(),
+      // 在页面上下文内执行,不需要 activeTab;全项目无 chrome.tabs/action 调用。
+      permissions: ['storage'],
     };
 
     if (browser === 'firefox') {

@@ -17,12 +17,6 @@
 - **数据说明**: 所有配置仅存于本地浏览器存储，不上传到任何服务器。API Key 不出现在日志、错误上报或代码提交中。
 - **依据**: PRIVACY-POLICY.md 第 2 节
 
-### activeTab
-
-- **用途**: 读取用户在当前页面主动选中的文本(content script 通过 `window.getSelection()` 获取选中文本)，用于划词翻译功能。
-- **数据说明**: 仅读取用户主动选中的文本，不自动扫描或收集网页内容。选中文本按需发送给当前生效的翻译源，翻译完成后不在本地留存。
-- **依据**: PRIVACY-POLICY.md 第 2 节
-
 ## content_scripts matches
 
 ### `<all_urls>`
@@ -65,6 +59,11 @@
 - **依据**: PRIVACY-POLICY.md 第 3 节、第 5 节
 
 ## 已移除权限
+
+### activeTab (已移除)
+
+- **状态**: 已从 wxt.config.ts 移除(v0.3.1)
+- **原因**: Chrome Web Store 审核拒信(参考 ID: Purple Potassium)指出 activeTab 请求但未使用。content script 通过 `window.getSelection()` 读取选中文本,在页面上下文内执行,不需要 activeTab 权限;全项目无 `chrome.tabs` / `chrome.action` 调用。移除后不影响划词翻译功能。
 
 ### contextMenus (已移除)
 
