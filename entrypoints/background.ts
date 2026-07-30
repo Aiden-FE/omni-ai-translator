@@ -11,9 +11,54 @@ import {
   getActiveSources,
   setActiveSource,
 } from '@/shared/translator';
-import type { Message, StreamPortMessage } from '@/shared/types';
+import type { Message, StreamPortMessage, BackgroundCommand, DisplayMode } from '@/shared/types';
 
 export default defineBackground(() => {
+  // 右键菜单「全文翻译」点击事件（v0.4.0 入口）。
+  // MV3 约束：onClicked 监听必须顶层同步注册——SW 被菜单点击事件唤醒时，
+  // 只有顶层同步注册能保证监听器在事件分发前已绑定；放进异步回调会丢事件。
+  browser.contextMenus.onClicked.addListener((info, tab) => {
+    // 菜单 id → 显示模式契约：fullpage-replace / fullpage-bilingual（后续任务以此为准）
+    const modeMap: Record<string, DisplayMode> = {
+      'fullpage-replace': 'replace',
+      'fullpage-bilingual': 'bilingual',
+    };
+    // info.menuItemId 类型为 string | number，先收窄为 string 再查映射
+    const mode = typeof info.menuItemId === 'string' ? modeMap[info.menuItemId] : undefined;
+    if (!mode) return;
+    // 空值守卫：devtools 等上下文下 tab / tab.id 可能缺失
+    const tabId = tab?.id;
+    if (tabId === undefined) return;
+    const command: BackgroundCommand = { type: 'fullpage-translate', mode };
+    // 经 tabs.sendMessage 下发给目标页 content script（t5 以 runtime.onMessage 消费）；
+    // 接收端可能不存在（如 content script 未注入的页面），消化 reject 避免 SW 未处理 rejection
+    browser.tabs.sendMessage(tabId, command).catch(() => {
+      /* 无接收端，忽略 */
+    });
+  });
+
+  // 菜单创建必须放在 onInstalled 内：仅安装/更新时执行一次，SW 重启不重复创建，
+  // 否则 contextMenus.create 会因 duplicate id 报错。父项「全文翻译」+ 两个子项，contexts: ['page']。
+  browser.runtime.onInstalled.addListener(() => {
+    browser.contextMenus.create({
+      id: 'fullpage',
+      title: '全文翻译',
+      contexts: ['page'],
+    });
+    browser.contextMenus.create({
+      id: 'fullpage-replace',
+      parentId: 'fullpage',
+      title: '翻译此页（替换）',
+      contexts: ['page'],
+    });
+    browser.contextMenus.create({
+      id: 'fullpage-bilingual',
+      parentId: 'fullpage',
+      title: '翻译此页（双语对照）',
+      contexts: ['page'],
+    });
+  });
+
   browser.runtime.onMessage.addListener(async (message: Message) => {
     try {
       switch (message.type) {

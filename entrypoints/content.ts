@@ -11,7 +11,7 @@
 import '@/assets/content.css';
 // content.css 以字符串注入浮层 iframe 文档(见 showPanel),不依赖宿主文档全局 CSS 穿透进 iframe。
 import contentStyle from '@/assets/content.css?inline';
-import { getSettings } from '@/shared/storage';
+import { getTargetLang } from '@/shared/target-lang';
 import type { TranslateResult, StreamPortMessage } from '@/shared/types';
 import { errorFeedback } from '@/shared/translator/error';
 import { renderMarkdown } from '@/shared/render/markdown';
@@ -24,28 +24,6 @@ export default defineContentScript({
     let panelFrame: HTMLIFrameElement | null = null;
     let panelRoot: HTMLDivElement | null = null;
     let selectedText = '';
-
-    async function getTargetLang(): Promise<string> {
-      // 优先使用用户在设置页配置的默认目标语言（trim 后非空）
-      const settings = await getSettings();
-      const configured = settings.defaultTargetLang?.trim();
-      if (configured) return configured;
-      // 留空则回退浏览器首选语言，如 "zh-CN" → "中文" 简化映射；未命中则原样返回
-      const lang = (navigator.language || 'en').toLowerCase();
-      const map: Record<string, string> = {
-        'zh-cn': '简体中文',
-        'zh-tw': '繁體中文',
-        'zh-hk': '繁體中文',
-        zh: '中文',
-        en: 'English',
-        ja: '日本語',
-        ko: '한국어',
-        fr: 'Français',
-        de: 'Deutsch',
-        es: 'Español',
-      };
-      return map[lang] ?? map[lang.split('-')[0]] ?? lang;
-    }
 
     function clearAll() {
       trigger?.remove();

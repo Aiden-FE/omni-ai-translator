@@ -32,7 +32,9 @@ export default defineConfig({
       ],
       // activeTab 已移除(v0.3.1):划词靠 content script + window.getSelection(),
       // 在页面上下文内执行,不需要 activeTab;全项目无 chrome.tabs/action 调用。
-      permissions: ['storage'],
+      // contextMenus(v0.4.0 重新引入,v0.3 #64 曾移除):全文翻译右键菜单入口,
+      // background 在 onInstalled 中创建菜单、经 tabs.sendMessage 下发命令给 content script。
+      permissions: ['storage', 'contextMenus'],
     };
 
     if (browser === 'firefox') {

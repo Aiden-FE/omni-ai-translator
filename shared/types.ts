@@ -65,6 +65,15 @@ export type Message =
   | { type: 'get-active-sources' }
   | { type: 'set-active-source'; payload: { id: string } };
 
+/** 全文翻译显示模式：replace=译文替换原文，bilingual=双语对照 */
+export type DisplayMode = 'replace' | 'bilingual';
+
+/**
+ * background → content 命令通道（与上方 content → background 的 Message 联合分离，勿混用）
+ * - fullpage-translate：右键菜单「全文翻译」触发，background 经 browser.tabs.sendMessage 下发给目标页 content script（t5 消费）
+ */
+export type BackgroundCommand = { type: 'fullpage-translate'; mode: DisplayMode };
+
 /** 流式翻译 chunk（增量译文片段） */
 export interface TranslateChunk {
   deltaText: string;
