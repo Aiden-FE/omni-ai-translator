@@ -1,7 +1,7 @@
 ---
 id: adr:002-llm-streaming-port-and-readablestream
 type: adr
-status: accepted
+status: active
 owner: project
 updated: 2026-07-30
 confidence: 0.8

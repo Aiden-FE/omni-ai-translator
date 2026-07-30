@@ -8,8 +8,8 @@ confidence: 0.85
 sources:
   - entrypoints/background.ts
   - entrypoints/content.ts
-  - entrypoints/options/
-  - entrypoints/popup/
+  - entrypoints/options
+  - entrypoints/popup
   - shared/translator/index.ts
   - shared/types.ts
   - wxt.config.ts

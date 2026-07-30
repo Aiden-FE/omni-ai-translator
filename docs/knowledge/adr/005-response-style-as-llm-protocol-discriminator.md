@@ -1,7 +1,7 @@
 ---
 id: adr:005-response-style-as-llm-protocol-discriminator
 type: adr
-status: accepted
+status: active
 owner: project
 updated: 2026-07-30
 confidence: 0.85

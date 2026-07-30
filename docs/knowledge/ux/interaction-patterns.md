@@ -7,8 +7,8 @@ updated: 2026-07-30
 confidence: 0.8
 sources:
   - entrypoints/content.ts
-  - entrypoints/options/
-  - entrypoints/popup/
+  - entrypoints/options
+  - entrypoints/popup
   - knowledges/ux/interaction-patterns.md
   - knowledges/startup-summary.md
 related:
