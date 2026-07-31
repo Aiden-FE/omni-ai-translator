@@ -18,6 +18,7 @@ related:
   - context:system:tech-stack
   - context:system:permissions-privacy
   - feature:translator:unified-adapter
+  - feature:fullpage:command-channel
   - adr:001-unified-translator-adapter-layer
 ---
 
@@ -31,7 +32,7 @@ Chrome 浏览器扩展，Manifest V3，使用 WXT 框架组织多脚本环境。
 
 | 环境 | 入口 | 角色 |
 |------|------|------|
-| background (Service Worker) | `entrypoints/background.ts` | 接收翻译请求、经适配层统一入口调用翻译、管理配置；SW 被回收时状态走 `chrome.storage` 持久化 |
+| background (Service Worker) | `entrypoints/background.ts` | 接收翻译请求、经适配层统一入口调用翻译、管理配置；v0.4.0 起兼作全文翻译右键菜单入口（`contextMenus.onClicked` 后经 `tabs.sendMessage` 下发命令给 content script）；SW 被回收时状态走 `chrome.storage` 持久化 |
 | content-script | `entrypoints/content.ts` | 监听选区、注入翻译浮层 UI、与 background 通信 |
 | popup | `entrypoints/popup/` | 工具栏弹窗，配置主入口（生效源横幅、源卡片、连通性测试、目标语言） |
 | options | `entrypoints/options/` | 全功能配置页：翻译源管理、目标语言、Prompt 自定义 |
@@ -54,6 +55,10 @@ background 内**不含源类型 if-else 分支**，所有源类型路由由适�
 ## 数据流（流式翻译）
 
 content 经 `browser.runtime.connect({ name:'translate-stream' })` 建 Port 长连接；background `onConnect` 监听并调 `translateWithAdapterStream(req, onChunk)`，逐 chunk 经 `port.postMessage({ type:'chunk' })` 推送，结束发 `done`/`error` 后 `disconnect()`。消息契约见 `shared/types.ts` 的 `StreamPortMessage`。详见 `adr:002-llm-streaming-port-and-readablestream`。
+
+## 数据流（全文翻译命令通道，v0.4.0）
+
+右键菜单「全文翻译」（`contexts: ['page']`）→ background `contextMenus.onClicked` 按菜单 id（`fullpage-replace` / `fullpage-bilingual`）映射 `DisplayMode` → 经 `browser.tabs.sendMessage` 下发 `BackgroundCommand = { type:'fullpage-translate', mode }` 给目标 tab 的 content script（content 侧 `runtime.onMessage` 消费待 t5 落地）。`BackgroundCommand` 与 content → background 的 `Message` 联合方向分离。契约详见 `feature:fullpage:command-channel`。
 
 ## 关键约束
 

@@ -46,6 +46,7 @@ related:
 | `adr:002-llm-streaming-port-and-readablestream` | adr | adr/002-llm-streaming-port-and-readablestream.md |
 | `adr:005-response-style-as-llm-protocol-discriminator` | adr | adr/005-response-style-as-llm-protocol-discriminator.md |
 | `feature:translator:unified-adapter` | feature | feature/translator-unified-adapter.md |
+| `feature:fullpage:command-channel` | feature | feature/fullpage-command-channel.md |
 | `runbook:dev-commands` | runbook | runbook/dev-commands.md |
 | `product:overview` | product | product/overview.md |
 | `ux:interaction-patterns` | ux | ux/interaction-patterns.md |
