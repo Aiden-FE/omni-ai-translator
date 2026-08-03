@@ -40,7 +40,7 @@ type LlmProtocol =
 
 `createLLMProvider` 按这四种协议分发。LLM 配置收敛为 `baseUrl`、`model`、`apiKey`、`responseStyle` 四要素，其中 `baseUrl` 是服务根地址而非必须填写完整请求端点。
 
-所有 LLM 请求和连通性测试使用 `resolveLlmEndpoint(baseUrl, protocol)` 生成最终 URL。解析器会 trim 空白与尾部 `/`，按协议追加端点，且当输入已经是当前协议的完整端点时保持不变，避免重复拼接：
+所有 LLM 请求和连通性测试使用 `resolveLlmEndpoint(baseUrl, protocol)` 生成最终 URL。解析器以结构化 `URL` 的 `pathname` trim 尾部 `/` 并按协议追加端点；`search` 与 `hash` 保持在原位置。当 `pathname` 已经是当前协议的完整端点时不会重复拼接：
 
 | 协议 | 默认 Base URL | 请求端点后缀 |
 |---|---|---|
@@ -58,7 +58,7 @@ type LlmProtocol =
 
 - 新增 LLM 协议风格只需扩展 `responseStyle` 枚举、端点映射与分发分支，无需再动 `ProviderType`。
 - `type` 联合收紧后，与旧 type 字符串比较需 `as string` 规避 TS2367。
-- OpenAI Responses 同时支持非流式 `input` 请求及 SSE `response.output_text.delta` 流式事件；这与 Chat Completions 的 `messages`/`choices` 协议明确分离。
+- OpenAI Responses 同时支持非流式 `input` 请求及 SSE `response.output_text.delta` 流式事件；`response.failed`、`response.incomplete` 与 `error` 终止为脱敏后的 `unreachable` 错误结果，`response.completed` 或 `[DONE]` 成功结束。这与 Chat Completions 的 `messages`/`choices` 协议明确分离。
 
 ## 来源证据
 

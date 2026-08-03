@@ -137,7 +137,7 @@ export async function runPool(
  */
 export async function retrySegments(
   failedSegments: SegmentRecord[],
-  opts: Omit<TranslatePoolOptions, 'signal' | 'isActive'>,
+  opts: Omit<TranslatePoolOptions, 'signal'>,
 ): Promise<TranslatePoolResult> {
   // 重置状态
   for (const seg of failedSegments) {

@@ -57,6 +57,7 @@ segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是
 | `recordedEls` | `Set<HTMLElement>` | 已收段元素集合（增量翻译防重复收段） |
 | `targetLang` | `string` | start 时解析一次，传入池 |
 | `startInFlight` | `Promise<void> \| null` | 进行中的 start（并发触发守卫） |
+| `sessionGeneration` | `number` | 单调递增的会话身份；start 捕获，restore/reset 使旧回调失效 |
 | `pendingAddedNodes` | `Set<HTMLElement>` | 防抖窗口内聚合的新增节点 |
 | `debounceTimer` | `ReturnType<typeof setTimeout> \| null` | 防抖计时器 |
 | `isFlushing` | `boolean` | flush 并发守卫 |
@@ -78,7 +79,7 @@ segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是
 
 `updateProgress` 不维护额外计数器，而是从唯一状态 `records` 派生：`completed` 为 `done + failed`，`failed` 为失败段数，`active` 为是否还存在 `pending` 或 `translating`。因此失败也是已处理的终态，进度不会停滞。工具栏在初始收集、每次 settle、重试前后、增量收集和空页面启动时更新：活动时显示 `全文翻译 completed/total` 与 spinner，全部成功时显示 `全文翻译完成 total/total`，有失败时显示 `已完成 completed/total，失败 failed`，空页面显示 `未发现可翻译文本`。
 
-模式切换只切换已完成段的渲染，不创建或移除 loading marker。恢复原文会立刻移除所有注入宿主；晚到的请求结果受 `active` 守卫拦截，不能重新注入加载标记或译文。
+模式切换只切换已完成段的渲染，不创建或移除 loading marker。恢复原文会立刻移除所有注入宿主；晚到的请求结果必须同时满足 `active` 与启动时捕获的 `sessionGeneration`，旧 retry 即使在新会话 active 后返回也不能按新 mode 渲染或生成 orphan host。
 
 ## 可复用设计范式
 
@@ -116,7 +117,7 @@ try { await p; } finally { if (startInFlight === p) startInFlight = null; }
 
 ### 范式 3：增量翻译防抖管线
 
-MutationObserver 观察 `document.body`（`{ childList: true, subtree: true }`），200ms 防抖聚合 `addedNodes`，然后批量 flush：
+非空初始会话才创建 MutationObserver 观察 `document.body`（`{ childList: true, subtree: true }`）；空页面仅保留工具栏的 `未发现可翻译文本` 状态，不启动 observer。非空会话以 200ms 防抖聚合 `addedNodes`，然后批量 flush：
 
 1. **聚合**：`handleMutations` 将每个 mutation 的 `addedNodes` 存入 `pendingAddedNodes`（Set 自动去重），每次 mutation 重置 200ms 计时器。
 2. **flush 并发守卫（isFlushing）**：flush 期间新到达的节点入新 set，flush 完成后检查 `pendingAddedNodes.size > 0` 重新调度，不丢节点也不并发 flush。
@@ -127,23 +128,23 @@ MutationObserver 观察 `document.body`（`{ childList: true, subtree: true }`�
 
 **复用场景**：后续扩展全文翻译功能（如翻译进度指示器、批量重试策略优化、多页面翻译状态管理）或实现其他需要监听 DOM 变更并增量处理的 content script 功能时，可复用此「防抖聚合 + 并发守卫 + 注入过滤 + 元素去重 + 错误隔离」管线模式。
 
-### 范式 4：防闪回双保险（isActive + onSettled 校验）
+### 范式 4：会话身份与元素连接双重校验
 
-翻译是异步操作，返回时页面状态可能已变化（用户恢复原文 / 元素被宿主移除）。双重校验防止过期译文渲染到已恢复的页面上（"闪回"）：
+翻译是异步操作，返回时页面状态可能已变化（用户恢复原文、启动新会话或元素被宿主移除）。单独的 `active` 布尔值会被新会话复用，因此用单调 generation 作为可靠会话身份：
 
-1. **池级 `isActive: () => active`**：恢复原文后 `active = false`，`runPool` 在派发新段前检查 `isActive()` 返回 false 即停，不再派发新段。
-2. **段级 `onSettled` 校验**：已返回的段在 `handleSettled` 中再校验 `active`（恢复后不渲染）与 `seg.el.isConnected`（元素已移除则丢弃不渲染）。段状态仍推进为 `done` 并写入缓存（有利于再次触发时秒级渲染），但 DOM 不渲染译文。
+1. **池级 `isActive: () => isSessionActive(generation)`**：初始、增量和 retry pool 在派发新段前同时检查 active 与 generation；restore 后已派发段可结束，但排队段停止派发。
+2. **段级 `onSettled` 校验**：每个回调捕获启动时 generation，先校验当前会话身份，再校验 `seg.el.isConnected`。旧 retry 在 restore -> restart 后返回时不能触碰新 records、toolbar 或 DOM；元素已移除时同样丢弃渲染。
 
 ```
-handleSettled(seg):
-  if (!active) return;              // 恢复后不渲染
+handleSettled(seg, generation):
+  if (!isSessionActive(generation)) return;
   if (seg.status === 'translating') return;
   if (!seg.el.isConnected) return;  // 元素已移除 -> 丢弃
   done   -> applyReplace / applyBilingual
   failed -> markFailed + updateFailureCount
 ```
 
-**复用场景**：任何异步操作（翻译、数据加载）的回调需要防「操作完成时上下文已失效」的场景，可复用此「入口级 isActive 守卫 + 回调级 active/isConnected 双重校验」模式。
+**复用场景**：任何异步操作（翻译、数据加载）的回调需要防「操作完成时上下文已被新会话复用」的场景，可复用「单调 generation + pool 派发守卫 + 回调身份/连接校验」。
 
 ### 范式 5：Shadow DOM + 自足样式隔离（跨模块复用）
 
@@ -168,21 +169,21 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 
 ### 全新路径
 
-1. `active = true`；`mode = requestedMode`
+1. `generation = ++sessionGeneration`；`active = true`；`mode = requestedMode`
 2. `targetLang = await getTargetLang()`（用户配置优先，回退浏览器首选语言）
 3. `records = collectSegments(document.body)`（v0.4 同步收集；大页面后续可用 `requestIdleCallback` 分片优化）
 4. `recordedEls = new Set(records.map(r => r.el))`
 5. `toolbar = createToolbar({ onSwitchMode, onRestore, onRetry, onCollapse, onRecall })`；`toolbar.setMode(mode)`（空分段页重复触发时先 `toolbar?.destroy()` 防重复挂载）
-6. `markSegmentsLoading(records)` + `updateProgress()`，然后 `await runPool(records, { targetLang, concurrency: 3, cache, onSettled, isActive: () => active })`
-7. 若 `active`（翻译期间未被恢复）-> `startObserver()`
+6. `markSegmentsLoading(records)` + `updateProgress()`，然后 `await runPool(records, { targetLang, concurrency: 3, cache, onSettled: 捕获 generation, isActive: () => isSessionActive(generation) })`
+7. 若当前 generation 仍 active 且 `records.length > 0` -> `startObserver()`；空页不启动 observer
 
 ## 工具栏回调接线
 
 | 回调 | 动作 | 关键点 |
 |---|---|---|
 | `onSwitchMode` | `switchToMode(mode === 'replace' ? 'bilingual' : 'replace')` | 零 API 调用 |
-| `onRestore` | `restoreAll` + `stopObserver` + `toolbar.destroy` + `active = false` | **保留 cache 与 records.translatedText**，再次触发命中段秒级渲染 |
-| `onRetry` | 收集 failed 段 -> `clearFailedMark` -> `retrySegments`（复用池，不清缓存）-> `updateFailureCount` | 翻译仍完成并写入缓存 |
+| `onRestore` | `restoreAll` + `stopObserver` + `toolbar.destroy` + `active = false` + generation 失效 | **保留 cache 与 records.translatedText**，再次触发命中段秒级渲染 |
+| `onRetry` | 捕获 generation -> 收集 failed 段 -> `clearFailedMark` -> `retrySegments`（复用池，不清缓存）-> `updateFailureCount` | 传入当前会话 `isActive`，restore 后停止派发排队段；旧 settle 不触碰新会话 UI |
 | `onCollapse` | no-op | toolbar 已自动 collapse；预留暂停观察器扩展位 |
 | `onRecall` | no-op | toolbar 已自动 expand |
 
@@ -208,13 +209,12 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 
 - 大页面（上千段）首帧收集为同步遍历，已注释标注后续 `requestIdleCallback` 分片优化点。
 - 观察器启动时机为 `await runPool` 之后（v0.4 顺序）：翻译期间的新增内容靠启动后 mutation 补偿，存在理论窗口期，后续可提前启动观察器。
-- **retrySegments 不支持 isActive 中止（REVIEW.md S3）**：`handleRetry` 调用 `retrySegments` 时未传 `isActive`，恢复原文期间已派发段仍会完成翻译（写入缓存）。`handleSettled` 的 `active` 校验确保不误渲染（无闪回），`toolbar` 为 null 后 `updateFailureCount` 为 no-op，无 DOM 损坏。DESIGN.md 已记录此设计权衡（翻译仍完成并写入缓存有利于再次触发秒级渲染）；若后续优化可为 `retrySegments` 补充 `isActive` 支持。
 - e2e（Playwright）已补齐全文翻译链路（v0.4.0）：`e2e/fullpage.spec.ts` 8 用例覆盖验收标准 1-11（渐进渲染 / 双语 / 切换免重译 / 恢复 / 失败重试 / 增量 / 缓存 / 工具栏 UX）。触发与断言技术见 `runbook:e2e:fullpage-trigger-assertions`，mock 契约见 `feature:fullpage:e2e-mock-contract`。
 
 ## 来源证据
 
-- `shared/fullpage/orchestrator.ts`：模块级状态声明、`start` / `doStart`（复用路径 + 全新路径 + startInFlight 守卫）、`handleSettled`（active + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重）、`handleRestore`（保留 cache）、`handleRetry`（复用 retrySegments）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子。
-- `shared/fullpage/orchestrator.test.ts`：覆盖即时加载标记、派生进度、成功/失败终态、重试、增量分段、空页面、恢复中的晚到结果、类型守卫和既有编排器状态机。
+- `shared/fullpage/orchestrator.ts`：模块级状态声明、`start` / `doStart`（复用路径 + 全新路径 + startInFlight/sessionGeneration 守卫）、`handleSettled`（generation + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重）、`handleRestore`（保留 cache 并使 generation 失效）、`handleRetry`（复用 retrySegments 并传 isActive）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子。
+- `shared/fullpage/orchestrator.test.ts`：覆盖即时加载标记、派生进度、成功/失败终态、重试、增量分段、空页面不启动 observer、恢复中的晚到结果、旧 retry 会话隔离、restore 后停止排队派发、类型守卫和既有编排器状态机。
 - `shared/fullpage/renderer.ts` / `shared/fullpage/toolbar.ts`：分别提供幂等 loading marker 清理和状态行呈现 API。
 - `entrypoints/fullpage.content.ts`：`defineContentScript({ matches: ['<all_urls>'] })` + `runtime.onMessage` + `isBackgroundCommand` 守卫 + `start(msg.mode)` 调用 + catch console.warn。
 - `docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md`：编排器状态机总体架构、模块级状态表、start 流程、onSettled 回调、工具栏回调接线表、增量翻译设计、isActive 中止、关键设计权衡（模块级状态 vs 工厂函数、retrySegments vs runPool、observer 启动时机、复用路径不重建 toolbar）、边界与风险。

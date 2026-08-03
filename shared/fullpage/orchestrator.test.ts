@@ -385,6 +385,39 @@ describe('工具栏回调', () => {
     // 初始 2 次 + 重试 1 次
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
+
+  it('超过并发数的重试在 restore 后不再派发排队请求', async () => {
+    document.body.innerHTML = Array.from(
+      { length: 5 },
+      (_, index) => `<p>failed text ${index}</p>`,
+    ).join('');
+    let retrying = false;
+    const retryResolvers: Array<(value: TranslateResponse) => void> = [];
+    const { sendMessage } = setupBrowser((text) => {
+      if (!retrying) return { error: 'initial failure', errorType: 'network' };
+      if (retryResolvers.length < 3) {
+        return new Promise<TranslateResponse>((resolve) => {
+          retryResolvers.push(resolve);
+        });
+      }
+      return { translatedText: `[重试] ${text}` };
+    });
+    await start('replace');
+    expect(sendMessage).toHaveBeenCalledTimes(5);
+
+    retrying = true;
+    getRetryButton().click();
+    await drainMicrotasks();
+    expect(sendMessage).toHaveBeenCalledTimes(8);
+
+    clickToolbarButtonByText('恢复原文');
+    for (const resolve of retryResolvers) {
+      resolve({ translatedText: '已完成的在途重试' });
+    }
+    await drainMicrotasks();
+
+    expect(sendMessage).toHaveBeenCalledTimes(8);
+  });
 });
 
 describe('onSettled 守卫', () => {
@@ -436,11 +469,70 @@ describe('onSettled 守卫', () => {
     expect(p.isConnected).toBe(false);
     expect(p.textContent).toBe('removable text');
   });
+
+  it('retry → restore → restart 后旧 retry 返回不按新 mode 渲染 orphan host', async () => {
+    document.body.innerHTML = '<p>retry text</p>';
+    let requestCount = 0;
+    let resolveOldRetry!: (value: TranslateResponse) => void;
+    let resolveRestart!: (value: TranslateResponse) => void;
+    const oldRetryGate = new Promise<TranslateResponse>((resolve) => {
+      resolveOldRetry = resolve;
+    });
+    const restartGate = new Promise<TranslateResponse>((resolve) => {
+      resolveRestart = resolve;
+    });
+    const { sendMessage } = setupBrowser(() => {
+      requestCount++;
+      if (requestCount === 1) return { error: 'initial failure', errorType: 'network' };
+      if (requestCount === 2) return oldRetryGate;
+      return restartGate;
+    });
+
+    await start('replace');
+    const oldRecord = __getState().records[0];
+    getRetryButton().click();
+    await drainMicrotasks();
+
+    clickToolbarButtonByText('恢复原文');
+    const restartPromise = start('bilingual');
+    await drainMicrotasks();
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(__getState().records[0]).not.toBe(oldRecord);
+
+    resolveOldRetry({ translatedText: '旧重试译文' });
+    await drainMicrotasks();
+
+    expect(document.querySelector('.llm-translator-block-host')).toBeNull();
+    expect(document.querySelector('p')?.textContent).toBe('retry text');
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+
+    resolveRestart({ translatedText: '新会话译文' });
+    await restartPromise;
+    const blocks = document.querySelectorAll('.llm-translator-block-host');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].shadowRoot?.textContent).toContain('新会话译文');
+  });
 });
 
 describe('增量翻译（MutationObserver + 200ms 防抖）', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+
+  it('空页面显示空状态且不启动 observer', async () => {
+    document.body.innerHTML = '<div><span></span></div>';
+    const { sendMessage } = setupBrowser();
+    await start('replace');
+    expect(toolbarText()).toContain('未发现可翻译文本');
+
+    const p = document.createElement('p');
+    p.textContent = 'added after empty session';
+    document.body.appendChild(p);
+    await flushObserver();
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(__getState().records).toHaveLength(0);
+    expect(p.textContent).toBe('added after empty session');
   });
 
   it('新增节点 → 收集 → 翻译 → 按当前模式渲染（验收标准 9）', async () => {

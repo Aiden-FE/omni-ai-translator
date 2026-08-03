@@ -412,6 +412,84 @@ describe('LLM Provider 流式翻译', () => {
     expect(result.translatedText).toBe('你好,世界');
   });
 
+  it('OpenAI Responses SSE — response.completed 结束成功流', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        'data: {"type":"response.output_text.delta","delta":"完成"}\n\n',
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"ignored"}\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createLLMProvider(
+      makeOpenAIConfig({ responseStyle: 'openai-responses' }),
+    );
+    const chunks: string[] = [];
+    const result = await provider.translateStream!(baseReq, (chunk) => chunks.push(chunk.deltaText));
+
+    expect(chunks).toEqual(['完成']);
+    expect(result).toEqual({ translatedText: '完成' });
+  });
+
+  it.each([
+    [
+      'response.failed',
+      {
+        type: 'response.failed',
+        response: {
+          status: 'failed',
+          error: { code: 'server_error', message: 'request rejected: sk-sensitive-key' },
+        },
+      },
+      'request rejected',
+    ],
+    [
+      'response.incomplete',
+      {
+        type: 'response.incomplete',
+        response: {
+          status: 'incomplete',
+          incomplete_details: { reason: 'max_output_tokens: sk-sensitive-key' },
+        },
+      },
+      'max_output_tokens',
+    ],
+    [
+      'error',
+      {
+        type: 'error',
+        code: 'server_error',
+        message: 'gateway rejected sk-sensitive-key',
+      },
+      'gateway rejected',
+    ],
+  ] as const)(
+    'OpenAI Responses SSE — %s 返回清洗后的错误结果',
+    async (_eventType, event, expectedMessage) => {
+      const apiKey = 'sk-sensitive-key';
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        body: makeReadableStream([`data: ${JSON.stringify(event)}\n\n`]),
+      }));
+      const provider = createLLMProvider(
+        makeOpenAIConfig({ responseStyle: 'openai-responses', apiKey }),
+      );
+      const onChunk = vi.fn();
+
+      const result = await provider.translateStream!(baseReq, onChunk);
+
+      expect(result.translatedText).toBe('');
+      expect(result.errorType).toBe('unreachable');
+      expect(result.error).toContain(expectedMessage);
+      expect(result.error).not.toContain(apiKey);
+      expect(onChunk).not.toHaveBeenCalled();
+    },
+  );
+
   it('Anthropic SSE 流式 — content_block_delta 提取 delta.text + message_stop 终止 + 跳过其他事件', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -40,7 +40,7 @@ let active = false;
 let cache: Map<string, string> = new Map();
 /** 工具栏实例 */
 let toolbar: ToolbarApi | null = null;
-/** 增量翻译观察器（仅 active 期间连接） */
+/** 增量翻译观察器（仅含初始分段的 active 会话连接） */
 let observer: MutationObserver | null = null;
 /** 已收段元素集合（增量翻译防重复收段） */
 let recordedEls: Set<HTMLElement> = new Set();
@@ -48,6 +48,8 @@ let recordedEls: Set<HTMLElement> = new Set();
 let targetLang = '';
 /** 进行中的 start（并发触发守卫：第二次等待首次完成后按最新状态决策） */
 let startInFlight: Promise<void> | null = null;
+/** 单调递增的会话代次，用于拒绝 restore/restart 前启动的晚到回调。 */
+let sessionGeneration = 0;
 
 // ---- 增量翻译防抖状态 ----
 
@@ -89,6 +91,7 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
 
 /** 全新启动路径 */
 async function doStart(requestedMode: DisplayMode): Promise<void> {
+  const generation = ++sessionGeneration;
   active = true;
   mode = requestedMode;
   // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
@@ -117,31 +120,35 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     targetLang,
     concurrency: 3,
     cache,
-    onSettled: handleSettled,
-    // 恢复原文后不再派发新段（已返回段由 handleSettled 的 active 校验拦截渲染）
-    isActive: () => active,
+    onSettled: (seg) => handleSettled(seg, generation),
+    // 会话失效后不再派发新段（已返回段由 handleSettled 的 generation 校验拦截渲染）
+    isActive: () => isSessionActive(generation),
   });
 
-  // 翻译期间被恢复（active=false）则不启动观察器
-  if (active) {
+  // 会话失效或初始页面无分段时不启动观察器
+  if (isSessionActive(generation) && records.length > 0) {
     startObserver();
   }
 }
 
+function isSessionActive(generation: number): boolean {
+  return active && sessionGeneration === generation;
+}
+
 /**
  * 池逐段 settle 回调：
- * - 恢复原文后（active=false）不渲染已返回段（防译文闪回）
+ * - 会话 generation 失效后不渲染已返回段（防 restore/restart 后译文闪回）
  * - 元素已被宿主移除（isConnected=false）→ 丢弃不渲染
  * - done → 按当前模式渲染；failed → 失败标记 + 更新工具栏计数；translating → 仅更新进度
  */
-function handleSettled(seg: SegmentRecord): void {
+function handleSettled(seg: SegmentRecord, generation: number): void {
+  if (!isSessionActive(generation)) return;
   if (seg.status === 'translating') {
     updateProgress();
     return;
   }
   clearLoadingMark(seg);
   updateProgress();
-  if (!active) return;
   if (!seg.el.isConnected) return;
   if (seg.status === 'done') {
     if (mode === 'replace') {
@@ -200,11 +207,13 @@ function handleRestore(): void {
   toolbar?.destroy();
   toolbar = null;
   active = false;
+  sessionGeneration++;
   // 注意：cache 与 records[].translatedText 保留，再次触发时命中段秒级渲染（验收标准 10）
 }
 
 /** 工具栏回调：重试失败段 — 清除失败标记后重跑池（复用缓存），成功则渲染并更新计数 */
 async function handleRetry(): Promise<void> {
+  const generation = sessionGeneration;
   const failedSegs = records.filter((r) => r.status === 'failed');
   if (failedSegs.length === 0) return;
   for (const seg of failedSegs) {
@@ -218,8 +227,10 @@ async function handleRetry(): Promise<void> {
     targetLang,
     concurrency: 3,
     cache,
-    onSettled: handleSettled,
+    onSettled: (seg) => handleSettled(seg, generation),
+    isActive: () => isSessionActive(generation),
   });
+  if (!isSessionActive(generation)) return;
   updateFailureCount();
   updateProgress();
 }
@@ -234,7 +245,7 @@ function handleRecall(): void {
   // no-op：展开属工具栏自身 UI 状态
 }
 
-/** 启动增量观察器（仅 active 期间连接；重复调用安全） */
+/** 启动增量观察器（仅含初始分段的 active 会话调用；重复调用安全） */
 function startObserver(): void {
   if (observer) return;
   observer = new MutationObserver(handleMutations);
@@ -306,6 +317,7 @@ async function flushAddedNodes(): Promise<void> {
       }
     }
     if (active && newSegments.length > 0) {
+      const generation = sessionGeneration;
       records.push(...newSegments);
       markSegmentsLoading(newSegments);
       updateProgress();
@@ -313,8 +325,8 @@ async function flushAddedNodes(): Promise<void> {
         targetLang,
         concurrency: 3,
         cache,
-        onSettled: handleSettled,
-        isActive: () => active,
+        onSettled: (seg) => handleSettled(seg, generation),
+        isActive: () => isSessionActive(generation),
       });
     }
   } finally {
@@ -366,6 +378,7 @@ export function __reset(): void {
   recordedEls = new Set();
   mode = 'replace';
   active = false;
+  sessionGeneration++;
   cache = new Map();
   targetLang = '';
   startInFlight = null;

@@ -26,9 +26,11 @@ export function normalizeLlmProtocol(value: unknown): LlmProtocol {
 }
 
 export function resolveLlmEndpoint(baseUrl: string, protocol: LlmProtocol): string {
-  const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
+  const url = new URL(baseUrl.trim());
+  const normalizedPathname = url.pathname.replace(/\/+$/, '');
   const suffix = ENDPOINT_SUFFIX_BY_PROTOCOL[protocol];
-  return normalizedBaseUrl.endsWith(suffix)
-    ? normalizedBaseUrl
-    : `${normalizedBaseUrl}${suffix}`;
+  url.pathname = normalizedPathname.endsWith(suffix)
+    ? normalizedPathname
+    : `${normalizedPathname}${suffix}`;
+  return url.toString();
 }

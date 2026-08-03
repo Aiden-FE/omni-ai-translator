@@ -28,6 +28,23 @@ describe('resolveLlmEndpoint', () => {
     expect(resolveLlmEndpoint('  https://gateway.test/v1///  ', 'openai-responses'))
       .toBe('https://gateway.test/v1/responses');
   });
+
+  it('appends the endpoint to pathname while preserving Base URL query and hash', () => {
+    expect(
+      resolveLlmEndpoint(
+        'https://gateway.test/v1?api-version=2026-08-03#deployment',
+        'openai-completions',
+      ),
+    ).toBe(
+      'https://gateway.test/v1/chat/completions?api-version=2026-08-03#deployment',
+    );
+  });
+
+  it('preserves a complete endpoint with query and hash', () => {
+    const endpoint = 'https://gateway.test/v1/responses?api-version=2026-08-03#deployment';
+
+    expect(resolveLlmEndpoint(endpoint, 'openai-responses')).toBe(endpoint);
+  });
 });
 
 describe('normalizeLlmProtocol', () => {

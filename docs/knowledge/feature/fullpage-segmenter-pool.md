@@ -109,7 +109,7 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 ### retrySegments
 
-重置失败段状态（`status -> pending`、清 `errorType` / `translatedText`）后复用 `runPool`，**不清缓存**（已失败 key 可在重试时命中或成功）。
+重置失败段状态（`status -> pending`、清 `errorType` / `translatedText`）后复用 `runPool`，**不清缓存**（已失败 key 可在重试时命中或成功）。`retrySegments` 转发 `isActive`，restore 使当前会话失效后，池等待已派发请求结束但不再派发排队段。
 
 ## 双模式渲染器（renderer）
 

@@ -64,8 +64,8 @@ category=traditional → createTraditionalProvider（google / microsoft，有 Ke
 ### LLM 协议与 Base URL 契约
 
 - `responseStyle` 的有效值是 `openai-completions | openai-responses | anthropic | ollama`。缺失值和存量 `'openai'` 在读取时均规范为 `openai-completions`。
-- `baseUrl` 表示服务根地址；每个 LLM handler 在 `fetch` 前调用 `resolveLlmEndpoint`，由协议追加 `/chat/completions`、`/responses`、`/messages` 或 `/api/chat`。当前协议的完整端点输入会被保留，故存量完整 endpoint 不会被重复拼接。
-- OpenAI Responses 非流式请求使用 `{ model, input }`；响应优先读取 `output_text`，否则汇总 `output[].content[]` 中 `type='output_text'` 的 `text`。流式请求解析 `response.output_text.delta` 并在 `response.completed` 或 `[DONE]` 结束。
+- `baseUrl` 表示服务根地址；每个 LLM handler 在 `fetch` 前调用 `resolveLlmEndpoint`，由协议向结构化 URL 的 `pathname` 追加 `/chat/completions`、`/responses`、`/messages` 或 `/api/chat`，并保留 `search` / `hash`。当前协议的完整 endpoint（包括携带 query/hash 的地址）不会被重复拼接。
+- OpenAI Responses 非流式请求使用 `{ model, input }`；响应优先读取 `output_text`，否则汇总 `output[].content[]` 中 `type='output_text'` 的 `text`。流式请求解析 `response.output_text.delta`，在 `response.completed` 或 `[DONE]` 成功结束；`response.failed`、`response.incomplete` 与 `error` 返回现有 `TranslateResult` 错误形状和 `unreachable` 分类，错误文本会移除配置中的 API key。
 - 配置页的新 LLM 源默认 `openai-completions` 和 `https://api.openai.com/v1`；切换协议时，已知默认地址或已知 endpoint 重置为新协议的默认 Base URL，自定义地址保持不变。
 
 ## 生效源切换契约

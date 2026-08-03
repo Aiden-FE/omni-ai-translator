@@ -64,6 +64,43 @@ function extractResponsesText(value: unknown): string {
   return translatedText.trim();
 }
 
+function redactApiKey(message: string, apiKey?: string): string {
+  return apiKey ? message.split(apiKey).join('[REDACTED]') : message;
+}
+
+function extractResponsesStreamFailure(value: unknown, apiKey?: string): string | null {
+  if (!isRecord(value)) return null;
+
+  if (value.type === 'error') {
+    const message = typeof value.message === 'string'
+      ? value.message
+      : 'OpenAI Responses stream error';
+    return redactApiKey(message, apiKey);
+  }
+
+  if (value.type === 'response.failed') {
+    const response = isRecord(value.response) ? value.response : null;
+    const error = response && isRecord(response.error) ? response.error : null;
+    const message = error && typeof error.message === 'string'
+      ? error.message
+      : 'OpenAI Responses stream failed';
+    return redactApiKey(message, apiKey);
+  }
+
+  if (value.type === 'response.incomplete') {
+    const response = isRecord(value.response) ? value.response : null;
+    const details = response && isRecord(response.incomplete_details)
+      ? response.incomplete_details
+      : null;
+    const reason = details && typeof details.reason === 'string'
+      ? details.reason
+      : 'unknown reason';
+    return redactApiKey(`OpenAI Responses stream incomplete: ${reason}`, apiKey);
+  }
+
+  return null;
+}
+
 async function callOpenAIResponses(
   provider: ProviderConfig,
   req: TranslateRequest,
@@ -267,6 +304,14 @@ async function callOpenAIResponsesStream(
       try {
         const parsed: unknown = JSON.parse(data);
         if (!isRecord(parsed)) continue;
+        const failure = extractResponsesStreamFailure(parsed, provider.apiKey);
+        if (failure) {
+          return {
+            translatedText: translatedText.trim(),
+            error: failure,
+            errorType: 'unreachable',
+          };
+        }
         if (parsed.type === 'response.completed') break;
         if (
           parsed.type === 'response.output_text.delta'
