@@ -13,6 +13,8 @@ import { runPool, retrySegments } from './translate-pool';
 import {
   applyReplace,
   applyBilingual,
+  markLoading,
+  clearLoadingMark,
   markFailed,
   clearFailedMark,
   switchMode,
@@ -108,6 +110,8 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     onRecall: handleRecall,
   });
   toolbar.setMode(mode);
+  markSegmentsLoading(records);
+  updateProgress();
 
   await runPool(records, {
     targetLang,
@@ -128,11 +132,16 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
  * 池逐段 settle 回调：
  * - 恢复原文后（active=false）不渲染已返回段（防译文闪回）
  * - 元素已被宿主移除（isConnected=false）→ 丢弃不渲染
- * - done → 按当前模式渲染；failed → 失败标记 + 更新工具栏计数；translating → no-op
+ * - done → 按当前模式渲染；failed → 失败标记 + 更新工具栏计数；translating → 仅更新进度
  */
 function handleSettled(seg: SegmentRecord): void {
+  if (seg.status === 'translating') {
+    updateProgress();
+    return;
+  }
+  clearLoadingMark(seg);
+  updateProgress();
   if (!active) return;
-  if (seg.status === 'translating') return;
   if (!seg.el.isConnected) return;
   if (seg.status === 'done') {
     if (mode === 'replace') {
@@ -144,6 +153,25 @@ function handleSettled(seg: SegmentRecord): void {
     markFailed(seg);
     updateFailureCount();
   }
+}
+
+/** 为本轮所有待处理分段挂载加载标记。 */
+function markSegmentsLoading(segments: SegmentRecord[]): void {
+  for (const seg of segments) {
+    markLoading(seg);
+  }
+}
+
+/** 从唯一状态 records 派生聚合进度并同步工具栏。 */
+function updateProgress(): void {
+  const completed = records.filter(
+    (seg) => seg.status === 'done' || seg.status === 'failed',
+  ).length;
+  const failed = records.filter((seg) => seg.status === 'failed').length;
+  const activeProgress = records.some(
+    (seg) => seg.status === 'pending' || seg.status === 'translating',
+  );
+  toolbar?.setProgress({ completed, total: records.length, failed, active: activeProgress });
 }
 
 /** 统计当前失败段数并同步工具栏（>0 显示重试按钮，=0 隐藏） */
@@ -182,6 +210,8 @@ async function handleRetry(): Promise<void> {
   for (const seg of failedSegs) {
     clearFailedMark(seg);
   }
+  markSegmentsLoading(failedSegs);
+  updateProgress();
   // retrySegments 重置段状态后复用池逻辑；onSettled 的 active 校验保证恢复后不误渲染，
   // 翻译仍完成并写入缓存（有利于再次触发时秒级渲染）
   await retrySegments(failedSegs, {
@@ -191,6 +221,7 @@ async function handleRetry(): Promise<void> {
     onSettled: handleSettled,
   });
   updateFailureCount();
+  updateProgress();
 }
 
 /** 工具栏回调：收起（toolbar 已自动 collapse；预留暂停观察器扩展位） */
@@ -276,6 +307,8 @@ async function flushAddedNodes(): Promise<void> {
     }
     if (active && newSegments.length > 0) {
       records.push(...newSegments);
+      markSegmentsLoading(newSegments);
+      updateProgress();
       await runPool(newSegments, {
         targetLang,
         concurrency: 3,

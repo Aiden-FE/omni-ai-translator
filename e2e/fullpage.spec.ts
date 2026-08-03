@@ -64,8 +64,8 @@ async function configureMockProvider(context: BrowserContext, extensionId: strin
   // 填写配置(最后一张卡片)
   const card = optionsPage.locator('.provider-card').last();
   await card.locator('input[placeholder="名称"]').fill('fullpage-mock');
-  // BaseURL 需填完整接口路径(契约变更后代码不再追加 path)
-  await card.getByTestId('base-url').fill(`${mockUrl}${CHAT_ROUTE}`);
+  // Chat Completions 使用协议根路径，由适配层补全 /chat/completions。
+  await card.getByTestId('base-url').fill(`${mockUrl}/v1`);
   await card.locator('input[placeholder="模型名"]').fill('mock-model');
 
   // 启用该提供方(排他:成为唯一 active source)
@@ -134,6 +134,14 @@ test('替换模式触发全文翻译,段落渐进渲染', async ({ context, exte
   const page = await openTestPage(context);
   await triggerFullpageTranslate(context, 'replace');
 
+  // 首个 300ms 延迟响应返回前，全部分段已同步进入 loading，聚合进度从 0/9 开始。
+  const loadingHosts = page.locator('.llm-translator-loading-host');
+  const progress = page.locator('.llm-translator-toolbar-progress');
+  await Promise.all([
+    expect(loadingHosts).toHaveCount(INITIAL_REQUEST_COUNT),
+    expect(progress).toContainText('全文翻译 0/9'),
+  ]);
+
   // 相对时序断言:第 2 批的 #para-1 已译出时,第 3 批的 #para-4 仍是原文(依赖 mock 300ms 延迟)。
   // 第一条等待至译出即返回,第二条此刻立即命中原文;若时序被打破第二条会 polling 超时失败(自校验)。
   await expect(page.locator('#para-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
@@ -146,6 +154,8 @@ test('替换模式触发全文翻译,段落渐进渲染', async ({ context, exte
   await expect(page.locator('nav a').first()).toHaveText(MOCK_TRANSLATION);
   await expect(page.locator('footer')).toHaveText(MOCK_TRANSLATION);
   await expect(page.locator('#add-paragraph')).toHaveText(MOCK_TRANSLATION);
+  await expect(progress).toContainText('全文翻译完成 9/9');
+  await expect(loadingHosts).toHaveCount(0);
 
   // 工具栏出现(替换模式下切换按钮提示「切换为双语对照」)
   await expect(page.getByRole('button', { name: '切换为双语对照' })).toBeVisible();

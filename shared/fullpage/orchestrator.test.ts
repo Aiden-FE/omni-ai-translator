@@ -20,9 +20,9 @@ type TranslateImpl = (text: string) => TranslateResponse | Promise<TranslateResp
 
 const defaultTranslate: TranslateImpl = (text) => ({ translatedText: `[译] ${text}` });
 
-/** 工具栏宿主选择器：排除双语块与失败标记宿主（三者均带 data-llm-translator） */
+/** 工具栏宿主选择器：排除双语块、加载标记与失败标记宿主 */
 const TOOLBAR_HOST_SELECTOR =
-  '[data-llm-translator]:not(.llm-translator-block-host):not(.llm-translator-failed-host)';
+  '[data-llm-translator]:not(.llm-translator-block-host):not(.llm-translator-loading-host):not(.llm-translator-failed-host)';
 
 /** Mock browser 全局：runtime.sendMessage（翻译池）+ storage.local.get（目标语言设置） */
 function setupBrowser(translateImpl: TranslateImpl = defaultTranslate) {
@@ -74,6 +74,10 @@ function getToolbarHost(): HTMLElement {
 
 function getToolbarShadow(): ShadowRoot {
   return getToolbarHost().shadowRoot!;
+}
+
+function toolbarText(): string {
+  return getToolbarShadow().querySelector('.llm-translator-toolbar-progress')?.textContent ?? '';
 }
 
 function clickToolbarButtonByText(text: string): void {
@@ -179,6 +183,7 @@ describe('start - 基本流程', () => {
     expect(__getState().records).toHaveLength(0);
     expect(sendMessage).not.toHaveBeenCalled();
     expect(getToolbarHost()).toBeInstanceOf(HTMLElement);
+    expect(toolbarText()).toContain('未发现可翻译文本');
   });
 
   it('空页面重复触发：不产生重复工具栏', async () => {
@@ -211,6 +216,53 @@ describe('start - 基本流程', () => {
     expect(document.querySelectorAll(TOOLBAR_HOST_SELECTOR)).toHaveLength(1);
     expect(__getState().mode).toBe('bilingual');
     expect(document.querySelector('.llm-translator-block-host')).not.toBeNull();
+  });
+});
+
+describe('loading 标记与聚合进度', () => {
+  it('初始队列立即显示全部 loading，逐段完成时更新进度并清除对应标记', async () => {
+    document.body.innerHTML = '<p>first text</p><p>second text</p>';
+    let resolveFirst!: (value: TranslateResponse) => void;
+    let resolveSecond!: (value: TranslateResponse) => void;
+    const firstGate = new Promise<TranslateResponse>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const secondGate = new Promise<TranslateResponse>((resolve) => {
+      resolveSecond = resolve;
+    });
+    setupBrowser((text) => (text === 'first text' ? firstGate : secondGate));
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(2);
+    expect(toolbarText()).toContain('全文翻译 0/2');
+
+    resolveFirst({ translatedText: '第一段' });
+    await drainMicrotasks();
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+    expect(toolbarText()).toContain('全文翻译 1/2');
+
+    resolveSecond({ translatedText: '第二段' });
+    await startPromise;
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(0);
+    expect(toolbarText()).toContain('全文翻译完成 2/2');
+  });
+
+  it('部分失败也计入完成进度并呈现失败终态', async () => {
+    document.body.innerHTML = '<p>good text</p><p>bad text</p>';
+    setupBrowser((text) =>
+      text === 'bad text'
+        ? { error: 'boom', errorType: 'network' }
+        : { translatedText: '成功译文' },
+    );
+
+    await start('replace');
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(0);
+    expect(toolbarText()).toContain('已完成 2/2，失败 1');
   });
 });
 
@@ -288,12 +340,19 @@ describe('工具栏回调', () => {
     expect(state.cache.size).toBe(1);
   });
 
-  it('onRetry：清除失败标记、重跑池、成功渲染并更新 failureCount', async () => {
+  it('onRetry：失败段立即重新显示 loading，成功后渲染并更新进度', async () => {
     document.body.innerHTML = '<p>good text</p><p>bad text</p>';
     let failBad = true;
+    let resolveRetry!: (value: TranslateResponse) => void;
+    const retryGate = new Promise<TranslateResponse>((resolve) => {
+      resolveRetry = resolve;
+    });
     const { sendMessage } = setupBrowser((text) => {
       if (text === 'bad text' && failBad) {
         return { error: 'boom', errorType: 'network' };
+      }
+      if (text === 'bad text') {
+        return retryGate;
       }
       return { translatedText: `[译] ${text}` };
     });
@@ -309,9 +368,17 @@ describe('工具栏回调', () => {
     retryBtn.click();
     await drainMicrotasks();
 
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+    expect(toolbarText()).toContain('全文翻译 1/2');
+
+    resolveRetry({ translatedText: '[译] bad text' });
+    await drainMicrotasks();
+
     // 失败标记清除、重试按钮隐藏、译文渲染
     expect(document.querySelector('.llm-translator-failed-host')).toBeNull();
+    expect(document.querySelector('.llm-translator-loading-host')).toBeNull();
     expect(retryBtn.hidden).toBe(true);
+    expect(toolbarText()).toContain('全文翻译完成 2/2');
     const ps = document.querySelectorAll('p');
     expect(ps[0].textContent).toBe('[译] good text');
     expect(ps[1].textContent).toBe('[译] bad text');
@@ -332,9 +399,13 @@ describe('onSettled 守卫', () => {
     const startPromise = start('replace');
     await drainMicrotasks();
 
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+    expect(toolbarText()).toContain('全文翻译 0/1');
+
     // 翻译在途时恢复原文
     clickToolbarButtonByText('恢复原文');
     expect(__getState().active).toBe(false);
+    expect(document.querySelectorAll('[data-llm-translator]')).toHaveLength(0);
 
     resolveGate({ translatedText: '[译] slow text' });
     await startPromise;
@@ -342,6 +413,7 @@ describe('onSettled 守卫', () => {
     // 段状态仍推进为 done（缓存已写入），但 DOM 不渲染译文
     expect(__getState().records[0].status).toBe('done');
     expect(document.querySelector('p')!.textContent).toBe('slow text');
+    expect(document.querySelectorAll('[data-llm-translator]')).toHaveLength(0);
   });
 
   it('翻译返回时元素已被宿主移除 → 丢弃不渲染', async () => {
@@ -389,6 +461,32 @@ describe('增量翻译（MutationObserver + 200ms 防抖）', () => {
     });
     expect(p.textContent).toBe('[译] dynamic text');
     expect(__getState().records).toHaveLength(2);
+  });
+
+  it('新增节点入队后立即显示 loading，并把动态段计入总进度', async () => {
+    document.body.innerHTML = '<p>initial text</p>';
+    let resolveDynamic!: (value: TranslateResponse) => void;
+    const dynamicGate = new Promise<TranslateResponse>((resolve) => {
+      resolveDynamic = resolve;
+    });
+    setupBrowser((text) =>
+      text === 'dynamic text' ? dynamicGate : { translatedText: '[译] initial text' },
+    );
+    await start('replace');
+
+    const p = document.createElement('p');
+    p.textContent = 'dynamic text';
+    document.body.appendChild(p);
+    await flushObserver();
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+    expect(toolbarText()).toContain('全文翻译 1/2');
+
+    resolveDynamic({ translatedText: '[译] dynamic text' });
+    await drainMicrotasks();
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(0);
+    expect(toolbarText()).toContain('全文翻译完成 2/2');
   });
 
   it('双语模式下新增节点 → 渲染双语块、原文保留', async () => {
