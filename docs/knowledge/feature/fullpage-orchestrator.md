@@ -10,6 +10,7 @@ sources:
   - shared/fullpage/orchestrator.test.ts
   - entrypoints/fullpage.content.ts
   - docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md
+  - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
 related:
   - feature:fullpage:segmenter-pool
   - feature:fullpage:command-channel
@@ -125,6 +126,21 @@ handleSettled(seg):
 
 **复用场景**：任何异步操作（翻译、数据加载）的回调需要防「操作完成时上下文已失效」的场景，可复用此「入口级 isActive 守卫 + 回调级 active/isConnected 双重校验」模式。
 
+### 范式 5：Shadow DOM + 自足样式隔离（跨模块复用）
+
+编排器组合的 t3 渲染器（`renderer.ts`）与 t4 工具栏所有注入 DOM（译文块、失败徽标、工具栏）均走 `attachShadow({ mode: 'open' })` + shadow 内 `<style>` 注入自足样式，显式重置继承属性规避宿主页面 CSS 穿透。详细实现与样式约定见 `feature:fullpage:segmenter-pool` 的「Shadow DOM 隔离与自足样式」节。审查（REVIEW.md §4.1）确认 Shadow DOM 边界有效（宿主 CSS 无法穿透），同时发现 2 处继承属性重置缺口（工具栏按钮 `font-weight` 未设、`letter-spacing`/`text-transform`/`white-space` 未重置），属低影响改进项。此模式是编排器组合的组件层设计范式之一，后续 content script 注入类功能均可复用。
+
+## 审查验证（REVIEW.md）
+
+v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心设计范式逐项确认：
+
+- **验证门禁全绿**：typecheck ✓ / lint ✓ / 309 单测 ✓ / 15 e2e ✓（7 划词 + 8 全文翻译）/ Chrome MV3 + Firefox MV2 构建 ✓。
+- **范式 1（编排器组合无状态组件）**：§4.3 确认组件可独立测试，编排器经 `__reset()`/`__getState()` 隔离；状态流转集中可追踪。
+- **范式 2（并发重入守卫）**：§4.4 确认 `startInFlight` 守卫有效，连点不并发执行。
+- **范式 3（增量翻译防抖管线）**：§4.3 确认 200ms 防抖 + `isFlushing` 并发守卫 + `data-llm-translator` 过滤防回环 + `recordedEls` 去重 + 错误隔离均正确；MutationObserver 不重复创建（`if (observer) return` 守卫），`handleRestore` 调 `stopObserver`（disconnect + 清 timer + 清 pendingAddedNodes）。
+- **范式 4（防闪回双保险）**：§4.3/§4.4 确认池级 `isActive` 在派发新段前检查，`handleSettled` 中 `active` + `seg.el.isConnected` 双重校验；恢复后 `active = false` 阻止新段派发与已返回段渲染；`toolbar.destroy` 幂等（`destroyed` 标志位守卫），无闭包泄漏。
+- **验收标准 1-12**：1-10、12 完全达成；11 基本达成（强样式页面人工验证待执行）。
+
 ## start(mode) 状态流转
 
 ### 复用路径（零 API）
@@ -173,6 +189,7 @@ handleSettled(seg):
 
 - 大页面（上千段）首帧收集为同步遍历，已注释标注后续 `requestIdleCallback` 分片优化点。
 - 观察器启动时机为 `await runPool` 之后（v0.4 顺序）：翻译期间的新增内容靠启动后 mutation 补偿，存在理论窗口期，后续可提前启动观察器。
+- **retrySegments 不支持 isActive 中止（REVIEW.md S3）**：`handleRetry` 调用 `retrySegments` 时未传 `isActive`，恢复原文期间已派发段仍会完成翻译（写入缓存）。`handleSettled` 的 `active` 校验确保不误渲染（无闪回），`toolbar` 为 null 后 `updateFailureCount` 为 no-op，无 DOM 损坏。DESIGN.md 已记录此设计权衡（翻译仍完成并写入缓存有利于再次触发秒级渲染）；若后续优化可为 `retrySegments` 补充 `isActive` 支持。
 - e2e（Playwright）已补齐全文翻译链路（v0.4.0）：`e2e/fullpage.spec.ts` 8 用例覆盖验收标准 1-11（渐进渲染 / 双语 / 切换免重译 / 恢复 / 失败重试 / 增量 / 缓存 / 工具栏 UX）。触发与断言技术见 `runbook:e2e:fullpage-trigger-assertions`，mock 契约见 `feature:fullpage:e2e-mock-contract`。
 
 ## 来源证据
@@ -181,3 +198,4 @@ handleSettled(seg):
 - `shared/fullpage/orchestrator.test.ts`：472 行 / 20 个单元测试（jsdom + fake timers），覆盖类型守卫、replace/bilingual 基本流程、空页面、重复触发不重复建栏、并发 start 守卫、复用路径（验收标准 10）、恢复后 cache 命中、工具栏回调（switchMode/restore/retry）、onSettled 防闪回与元素移除守卫、增量翻译（验收标准 9：新增节点翻译、过滤注入子树、防回环、recordedEls 去重、恢复后观察器断开）。
 - `entrypoints/fullpage.content.ts`：`defineContentScript({ matches: ['<all_urls>'] })` + `runtime.onMessage` + `isBackgroundCommand` 守卫 + `start(msg.mode)` 调用 + catch console.warn。
 - `docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md`：编排器状态机总体架构、模块级状态表、start 流程、onSettled 回调、工具栏回调接线表、增量翻译设计、isActive 中止、关键设计权衡（模块级状态 vs 工厂函数、retrySegments vs runPool、observer 启动时机、复用路径不重建 toolbar）、边界与风险。
+- `docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md`：§4.3 资源与生命周期（MutationObserver 不重复创建、isActive 中止、toolbar.destroy 幂等、防抖管线、无闭包泄漏）、§4.4 并发与错误路径（并发≤3、sendMessage 契约、失败收集/重试/计数一致、SW 回收容错）、S3 retrySegments isActive 设计权衡、验收标准 1-12 逐条确认。

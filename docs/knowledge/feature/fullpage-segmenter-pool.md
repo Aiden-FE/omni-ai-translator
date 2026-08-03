@@ -3,7 +3,7 @@ id: feature:fullpage:segmenter-pool
 type: feature
 status: active
 owner: project
-updated: 2026-07-30
+updated: 2026-08-03
 confidence: 0.9
 sources:
   - shared/fullpage/types.ts
@@ -11,6 +11,7 @@ sources:
   - shared/fullpage/translate-pool.ts
   - shared/fullpage/renderer.ts
   - assets/fullpage-block.css
+  - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
 related:
   - feature:fullpage:command-channel
   - feature:translator:unified-adapter
@@ -73,6 +74,8 @@ related:
 ### 段 ID 唯一性
 
 `id = buildDomPath(el):hashText(text)`：DOM 路径逐层带「同标签兄弟序号」（如 `html[0]/body[0]/p[1]`），保证不同元素路径唯一；文本哈希为确定性 32 位 -> base36。初稿用 `tagName:preview:childCount` 会对重复文本元素（如多个 `<li>item</li>`）碰撞并误去重，已修正为 DOM 路径方案并移除去重逻辑。
+
+> **审查备注（REVIEW.md S6）**：`CODE` 同时存在于 `BLOCK_TAGS` 和 `INLINE_TAGS` 中。`isBlockElement` 先于 `isInlineElement` 检查（`||` 短路），CODE 实际被当作块级处理，功能正确但语义冗余。建议从 `INLINE_TAGS` 中移除 `CODE` 或添加注释说明 `PRE > CODE` 场景下 CODE 作为块级的意图。
 
 ### 剪枝规则（整棵子树不递归）
 
@@ -157,7 +160,7 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 - 译文块与失败徽标均走 `attachShadow({ mode: 'open' })`，宿主页面 CSS 无法穿透 shadow 边界。
 - shadow 根内 `<style>` 注入 `assets/fullpage-block.css`（经 `?inline` 导入为字符串），样式自足不依赖继承值。
-- **显式重置继承属性**：规避宿主页面继承属性（`color` / `font-family` / `font-size` / `line-height` 等）穿透 shadow 边界的坑——所有继承属性在 `.llm-translator-block-content` / `.llm-translator-failed-badge` 上显式声明，不依赖宿主继承。
+- **显式重置继承属性**：规避宿主页面继承属性（`color` / `font-family` / `font-size` / `line-height` / `font-weight` 等）穿透 shadow 边界的坑--`.llm-translator-block-content` / `.llm-translator-failed-badge` 上显式声明全部关键继承属性。**审查发现 2 处缺口（REVIEW.md S1/S2，低影响）**：工具栏按钮 `.llm-translator-toolbar-btn` 未设 `font-weight`（全局粗体页面会继承 700）；toolbar 与 block 的 `:host` 未重置 `letter-spacing` / `text-transform` / `white-space`（极端样式页面影响排版美观但不影响可读性）。建议后续在 `:host` 上补 `font-weight: 400; letter-spacing: normal; text-transform: none; white-space: normal;`。
 - 译文块视觉：暖底（`hsl(40 60% 96%)`）+ 左侧 teal 竖条（`hsl(174 84% 27%)`）+ 圆角区分；`:host` 默认 `display: block; margin: 6px 0`。
 - 失败徽标：`:host(.llm-translator-failed-host)` 设为 `display: inline-block`，行内 `⚠` + 虚线底边，不占整行。
 - 后续 content script 注入 DOM 隔离场景可复用此模式。

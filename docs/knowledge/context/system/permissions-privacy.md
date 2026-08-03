@@ -10,6 +10,7 @@ sources:
   - shared/storage.ts
   - shared/translator/builtin-sources.ts
   - knowledges/context/development/extension-permissions-and-privacy.md
+  - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
 related:
   - context:system:plugin-architecture
   - context:development:coding-standard
@@ -56,6 +57,7 @@ related:
 ## 待办（合规同步）
 
 - `releases/v0.3/4-listing-compliance/PERMISSIONS-JUSTIFICATION.md` 的 `contextMenus` 条目仍标记「已移除」（v0.3 #64 合规材料），与 v0.4.0 基线不一致；需后续任务补充 contextMenus 用途说明（Chrome Web Store 审核质询预案）。该文件不在本知识库写入边界内，此处仅登记。
+- **审查确认（REVIEW.md B1）**：v0.4.0 审查确认 `contextMenus` 权限代码实现正确（background `onInstalled` 创建菜单 + `onClicked` 下发 `BackgroundCommand`），Chrome MV3 + Firefox MV2 manifest 均含 `contextMenus` + 双 content script。B1 仅涉及合规文档同步，非代码缺陷，阻塞发版。
 
 ## 来源证据
 

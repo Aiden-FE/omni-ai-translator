@@ -8,6 +8,7 @@ confidence: 0.9
 sources:
   - e2e/fullpage.spec.ts
   - docs/iterations/v0.4.0/tasks/9d51a89a-b934-4765-a570-7dd583d37717/DESIGN.md
+  - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
 related:
   - feature:fullpage:e2e-mock-contract
   - feature:fullpage:command-channel
@@ -86,7 +87,17 @@ await expect(page.locator('#para-4')).toHaveText(PARA4_ORIGINAL);
 - 任何需要断言「渐进 / 分批渲染」的 e2e（流式输出、并发批处理 UI），复用「先行元素已完成 && 后行元素未完成」的相对时序断言替代绝对时间。
 - 新增权限相关的 e2e 排查：先核对 manifest 权限对 `chrome.tabs.*` 返回字段的影响，再设计页签定位策略。
 
+## 审查验证（REVIEW.md）
+
+v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）确认：
+
+- **15 e2e 全绿**（7 划词 + 8 全文翻译），覆盖验收标准 1-11。
+- **技术 1（SW 广播触发）**：§4.5 确认 `contextMenus` 权限正确（manifest 含 `contextMenus` + 双 content script），Firefox MV2 兼容（`browser.contextMenus` 原生支持）。
+- **技术 2（相对时序断言）**：验收标准 2 确认--`#para-1` 译出时 `#para-4` 仍原文（相对时序断言自校验通过）。
+- **shadow DOM 断言**：验收标准 4（双语对照）、8（失败徽标）均通过 `getByRole` + `expect.poll` shadow 穿透断言。
+
 ## 来源证据
 
 - `e2e/fullpage.spec.ts`：`triggerFullpageTranslate`（SW 查找 / waitForEvent 兜底 / 广播 / allSettled / 0 送达抛错）、用例 1 相对时序断言（`#para-1` vs `#para-4`）、`waitForReplaceSettled` 批次归纳等待、shadow DOM 断言（getByRole / expect.poll）。
 - `docs/iterations/v0.4.0/tasks/9d51a89a-b934-4765-a570-7dd583d37717/DESIGN.md`：§2.3 相对时序断言决策与被否决方案（绝对时间）、§2.4 触发通道修正经过（Tab.url 剥离 → 广播落地）与风险对策。
+- `docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md`：§4.5 兼容性（contextMenus 权限 + Firefox MV2 + Shadow DOM 支持）、验收标准 1-3（渐进渲染时序）、4（双语对照 shadow 断言）、8（失败徽标 shadow 断言）逐条确认。
