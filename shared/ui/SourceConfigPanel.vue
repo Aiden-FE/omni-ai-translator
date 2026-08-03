@@ -54,6 +54,8 @@ const LLM_PROTOCOLS: LlmProtocol[] = [
 ];
 
 const KNOWN_DEFAULT_BASE_URLS = new Set([
+  'https://api.openai.com',
+  'https://api.anthropic.com',
   ...Object.values(DEFAULT_BASE_URL),
   ...LLM_PROTOCOLS.flatMap((protocol) => {
     const baseUrl = DEFAULT_LLM_BASE_URL_BY_PROTOCOL[protocol];
@@ -61,6 +63,14 @@ const KNOWN_DEFAULT_BASE_URLS = new Set([
   }),
 ]);
 const FALLBACK_SOURCE_ID = DEFAULT_ACTIVE_SOURCE_ID;
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, '');
+}
+
+function isKnownDefaultBaseUrl(baseUrl: string): boolean {
+  return KNOWN_DEFAULT_BASE_URLS.has(normalizeBaseUrl(baseUrl));
+}
 
 function isLlmType(type: ProviderType): boolean {
   return type === 'llm';
@@ -185,7 +195,7 @@ async function activate(id: string) {
 }
 
 async function onTypeChange(p: ProviderConfig) {
-  if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
+  if (isKnownDefaultBaseUrl(p.baseUrl)) {
     p.baseUrl = DEFAULT_BASE_URL[p.type];
   }
   if (p.type !== 'llm') {
@@ -209,7 +219,7 @@ function responseStyleHint(style: NonNullable<ProviderConfig['responseStyle']>):
 
 async function onResponseStyleChange(p: ProviderConfig, style: LlmProtocol) {
   p.responseStyle = style;
-  if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
+  if (isKnownDefaultBaseUrl(p.baseUrl)) {
     p.baseUrl = DEFAULT_LLM_BASE_URL_BY_PROTOCOL[style];
   }
   const next = { ...testMsgs.value };

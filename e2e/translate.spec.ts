@@ -146,6 +146,32 @@ test('OpenAI Responses 使用 Base URL 连通并以 input 字段完成划词翻�
   });
 });
 
+test('切换协议时将带尾斜杠的已知完整端点重置为 Base URL', async ({ context, extensionId }) => {
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const card = optionsPage.locator('.provider-card').last();
+  const baseUrl = card.getByTestId('base-url');
+  await baseUrl.fill('https://api.openai.com/v1/chat/completions/');
+  await card.getByRole('radio', { name: 'OpenAI Responses' }).check();
+
+  await expect(baseUrl).toHaveValue('https://api.openai.com/v1');
+});
+
+test('切换协议时将旧版已知 OpenAI 根地址重置为目标协议 Base URL', async ({ context, extensionId }) => {
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const card = optionsPage.locator('.provider-card').last();
+  const baseUrl = card.getByTestId('base-url');
+  await baseUrl.fill('https://api.openai.com');
+  await card.getByRole('radio', { name: 'Anthropic Messages' }).check();
+
+  await expect(baseUrl).toHaveValue('https://api.anthropic.com/v1');
+});
+
 test('microsoft 有 Key 源启用后,划词翻译落到官方端点并携带 region', async ({ context, extensionId }) => {
   // 1. 通过 options 页配置 microsoft 有 Key 提供方并启用
   const optionsPage = await context.newPage();
