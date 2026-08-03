@@ -23,3 +23,21 @@
 - `pnpm typecheck`（vue-tsc --noEmit）：通过。
 - `pnpm lint`（eslint）：净。
 - `pnpm build`（wxt build chrome-mv3）：成功。
+
+## 知识沉淀
+
+本次任务完成后，将分段收集器与并发翻译池的领域模型与接口契约沉淀为长期知识。
+
+| 候选 | 映射知识 ID | 类型 |
+|---|---|---|
+| candidate 0 | `feature:fullpage:segmenter-pool` | feature |
+
+**知识内容**：`SegmentRecord` 结构（`textNodes` 保存直接子文本节点供替换模式保留行内子元素）、缓存 key 格式（`${targetLang}\u0000${originalText}`）、并发池中止机制（`AbortSignal` / `isActive`）、`data-llm-translator` 排除约定、会话级缓存 Map 持有模式。
+
+**复用场景**：后续 t3 渲染器与 t5 编排器实现全文翻译时，需消费 `SegmentRecord.el` / `textNodes` / `blockHost`、`collectSegments` / `runPool` / `retrySegments` 接口、`data-llm-translator` 排除约定、会话级缓存 Map 持有模式。
+
+**更新文件**：
+- 新增 `docs/knowledge/feature/fullpage-segmenter-pool.md`（正文）。
+- 更新 `docs/knowledge/feature/index.md`（分类索引 + related 交叉引用）。
+- 更新 `docs/knowledge/index.md`（根索引知识清单）。
+- 更新 `docs/knowledge/feature/fullpage-command-channel.md`（related 交叉引用）。

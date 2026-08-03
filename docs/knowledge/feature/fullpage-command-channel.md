@@ -14,6 +14,7 @@ related:
   - context:system:permissions-privacy
   - context:system:plugin-architecture
   - feature:translator:unified-adapter
+  - feature:fullpage:segmenter-pool
 ---
 
 # 全文翻译入口与命令通道（v0.4.0）
