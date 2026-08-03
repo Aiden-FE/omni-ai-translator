@@ -1,0 +1,44 @@
+/* 全文翻译双语译文块与失败标记样式（注入 Shadow DOM，自足不依赖宿主继承值） */
+/* 规避 PR #46 踩过的「宿主继承属性穿透 shadow 边界」坑：所有继承属性显式重置 */
+
+:host {
+  display: block;
+  margin: 6px 0;
+}
+
+/* 失败标记宿主：行内徽标，不占整行 */
+:host(.llm-translator-failed-host) {
+  display: inline-block;
+  margin: 0 0 0 4px;
+  vertical-align: baseline;
+}
+
+/* 双语译文块内容容器 - 显式重置 color/font-family/font-size/line-height/background/border-radius/padding */
+/* 暖底 + 左侧 teal（174 84% 27%）竖条/圆角做视觉区分 */
+.llm-translator-block-content {
+  color: hsl(195 62% 16%);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.6;
+  background: hsl(40 60% 96%);
+  border-left: 3px solid hsl(174 84% 27%);
+  border-radius: 0 6px 6px 0;
+  padding: 8px 12px;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+/* 失败标记小徽标（⚠ + 虚线底边） */
+.llm-translator-failed-badge {
+  display: inline-block;
+  color: hsl(0 70% 45%);
+  font-size: 13px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 600;
+  line-height: 1;
+  border-bottom: 1px dashed hsl(0 70% 50%);
+  padding-bottom: 1px;
+  user-select: none;
+  cursor: default;
+}

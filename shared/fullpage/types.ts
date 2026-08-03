@@ -19,8 +19,12 @@ export interface SegmentRecord {
   status: SegmentStatus;
   /** 错误类型（仅 status=failed 时存在） */
   errorType?: string;
+  /** 渲染前各文本节点的原始 data 快照（供逐字节恢复原文，含原始空白；首次渲染时由渲染器写入） */
+  originalTextNodesData?: string[];
   /** 用于 t3 渲染器挂载双语译文块的 host 元素 */
   blockHost?: HTMLElement;
+  /** 失败标记徽标宿主元素（markFailed 挂载，clearFailedMark/restoreAll 移除） */
+  failedMarkHost?: HTMLElement;
 }
 
 /** 分段收集选项 */

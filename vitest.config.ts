@@ -6,6 +6,9 @@ export default defineConfig({
   test: {
     include: ['shared/**/*.test.ts'],
     globals: true,
+    // 启用 CSS 处理：renderer.ts 以 ?inline 导入 fullpage-block.css 字符串注入 shadow root，
+    // vitest 默认 css:false 会 stub 为空串，需开启才能在测试中拿到实际 CSS 内容。
+    css: true,
   },
   resolve: {
     alias: {
