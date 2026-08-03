@@ -1,0 +1,157 @@
+/* 全文翻译工具栏与迷你把手样式（注入 Shadow DOM，自足不依赖宿主继承值） */
+/* 显式重置继承属性：规避宿主页面 color/font-family/font-size 等穿透 shadow 边界 */
+/* 沿用 --translator-* token 风格，在 :host 上自足定义（不依赖宿主文档 :root） */
+
+:host {
+  /* token 自足定义（与 content.css --translator-* 一致命名/取值） */
+  --translator-toolbar-bg: 195 62% 16%;
+  --translator-toolbar-fg: 40 100% 97%;
+  --translator-toolbar-hover: 40 100% 97%;
+  --translator-trigger-bg: 174 84% 27%;
+  --translator-trigger-hover: 174 88% 22%;
+  --translator-trigger-fg: 0 0% 100%;
+  --translator-danger: 0 70% 50%;
+  --translator-radius: 8px;
+
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+
+  /* 显式重置继承属性 */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: hsl(var(--translator-toolbar-fg));
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* ---- 工具栏容器 ---- */
+.llm-translator-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  max-width: 220px;
+  padding: 8px;
+  background: hsl(var(--translator-toolbar-bg));
+  border-radius: var(--translator-radius);
+  box-shadow: 0 8px 24px hsl(196 72% 12% / 0.28);
+}
+
+/* ---- 迷你把手（默认隐藏，收起状态显示） ---- */
+.llm-translator-mini-handle {
+  display: none;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--translator-trigger-bg));
+  color: hsl(var(--translator-trigger-fg));
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: 9999px;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 8px 20px hsl(174 84% 20% / 0.32);
+  transition: background 0.15s ease;
+}
+
+/* ---- 收起状态：隐藏工具栏，显示迷你把手 ---- */
+:host([data-collapsed]) .llm-translator-toolbar {
+  display: none;
+}
+
+:host([data-collapsed]) .llm-translator-mini-handle {
+  display: flex;
+}
+
+/* ---- 按钮 ---- */
+.llm-translator-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 10px;
+  background: transparent;
+  color: hsl(var(--translator-toolbar-fg));
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.4;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  text-align: left;
+  transition: background 0.15s ease;
+}
+
+.llm-translator-toolbar-btn:hover {
+  background: hsl(var(--translator-toolbar-hover) / 0.12);
+}
+
+.llm-translator-toolbar-btn:active {
+  background: hsl(var(--translator-toolbar-hover) / 0.2);
+}
+
+.llm-translator-toolbar-btn:focus-visible {
+  outline: 2px solid hsl(var(--translator-trigger-fg));
+  outline-offset: 2px;
+}
+
+/* ---- 切换模式按钮：teal 强调底 ---- */
+.llm-translator-toolbar-switch {
+  background: hsl(var(--translator-trigger-bg));
+  color: hsl(var(--translator-trigger-fg));
+}
+
+.llm-translator-toolbar-switch:hover {
+  background: hsl(var(--translator-trigger-hover));
+}
+
+.llm-translator-toolbar-switch:active {
+  background: hsl(var(--translator-trigger-hover));
+}
+
+/* ---- 重试按钮：默认隐藏 ---- */
+.llm-translator-toolbar-retry[hidden] {
+  display: none;
+}
+
+/* ---- 重试计数徽标 ---- */
+.llm-translator-retry-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  background: hsl(var(--translator-danger));
+  color: hsl(0 0% 100%);
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 9999px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* ---- 迷你把手交互 ---- */
+.llm-translator-mini-handle:hover {
+  background: hsl(var(--translator-trigger-hover));
+}
+
+.llm-translator-mini-handle:active {
+  background: hsl(var(--translator-trigger-hover));
+}
+
+.llm-translator-mini-handle:focus-visible {
+  outline: 2px solid hsl(var(--translator-trigger-fg));
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-translator-toolbar-btn,
+  .llm-translator-mini-handle {
+    transition: none;
+  }
+}
