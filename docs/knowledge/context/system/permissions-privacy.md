@@ -3,7 +3,7 @@ id: context:system:permissions-privacy
 type: context
 status: draft
 owner: project
-updated: 2026-07-30
+updated: 2026-08-03
 confidence: 0.85
 sources:
   - wxt.config.ts
@@ -15,6 +15,7 @@ related:
   - context:development:coding-standard
   - product:overview
   - feature:fullpage:command-channel
+  - runbook:e2e:fullpage-trigger-assertions
 ---
 
 # 扩展权限基线与隐私数据流（初始化草稿）
@@ -26,7 +27,8 @@ related:
 - `permissions: ['storage', 'contextMenus']` — 三浏览器一致（写入共用 `baseManifest.permissions`，WXT 自动处理 Firefox MV2 归并）。
   - `storage` — 存储用户配置与 API Key（`chrome.storage.local`）。
   - `contextMenus` — **v0.4.0 重新引入**（v0.3 #64 曾因未使用移除）。用于全文翻译右键菜单入口：background 在 `runtime.onInstalled` 内创建菜单（父项「全文翻译」+ 两个模式子项，`contexts: ['page']`），`contextMenus.onClicked` 触发后经 `browser.tabs.sendMessage` 下发 `BackgroundCommand` 给目标页 content script。契约详见 `feature:fullpage:command-channel`。
-- `activeTab` — 已移除（v0.3.1）。划词靠 content script 在页面上下文内 `window.getSelection()` 读取选中文本，不需要 activeTab。注意：v0.4.0 起 background 存在 `browser.tabs.sendMessage` 调用（下发全文翻译命令），但该 API 仅需目标 tab id，不依赖 activeTab 或 `tabs` 权限。
+- `activeTab` - 已移除（v0.3.1）。划词靠 content script 在页面上下文内 `window.getSelection()` 读取选中文本，不需要 activeTab。注意：v0.4.0 起 background 存在 `browser.tabs.sendMessage` 调用（下发全文翻译命令），但该 API 仅需目标 tab id，不依赖 activeTab 或 `tabs` 权限。
+- **`tabs` 权限未声明的影响**：`chrome.tabs.query({})` 虽可在无 `tabs` 权限时调用，但返回的 `Tab.url` / `Tab.title` 被 Chrome 剥离（`undefined`）。e2e 测试中因此无法按 URL 精确匹配目标页签，改用全页签广播方案（详见 `runbook:e2e:fullpage-trigger-assertions`）。
 
 ## host_permissions
 

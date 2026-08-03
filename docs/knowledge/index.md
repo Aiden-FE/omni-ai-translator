@@ -3,7 +3,7 @@ id: context:root
 type: context
 status: active
 owner: project
-updated: 2026-07-30
+updated: 2026-08-03
 confidence: 0.9
 sources: []
 related:
@@ -50,6 +50,8 @@ related:
 | `feature:fullpage:segmenter-pool` | feature | feature/fullpage-segmenter-pool.md |
 | `feature:fullpage:orchestrator` | feature | feature/fullpage-orchestrator.md |
 | `runbook:dev-commands` | runbook | runbook/dev-commands.md |
+| `runbook:e2e:fullpage-trigger-assertions` | runbook | runbook/e2e-fullpage-trigger-assertions.md |
+| `feature:fullpage:e2e-mock-contract` | feature | feature/fullpage-e2e-mock-contract.md |
 | `product:overview` | product | product/overview.md |
 | `ux:interaction-patterns` | ux | ux/interaction-patterns.md |
 

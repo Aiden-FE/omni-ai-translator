@@ -3,7 +3,7 @@ id: feature:fullpage:orchestrator
 type: feature
 status: active
 owner: project
-updated: 2026-07-30
+updated: 2026-08-03
 confidence: 0.9
 sources:
   - shared/fullpage/orchestrator.ts
@@ -15,6 +15,8 @@ related:
   - feature:fullpage:command-channel
   - feature:translator:unified-adapter
   - context:system:plugin-architecture
+  - runbook:e2e:fullpage-trigger-assertions
+  - feature:fullpage:e2e-mock-contract
 ---
 
 # 全文翻译编排器状态机与可复用模式（v0.4.0）
@@ -171,7 +173,7 @@ handleSettled(seg):
 
 - 大页面（上千段）首帧收集为同步遍历，已注释标注后续 `requestIdleCallback` 分片优化点。
 - 观察器启动时机为 `await runPool` 之后（v0.4 顺序）：翻译期间的新增内容靠启动后 mutation 补偿，存在理论窗口期，后续可提前启动观察器。
-- e2e（Playwright）未覆盖全文翻译链路，建议后续补右键菜单 -> 全文翻译的端到端用例。
+- e2e（Playwright）已补齐全文翻译链路（v0.4.0）：`e2e/fullpage.spec.ts` 8 用例覆盖验收标准 1-11（渐进渲染 / 双语 / 切换免重译 / 恢复 / 失败重试 / 增量 / 缓存 / 工具栏 UX）。触发与断言技术见 `runbook:e2e:fullpage-trigger-assertions`，mock 契约见 `feature:fullpage:e2e-mock-contract`。
 
 ## 来源证据
 

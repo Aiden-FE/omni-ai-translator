@@ -48,3 +48,18 @@
 - `pnpm typecheck` → 通过
 - `pnpm lint` → 通过
 - `pnpm test` → 15 文件 309 passed（单元测试零回归）
+
+## 知识沉淀
+
+本次审查候选（verdict: valuable）已沉淀至长期知识库：
+
+| 候选 | 类型 | 沉淀知识 ID | 正文 | 复用场景 |
+|---|---|---|---|---|
+| 候选 0：扩展 e2e 触发技术（Tab.url 剥离 → 全页签广播 + Promise.allSettled + 0 送达抛错；渐进渲染相对时序断言） | runbook | `runbook:e2e:fullpage-trigger-assertions` | `docs/knowledge/runbook/e2e-fullpage-trigger-assertions.md`（新建） | 后续为右键菜单 / background 命令触发的扩展功能编写 e2e 时复用该触发与断言模式 |
+| 候选 1：全文翻译 e2e mock 契约（请求计数 + `__FAIL__` 失败开关 + 300ms 非流式延迟） | feature | `feature:fullpage:e2e-mock-contract` | `docs/knowledge/feature/fullpage-e2e-mock-contract.md`（新建） | 后续 e2e 需要构造部分失败、缓存复用、渐进时序场景时复用同一 mock 契约 |
+
+同步维护：
+
+- 分类索引 `docs/knowledge/runbook/index.md`、`docs/knowledge/feature/index.md` 与根索引 `docs/knowledge/index.md` 已登记两份新知识。
+- `feature:fullpage:orchestrator` 正文「遗留与后续」中「e2e 未覆盖全文翻译链路」的过期说明已更新为「e2e 已补齐（本任务 8 用例）」，并补充两份新知识的关联。
+- `context:system:permissions-privacy` 已补充 `tabs` 权限未声明时 `Tab.url`/`Tab.title` 被剥离的影响说明，并反向关联 `runbook:e2e:fullpage-trigger-assertions`。
