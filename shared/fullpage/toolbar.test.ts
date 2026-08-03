@@ -18,12 +18,26 @@ function setupToolbar(callbacks?: Partial<Record<string, () => void>>) {
   const host = document.querySelector('[data-llm-translator]') as HTMLElement;
   const shadow = host.shadowRoot!;
   const toolbar = shadow.querySelector('.llm-translator-toolbar') as HTMLElement;
+  const progress = shadow.querySelector('.llm-translator-toolbar-progress') as HTMLElement;
+  const progressSpinner = shadow.querySelector('.llm-translator-toolbar-progress-spinner') as HTMLElement;
   const miniHandle = shadow.querySelector('.llm-translator-mini-handle') as HTMLButtonElement;
   const switchBtn = shadow.querySelector('.llm-translator-toolbar-switch') as HTMLButtonElement;
   const buttons = shadow.querySelectorAll('.llm-translator-toolbar-btn');
   const retryBtn = shadow.querySelector('.llm-translator-toolbar-retry') as HTMLButtonElement;
 
-  return { api, cb, host, shadow, toolbar, miniHandle, switchBtn, buttons, retryBtn };
+  return {
+    api,
+    cb,
+    host,
+    shadow,
+    toolbar,
+    progress,
+    progressSpinner,
+    miniHandle,
+    switchBtn,
+    buttons,
+    retryBtn,
+  };
 }
 
 describe('createToolbar - 宿主与 Shadow DOM', () => {
@@ -151,6 +165,54 @@ describe('setMode', () => {
     api.setMode('bilingual');
     expect(switchBtn.title).toBe('切换为替换');
     expect(switchBtn.getAttribute('aria-label')).toBe('切换为替换');
+  });
+});
+
+describe('setProgress', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('翻译进行中显示当前完成数并激活 spinner', () => {
+    const { api, progress, progressSpinner } = setupToolbar();
+
+    api.setProgress({ completed: 0, total: 9, failed: 0, active: true });
+
+    expect(progress.textContent).toContain('全文翻译 0/9');
+    expect(progress.classList.contains('is-active')).toBe(true);
+    expect(progressSpinner.hidden).toBe(false);
+  });
+
+  it('翻译完成时显示完成文案', () => {
+    const { api, progress } = setupToolbar();
+
+    api.setProgress({ completed: 9, total: 9, failed: 0, active: false });
+
+    expect(progress.textContent).toContain('全文翻译完成 9/9');
+  });
+
+  it('翻译完成且存在失败段落时显示失败数', () => {
+    const { api, progress } = setupToolbar();
+
+    api.setProgress({ completed: 9, total: 9, failed: 1, active: false });
+
+    expect(progress.textContent).toContain('已完成 9/9，失败 1');
+  });
+
+  it('没有可翻译文本时显示空状态', () => {
+    const { api, progress } = setupToolbar();
+
+    api.setProgress({ completed: 0, total: 0, failed: 0, active: false });
+
+    expect(progress.textContent).toContain('未发现可翻译文本');
+  });
+
+  it('进度行在操作按钮之前并通过 status 实时播报', () => {
+    const { toolbar, progress } = setupToolbar();
+
+    expect(toolbar.firstElementChild).toBe(progress);
+    expect(progress.getAttribute('role')).toBe('status');
+    expect(progress.getAttribute('aria-live')).toBe('polite');
   });
 });
 

@@ -6,6 +6,8 @@ import { collectSegments } from './segmenter';
 import {
   applyReplace,
   applyBilingual,
+  markLoading,
+  clearLoadingMark,
   markFailed,
   clearFailedMark,
   switchMode,
@@ -195,6 +197,65 @@ describe('applyBilingual', () => {
     expect(oldHost.isConnected).toBe(false);
     expect(segs[0].blockHost).not.toBe(oldHost);
     expect(segs[0].blockHost!.isConnected).toBe(true);
+  });
+});
+
+describe('markLoading / clearLoadingMark', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('重复标记时复用单个 Shadow DOM 加载状态，并可清理', () => {
+    const seg = setupFailedSegment('<p>Hello</p>');
+
+    markLoading(seg);
+    markLoading(seg);
+
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
+    expect(seg.loadingMarkHost?.shadowRoot?.querySelector('[role="status"]')?.getAttribute('aria-label')).toBe(
+      '正在翻译此段',
+    );
+    expect(document.querySelector('[role="status"]')).toBeNull();
+
+    clearLoadingMark(seg);
+
+    expect(seg.loadingMarkHost).toBeUndefined();
+    expect(document.querySelector('.llm-translator-loading-host')).toBeNull();
+  });
+
+  it('重复清理时安全', () => {
+    const seg = setupFailedSegment('<p>Hello</p>');
+    markLoading(seg);
+    clearLoadingMark(seg);
+
+    expect(() => clearLoadingMark(seg)).not.toThrow();
+  });
+
+  it('应用替换译文时移除加载状态', () => {
+    const seg = setupSegments('<p>Hello</p>')[0];
+    markLoading(seg);
+
+    applyReplace(seg);
+
+    expect(seg.loadingMarkHost).toBeUndefined();
+  });
+
+  it('应用双语译文时移除加载状态', () => {
+    const seg = setupSegments('<p>Hello</p>')[0];
+    markLoading(seg);
+
+    applyBilingual(seg);
+
+    expect(seg.loadingMarkHost).toBeUndefined();
+  });
+
+  it('标记失败时移除加载状态', () => {
+    const seg = setupFailedSegment('<p>Hello</p>');
+    markLoading(seg);
+
+    markFailed(seg);
+
+    expect(seg.loadingMarkHost).toBeUndefined();
   });
 });
 
@@ -406,6 +467,27 @@ describe('restoreAll', () => {
 
     expect(markHost.isConnected).toBe(false);
     expect(segs[0].failedMarkHost).toBeUndefined();
+  });
+
+  it('移除加载、双语与失败宿主', () => {
+    const segs = setupSegments('<p>Loading</p><p>Bilingual</p><p>Failed</p>');
+    markLoading(segs[0]);
+    applyBilingual(segs[1]);
+    segs[2].status = 'failed';
+    markFailed(segs[2]);
+
+    const loadingHost = segs[0].loadingMarkHost!;
+    const blockHost = segs[1].blockHost!;
+    const failedHost = segs[2].failedMarkHost!;
+
+    restoreAll(segs);
+
+    expect(loadingHost.isConnected).toBe(false);
+    expect(blockHost.isConnected).toBe(false);
+    expect(failedHost.isConnected).toBe(false);
+    expect(segs[0].loadingMarkHost).toBeUndefined();
+    expect(segs[1].blockHost).toBeUndefined();
+    expect(segs[2].failedMarkHost).toBeUndefined();
   });
 
   it('重置状态为 pending', () => {

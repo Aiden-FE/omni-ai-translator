@@ -3,6 +3,7 @@
 // 纯 DOM 操作，不持有翻译状态；状态全部来自 SegmentRecord。
 // - applyReplace: 译文写入 textNodes[0].data，其余置空（保留行内子元素结构）
 // - applyBilingual: 创建带 shadow 的译文块宿主，插入段后/块级祖先后
+// - markLoading/clearLoadingMark: 段尾追加/移除加载标记宿主
 // - markFailed/clearFailedMark: 段尾追加/移除失败徽标宿主
 // - switchMode: 同步切换显示模式（零 API 调用）
 // - restoreAll: 还原所有文本节点原始 data、移除注入 DOM、重置状态
@@ -85,6 +86,7 @@ function createShadowHost(className: string): [HTMLElement, ShadowRoot] {
  * 只改 textNodes.data，绝不整体覆盖 seg.el.textContent（会摧毁 a/strong 等行内子元素）。
  */
 export function applyReplace(seg: SegmentRecord): void {
+  clearLoadingMark(seg);
   if (seg.textNodes.length === 0) return;
   captureOriginal(seg);
   const text = seg.translatedText ?? '';
@@ -103,6 +105,7 @@ export function applyReplace(seg: SegmentRecord): void {
  * 从替换模式切换时先还原文本节点（恢复原文显示，译文走 shadow 块）。
  */
 export function applyBilingual(seg: SegmentRecord): void {
+  clearLoadingMark(seg);
   // 移除已有 blockHost（重复调用场景）
   if (seg.blockHost) {
     seg.blockHost.remove();
@@ -125,10 +128,47 @@ export function applyBilingual(seg: SegmentRecord): void {
 }
 
 /**
+ * 加载标记：在段尾追加带 Shadow DOM 的 spinner 与状态文本。
+ * 已存在且仍挂载的标记直接复用，避免翻译生命周期重复回调时产生多个宿主。
+ */
+export function markLoading(seg: SegmentRecord): void {
+  if (seg.loadingMarkHost?.isConnected) return;
+
+  clearLoadingMark(seg);
+
+  const [host, shadow] = createShadowHost('llm-translator-loading-host');
+  const status = document.createElement('span');
+  status.className = 'llm-translator-loading-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-label', '正在翻译此段');
+
+  const spinner = document.createElement('span');
+  spinner.className = 'llm-translator-loading-spinner';
+  spinner.setAttribute('aria-hidden', 'true');
+  status.appendChild(spinner);
+
+  const label = document.createElement('span');
+  label.textContent = '正在翻译此段';
+  status.appendChild(label);
+  shadow.appendChild(status);
+
+  const ref = seg.failedMarkHost ?? seg.blockHost ?? seg.el;
+  ref.after(host);
+  seg.loadingMarkHost = host;
+}
+
+/** 移除段落加载标记宿主（幂等） */
+export function clearLoadingMark(seg: SegmentRecord): void {
+  seg.loadingMarkHost?.remove();
+  seg.loadingMarkHost = undefined;
+}
+
+/**
  * 失败标记：在段尾追加带 shadow 的小徽标宿主（⚠ + 虚线底边）。
  * 替换/双语模式通用：双语模式插到 blockHost 之后，替换模式插到 seg.el 之后。
  */
 export function markFailed(seg: SegmentRecord): void {
+  clearLoadingMark(seg);
   // 先清除旧徽标
   if (seg.failedMarkHost) {
     seg.failedMarkHost.remove();
@@ -200,6 +240,7 @@ export function restoreAll(records: SegmentRecord[]): void {
     restoreTextNodes(seg);
     seg.blockHost?.remove();
     seg.blockHost = undefined;
+    clearLoadingMark(seg);
     clearFailedMark(seg);
     seg.status = 'pending';
     seg.errorType = undefined;

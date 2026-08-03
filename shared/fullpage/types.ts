@@ -23,8 +23,22 @@ export interface SegmentRecord {
   originalTextNodesData?: string[];
   /** 用于 t3 渲染器挂载双语译文块的 host 元素 */
   blockHost?: HTMLElement;
+  /** 加载状态标记宿主元素（markLoading 挂载，完成/失败/恢复时移除） */
+  loadingMarkHost?: HTMLElement;
   /** 失败标记徽标宿主元素（markFailed 挂载，clearFailedMark/restoreAll 移除） */
   failedMarkHost?: HTMLElement;
+}
+
+/** 全文翻译进度，用于工具栏呈现 */
+export interface TranslationProgress {
+  /** 已完成处理的分段数 */
+  completed: number;
+  /** 本轮待翻译分段总数 */
+  total: number;
+  /** 翻译失败的分段数 */
+  failed: number;
+  /** 是否仍在翻译中 */
+  active: boolean;
 }
 
 /** 分段收集选项 */

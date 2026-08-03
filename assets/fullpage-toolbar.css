@@ -38,6 +38,35 @@
   box-shadow: 0 8px 24px hsl(196 72% 12% / 0.28);
 }
 
+/* ---- 翻译进度：固定高度，文案变化不影响操作按钮位置 ---- */
+.llm-translator-toolbar-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  padding: 0 10px;
+  color: hsl(var(--translator-toolbar-fg) / 0.88);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.llm-translator-toolbar-progress-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid hsl(var(--translator-toolbar-fg) / 0.3);
+  border-top-color: hsl(var(--translator-toolbar-fg));
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: llm-translator-toolbar-spin 0.8s linear infinite;
+}
+
+@keyframes llm-translator-toolbar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ---- 迷你把手（默认隐藏，收起状态显示） ---- */
 .llm-translator-mini-handle {
   display: none;
@@ -151,7 +180,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .llm-translator-toolbar-btn,
-  .llm-translator-mini-handle {
+  .llm-translator-mini-handle,
+  .llm-translator-toolbar-progress-spinner {
     transition: none;
+    animation: none;
   }
 }

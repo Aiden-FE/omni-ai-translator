@@ -8,6 +8,7 @@
 
 import toolbarCss from '@/assets/fullpage-toolbar.css?inline';
 import type { DisplayMode } from '../types';
+import type { TranslationProgress } from './types';
 
 /** 切换按钮文案随当前模式翻转：当前为 replace 时提示「切换为双语对照」，反之亦然 */
 const SWITCH_LABELS: Record<DisplayMode, string> = {
@@ -33,6 +34,8 @@ export interface ToolbarCallbacks {
 export interface ToolbarApi {
   /** 设置当前显示模式，翻转切换按钮文案 + title + aria-label */
   setMode(mode: DisplayMode): void;
+  /** 设置全文翻译进度与状态文案 */
+  setProgress(progress: TranslationProgress): void;
   /** 设置失败段落数：n>0 显示重试按钮并带计数徽标，n=0 隐藏 */
   setFailureCount(n: number): void;
   /** 隐藏工具栏，显示迷你把手 */
@@ -70,6 +73,20 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
   // ---- 工具栏容器 ----
   const toolbar = document.createElement('div');
   toolbar.className = 'llm-translator-toolbar';
+
+  // ---- 翻译进度（固定高度，避免文案变化导致操作按钮跳动） ----
+  const progress = document.createElement('div');
+  progress.className = 'llm-translator-toolbar-progress';
+  progress.setAttribute('role', 'status');
+  progress.setAttribute('aria-live', 'polite');
+  progress.setAttribute('aria-atomic', 'true');
+  const progressSpinner = document.createElement('span');
+  progressSpinner.className = 'llm-translator-toolbar-progress-spinner';
+  progressSpinner.setAttribute('aria-hidden', 'true');
+  progressSpinner.hidden = true;
+  const progressText = document.createElement('span');
+  progress.appendChild(progressSpinner);
+  progress.appendChild(progressText);
 
   // ---- 切换模式按钮 ----
   const switchBtn = document.createElement('button');
@@ -119,6 +136,7 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
     callbacks.onCollapse();
   });
 
+  toolbar.appendChild(progress);
   toolbar.appendChild(switchBtn);
   toolbar.appendChild(restoreBtn);
   toolbar.appendChild(retryBtn);
@@ -153,6 +171,21 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
     switchBtn.setAttribute('aria-label', label);
   }
 
+  function setProgress({ completed, total, failed, active }: TranslationProgress): void {
+    progress.classList.toggle('is-active', active);
+    progressSpinner.hidden = !active;
+
+    if (total === 0) {
+      progressText.textContent = '未发现可翻译文本';
+    } else if (active) {
+      progressText.textContent = `全文翻译 ${completed}/${total}`;
+    } else if (failed > 0) {
+      progressText.textContent = `已完成 ${completed}/${total}，失败 ${failed}`;
+    } else {
+      progressText.textContent = `全文翻译完成 ${completed}/${total}`;
+    }
+  }
+
   function setFailureCount(n: number): void {
     if (n > 0) {
       retryBtn.hidden = false;
@@ -179,6 +212,7 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
 
   return {
     setMode,
+    setProgress,
     setFailureCount,
     collapse,
     expand,
