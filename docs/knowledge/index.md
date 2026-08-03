@@ -48,6 +48,7 @@ related:
 | `feature:translator:unified-adapter` | feature | feature/translator-unified-adapter.md |
 | `feature:fullpage:command-channel` | feature | feature/fullpage-command-channel.md |
 | `feature:fullpage:segmenter-pool` | feature | feature/fullpage-segmenter-pool.md |
+| `feature:fullpage:orchestrator` | feature | feature/fullpage-orchestrator.md |
 | `runbook:dev-commands` | runbook | runbook/dev-commands.md |
 | `product:overview` | product | product/overview.md |
 | `ux:interaction-patterns` | ux | ux/interaction-patterns.md |

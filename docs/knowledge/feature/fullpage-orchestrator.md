@@ -1,0 +1,181 @@
+---
+id: feature:fullpage:orchestrator
+type: feature
+status: active
+owner: project
+updated: 2026-07-30
+confidence: 0.9
+sources:
+  - shared/fullpage/orchestrator.ts
+  - shared/fullpage/orchestrator.test.ts
+  - entrypoints/fullpage.content.ts
+  - docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md
+related:
+  - feature:fullpage:segmenter-pool
+  - feature:fullpage:command-channel
+  - feature:translator:unified-adapter
+  - context:system:plugin-architecture
+---
+
+# 全文翻译编排器状态机与可复用模式（v0.4.0）
+
+> 以 `shared/fullpage/orchestrator.ts` 当前代码为准。本模块覆盖全文翻译编排器（t5）：唯一状态持有者状态机、并发重入守卫、增量翻译防抖管线、防闪回双保险，以及「编排器组合无状态组件」设计范式。
+
+## 功能目标
+
+编排器是全文翻译的**唯一状态持有者**，以模块级状态组合 t2（segmenter + pool）、t3（renderer）、t4（toolbar）四个无全局状态组件，形成完整状态机：
+
+```
+background 右键菜单
+  -> tabs.sendMessage(BackgroundCommand)
+  -> entrypoints/fullpage.content.ts (content script, runtime.onMessage)
+  -> orchestrator.start(mode)
+     -> collectSegments(document.body)        [t2 segmenter]
+     -> createToolbar(callbacks)              [t4 toolbar]
+     -> runPool(records, { onSettled, isActive })  [t2 pool]
+        onSettled: done -> renderer.apply(mode) / failed -> markFailed + setFailureCount  [t3 renderer]
+     -> MutationObserver.observe(document.body)  [增量翻译]
+```
+
+segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是唯一状态持有者。样式隔离约定：所有注入 DOM 带 `data-llm-translator`（分段排除、观察器过滤、恢复清理均依赖）。
+
+## 模块级状态
+
+| 变量 | 类型 | 说明 |
+|---|---|---|
+| `records` | `SegmentRecord[]` | 当前页所有分段记录 |
+| `mode` | `DisplayMode` | 当前显示模式（`replace` / `bilingual`） |
+| `active` | `boolean` | 翻译是否进行中（恢复原文后置 `false`） |
+| `cache` | `Map<string, string>` | 会话级缓存，恢复原文后**不清除**（再次触发命中段秒级渲染，验收标准 10） |
+| `toolbar` | `ToolbarApi \| null` | 工具栏实例 |
+| `observer` | `MutationObserver \| null` | 增量翻译观察器（仅 `active` 期间连接） |
+| `recordedEls` | `Set<HTMLElement>` | 已收段元素集合（增量翻译防重复收段） |
+| `targetLang` | `string` | start 时解析一次，传入池 |
+| `startInFlight` | `Promise<void> \| null` | 进行中的 start（并发触发守卫） |
+| `pendingAddedNodes` | `Set<HTMLElement>` | 防抖窗口内聚合的新增节点 |
+| `debounceTimer` | `ReturnType<typeof setTimeout> \| null` | 防抖计时器 |
+| `isFlushing` | `boolean` | flush 并发守卫 |
+
+测试钩子 `__getState()` / `__reset()` 导出内部状态快照与全量重置，供单元测试断言与隔离。
+
+## 可复用设计范式
+
+### 范式 1：编排器作为唯一状态持有者组合无状态组件
+
+编排器以模块级变量持有全部运行时状态，被组合的 segmenter / pool / renderer / toolbar 均为无全局状态的纯函数组件。这一设计使：
+
+- 组件可独立单测（不依赖编排器状态）。
+- 编排器测试通过 `__reset()` 在每个用例前重置模块级状态，经 `__getState()` 断言内部状态。
+- 状态流转集中在单一模块，便于追踪与调试。
+
+**复用场景**：后续实现其他 content script 注入类功能（如页面级批注、DOM 增强）时，可采用相同范式--一个模块级状态机编排器组合多个无状态 DOM 工具组件，避免状态散落与隐式耦合。
+
+### 范式 2：并发重入守卫（startInFlight）
+
+`start(mode)` 是异步函数；右键菜单连点等场景可能在首次 start 未完成时再次触发。`startInFlight` 守卫确保第二次调用**等待首次完成后按最新状态决策**，而非并发执行：
+
+```typescript
+if (startInFlight) {
+  await startInFlight;
+}
+// 复用路径判断（此时首次 start 可能已将 active 置 true）
+if (active && records.length > 0) {
+  switchToMode(requestedMode);
+  return;
+}
+const p = doStart(requestedMode);
+startInFlight = p;
+try { await p; } finally { if (startInFlight === p) startInFlight = null; }
+```
+
+第二次调用等待首次完成后，`active && records.length > 0` 为真，走复用路径（仅切换模式），避免重复收集分段 / 重复挂工具栏 / 重复派发翻译。
+
+**复用场景**：任何异步入口可能被用户连续触发（菜单连点、快捷键连按）的 content script 功能，均可使用「进行中 Promise 守卫 + 完成后按最新状态决策」模式，而非简单 mutex 或忽略。
+
+### 范式 3：增量翻译防抖管线
+
+MutationObserver 观察 `document.body`（`{ childList: true, subtree: true }`），200ms 防抖聚合 `addedNodes`，然后批量 flush：
+
+1. **聚合**：`handleMutations` 将每个 mutation 的 `addedNodes` 存入 `pendingAddedNodes`（Set 自动去重），每次 mutation 重置 200ms 计时器。
+2. **flush 并发守卫（isFlushing）**：flush 期间新到达的节点入新 set，flush 完成后检查 `pendingAddedNodes.size > 0` 重新调度，不丢节点也不并发 flush。
+3. **过滤防回环**：`data-llm-translator` 属性标记自身注入 DOM，flush 时跳过（`node.hasAttribute('data-llm-translator')`），防止扩展产物被收集为翻译段形成无限回环。
+4. **元素去重（recordedEls）**：`collectSegments(node)` 返回的段以 `seg.el` 为 key 查 `recordedEls`，已收过的跳过，防止同一元素被多个 mutation 覆盖时重复收段。
+5. **断开安全**：`!active` 时 flush 循环 `break`（恢复原文后不再处理）；`!node.isConnected` 时 `continue`（元素已移除）。
+6. **错误隔离**：单棵子树 `collectSegments` 失败用 `catch` 吞掉并 `continue`，不阻断整批。
+
+**复用场景**：后续扩展全文翻译功能（如翻译进度指示器、批量重试策略优化、多页面翻译状态管理）或实现其他需要监听 DOM 变更并增量处理的 content script 功能时，可复用此「防抖聚合 + 并发守卫 + 注入过滤 + 元素去重 + 错误隔离」管线模式。
+
+### 范式 4：防闪回双保险（isActive + onSettled 校验）
+
+翻译是异步操作，返回时页面状态可能已变化（用户恢复原文 / 元素被宿主移除）。双重校验防止过期译文渲染到已恢复的页面上（"闪回"）：
+
+1. **池级 `isActive: () => active`**：恢复原文后 `active = false`，`runPool` 在派发新段前检查 `isActive()` 返回 false 即停，不再派发新段。
+2. **段级 `onSettled` 校验**：已返回的段在 `handleSettled` 中再校验 `active`（恢复后不渲染）与 `seg.el.isConnected`（元素已移除则丢弃不渲染）。段状态仍推进为 `done` 并写入缓存（有利于再次触发时秒级渲染），但 DOM 不渲染译文。
+
+```
+handleSettled(seg):
+  if (!active) return;              // 恢复后不渲染
+  if (seg.status === 'translating') return;
+  if (!seg.el.isConnected) return;  // 元素已移除 -> 丢弃
+  done   -> applyReplace / applyBilingual
+  failed -> markFailed + updateFailureCount
+```
+
+**复用场景**：任何异步操作（翻译、数据加载）的回调需要防「操作完成时上下文已失效」的场景，可复用此「入口级 isActive 守卫 + 回调级 active/isConnected 双重校验」模式。
+
+## start(mode) 状态流转
+
+### 复用路径（零 API）
+
+`active && records.length > 0` 时再次触发 -> 仅 `switchToMode(mode)`（renderer.switchMode 翻转显示模式 + 翻转 `mode` 变量 + 工具栏文案更新），不调用 API、不重建工具栏。译文已在段上或缓存中。
+
+### 全新路径
+
+1. `active = true`；`mode = requestedMode`
+2. `targetLang = await getTargetLang()`（用户配置优先，回退浏览器首选语言）
+3. `records = collectSegments(document.body)`（v0.4 同步收集；大页面后续可用 `requestIdleCallback` 分片优化）
+4. `recordedEls = new Set(records.map(r => r.el))`
+5. `toolbar = createToolbar({ onSwitchMode, onRestore, onRetry, onCollapse, onRecall })`；`toolbar.setMode(mode)`（空分段页重复触发时先 `toolbar?.destroy()` 防重复挂载）
+6. `await runPool(records, { targetLang, concurrency: 3, cache, onSettled, isActive: () => active })`
+7. 若 `active`（翻译期间未被恢复）-> `startObserver()`
+
+## 工具栏回调接线
+
+| 回调 | 动作 | 关键点 |
+|---|---|---|
+| `onSwitchMode` | `switchToMode(mode === 'replace' ? 'bilingual' : 'replace')` | 零 API 调用 |
+| `onRestore` | `restoreAll` + `stopObserver` + `toolbar.destroy` + `active = false` | **保留 cache 与 records.translatedText**，再次触发命中段秒级渲染 |
+| `onRetry` | 收集 failed 段 -> `clearFailedMark` -> `retrySegments`（复用池，不清缓存）-> `updateFailureCount` | 翻译仍完成并写入缓存 |
+| `onCollapse` | no-op | toolbar 已自动 collapse；预留暂停观察器扩展位 |
+| `onRecall` | no-op | toolbar 已自动 expand |
+
+## 类型守卫（isBackgroundCommand）
+
+`isBackgroundCommand(msg: unknown): msg is BackgroundCommand`：校验 `msg.type === 'fullpage-translate'` 且 `msg.mode` 为 `'replace' | 'bilingual'`。TS 严格模式下以 `unknown` + 类型守卫收窄，不用 `any`。content script 入口（`entrypoints/fullpage.content.ts`）在 `runtime.onMessage` 监听器中以此守卫过滤消息，仅消费全文翻译命令，其余消息（如划词翻译通道）忽略。
+
+## entrypoint 与编排器的边界
+
+- `entrypoints/fullpage.content.ts` 只负责接收 background 命令（`runtime.onMessage` + `isBackgroundCommand` 守卫）并调用 `start(msg.mode)`；全部翻译状态在编排器。
+- 独立 content script 入口（WXT 多 content script），与 `entrypoints/content.ts`（划词翻译）各自独立注入、互不干扰、无共享运行时状态。
+- WXT 入口命名约定：额外 content script 须以 `*.content.ts` 命名（否则被识别为 unlisted script 不进 manifest.content_scripts）。
+- 启动失败仅 `console.warn` 不阻断宿主页面（content script 无用户反馈通道）。
+
+## 接口依赖
+
+- **消费 t2/t3/t4 接口**：`collectSegments` / `runPool` / `retrySegments`（t2）、`applyReplace` / `applyBilingual` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`（t3）、`createToolbar` / `ToolbarApi`（t4）、`getTargetLang`（`shared/target-lang.ts`）。
+- **消费类型**：`BackgroundCommand` / `DisplayMode`（`shared/types.ts`）、`SegmentRecord`（`shared/fullpage/types.ts`）。
+- **翻译通道**：复用 `Message` 的 `{ type: 'translate', payload }` 通道（非流式），经 `browser.runtime.sendMessage` 下发。详见 `feature:fullpage:segmenter-pool`。
+- **命令来源**：`feature:fullpage:command-channel` 定义的右键菜单与 `BackgroundCommand` 下发。
+
+## 遗留与后续
+
+- 大页面（上千段）首帧收集为同步遍历，已注释标注后续 `requestIdleCallback` 分片优化点。
+- 观察器启动时机为 `await runPool` 之后（v0.4 顺序）：翻译期间的新增内容靠启动后 mutation 补偿，存在理论窗口期，后续可提前启动观察器。
+- e2e（Playwright）未覆盖全文翻译链路，建议后续补右键菜单 -> 全文翻译的端到端用例。
+
+## 来源证据
+
+- `shared/fullpage/orchestrator.ts`：模块级状态声明、`start` / `doStart`（复用路径 + 全新路径 + startInFlight 守卫）、`handleSettled`（active + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重）、`handleRestore`（保留 cache）、`handleRetry`（复用 retrySegments）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子。
+- `shared/fullpage/orchestrator.test.ts`：472 行 / 20 个单元测试（jsdom + fake timers），覆盖类型守卫、replace/bilingual 基本流程、空页面、重复触发不重复建栏、并发 start 守卫、复用路径（验收标准 10）、恢复后 cache 命中、工具栏回调（switchMode/restore/retry）、onSettled 防闪回与元素移除守卫、增量翻译（验收标准 9：新增节点翻译、过滤注入子树、防回环、recordedEls 去重、恢复后观察器断开）。
+- `entrypoints/fullpage.content.ts`：`defineContentScript({ matches: ['<all_urls>'] })` + `runtime.onMessage` + `isBackgroundCommand` 守卫 + `start(msg.mode)` 调用 + catch console.warn。
+- `docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md`：编排器状态机总体架构、模块级状态表、start 流程、onSettled 回调、工具栏回调接线表、增量翻译设计、isActive 中止、关键设计权衡（模块级状态 vs 工厂函数、retrySegments vs runPool、observer 启动时机、复用路径不重建 toolbar）、边界与风险。

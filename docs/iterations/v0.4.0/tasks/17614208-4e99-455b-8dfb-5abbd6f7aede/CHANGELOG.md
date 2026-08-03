@@ -35,6 +35,18 @@
 - `npx wxt build`（chrome-mv3）— 成功；manifest.content_scripts 注册 `content.js` + `fullpage.js`。
 - `npx wxt build -b firefox`（firefox-mv2）— 成功；manifest 同样双 content script 注册。
 
+## 知识沉淀
+
+本次任务产出已沉淀为长期知识：
+
+| 知识 ID | 类型 | 候选映射 | 复用场景 |
+|---|---|---|---|
+| `feature:fullpage:orchestrator` | feature | candidate #0 | 后续扩展全文翻译功能（翻译进度指示器、批量重试策略优化、多页面翻译状态管理）或实现其他 content script 状态机时复用编排器状态机模式（唯一状态持有者组合无状态组件、startInFlight 并发重入守卫、增量翻译防抖管线、isActive/onSettled 防闪回双保险） |
+
+- 沉淀文件：`docs/knowledge/feature/fullpage-orchestrator.md`
+- 索引同步：`docs/knowledge/feature/index.md`（feature 分类索引）、`docs/knowledge/index.md`（根索引）已新增条目。
+- 关联知识：`feature:fullpage:segmenter-pool`（编排器组合的 t2/t3 组件）、`feature:fullpage:command-channel`（命令来源）、`feature:translator:unified-adapter`（翻译通道）、`context:system:plugin-architecture`。
+
 ## 遗留与后续
 
 - 大页面（上千段）首帧收集为同步遍历，orchestrator 内已注释标注后续 `requestIdleCallback` 分片优化点。
