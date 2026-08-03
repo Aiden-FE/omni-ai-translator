@@ -6,7 +6,7 @@ export type ProviderCategory = 'llm' | 'traditional';
 /** 具体源类型：LLM 类统一为 'llm'（由 responseStyle 区分协议格式）；传统翻译 google/microsoft 保持独立 */
 export type ProviderType = 'llm' | 'google' | 'microsoft';
 
-/** LLM 请求协议。openai 为存量配置兼容值，读取后归一化为 openai-completions。 */
+/** LLM 请求协议。 */
 export type LlmProtocol =
   | 'openai-completions'
   | 'openai-responses'
@@ -23,14 +23,14 @@ export interface ProviderConfig {
   type: ProviderType;
   /** 源类型分类，缺省时按 type 推断（llm → llm，google/microsoft → traditional） */
   category?: ProviderCategory;
-  /** 完整接口路径（如 https://api.openai.com/v1/chat/completions 或 http://localhost:11434/api/chat），代码不再追加 path */
+  /** Base URL（如 https://api.openai.com/v1 或 http://localhost:11434），调用时按协议补全端点路径。 */
   baseUrl: string;
   apiKey?: string;
   model: string;
   /** microsoft Azure Translator 区域（如 eastus、global）；有 Key 时携带 Ocp-Apim-Subscription-Region。google 不使用。缺省则不发送该 header。 */
   region?: string;
-  /** LLM 请求协议；openai 仅用于读取迁移前的存量配置。 */
-  responseStyle?: LlmProtocol | 'openai';
+  /** LLM 请求协议。 */
+  responseStyle?: LlmProtocol;
 }
 
 /** 翻译请求 */

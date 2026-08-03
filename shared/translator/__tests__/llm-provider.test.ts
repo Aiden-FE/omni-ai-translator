@@ -8,7 +8,7 @@ function makeOpenAIConfig(overrides: Partial<ProviderConfig> = {}): ProviderConf
     id: 'test-llm',
     name: 'test-llm',
     type: 'llm',
-    baseUrl: 'http://localhost:9999/v1/chat/completions',
+    baseUrl: 'http://localhost:9999/v1',
     model: 'test-model',
     ...overrides,
   };
@@ -253,6 +253,7 @@ describe('LLM Provider responseStyle 回归', () => {
     const provider = createLLMProvider(makeOpenAIConfig({ apiKey: 'openai-key' }));
     const result = await provider.translate(baseReq);
     expect(result.translatedText).toBe('你好');
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/chat/completions');
     // openai 路径用 Authorization Bearer，无 x-api-key / anthropic-version
     const callHeaders = fetchMock.mock.calls[0][1].headers;
     expect(callHeaders['Authorization']).toBe('Bearer openai-key');
@@ -264,7 +265,7 @@ describe('LLM Provider responseStyle 回归', () => {
     expect(callBody.system).toBeUndefined();
   });
 
-  it('responseStyle 显式 openai → 走 openai 路径', async () => {
+  it('responseStyle 显式 openai-completions → 走 Chat Completions 路径', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -273,11 +274,66 @@ describe('LLM Provider responseStyle 回归', () => {
       }),
     });
     vi.stubGlobal('fetch', fetchMock);
-    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'openai' }));
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'openai-completions' }));
     const result = await provider.translate(baseReq);
     expect(result.translatedText).toBe('你好');
     const callHeaders = fetchMock.mock.calls[0][1].headers;
     expect(callHeaders['anthropic-version']).toBeUndefined();
+  });
+});
+
+describe('LLM Provider OpenAI Responses', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('使用 /responses + input 请求并解析 output_text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ output_text: '你好,世界', output: [] }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createLLMProvider(
+      makeOpenAIConfig({ responseStyle: 'openai-responses', apiKey: 'responses-key' }),
+    );
+    const result = await provider.translate(baseReq);
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/responses');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer responses-key');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      model: 'test-model',
+      input: expect.stringContaining('hello'),
+    });
+    expect(result.translatedText).toBe('你好,世界');
+  });
+
+  it('output_text 缺失时拼接 output content 中的 output_text 项', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        output: [
+          { type: 'reasoning', content: [] },
+          {
+            type: 'message',
+            content: [
+              { type: 'output_text', text: '你好' },
+              { type: 'refusal', refusal: 'ignored' },
+              { type: 'output_text', text: ',世界' },
+            ],
+          },
+        ],
+      }),
+    }));
+
+    const provider = createLLMProvider(
+      makeOpenAIConfig({ responseStyle: 'openai-responses' }),
+    );
+    const result = await provider.translate(baseReq);
+
+    expect(result.translatedText).toBe('你好,世界');
   });
 });
 
@@ -327,6 +383,33 @@ describe('LLM Provider 流式翻译', () => {
     // 验证请求体含 stream: true
     const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(callBody.stream).toBe(true);
+  });
+
+  it('OpenAI Responses SSE — 提取 output_text.delta，跳过畸形事件并在 [DONE] 结束', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        'data: {"type":"response.created"}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"你"}\n\n',
+        'data: malformed-json\n\n',
+        'data: {"type":"response.output_text.delta","delta":"好,世界"}\n\n',
+        'data: [DONE]\n\n',
+        'data: {"type":"response.output_text.delta","delta":"ignored"}\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createLLMProvider(
+      makeOpenAIConfig({ responseStyle: 'openai-responses' }),
+    );
+    const chunks: string[] = [];
+    const result = await provider.translateStream!(baseReq, (chunk) => chunks.push(chunk.deltaText));
+
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/responses');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).stream).toBe(true);
+    expect(chunks).toEqual(['你', '好,世界']);
+    expect(result.translatedText).toBe('你好,世界');
   });
 
   it('Anthropic SSE 流式 — content_block_delta 提取 delta.text + message_stop 终止 + 跳过其他事件', async () => {

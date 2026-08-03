@@ -3,6 +3,7 @@
 import type { ProviderConfig, TranslateChunk, TranslateRequest, TranslateResult } from '@/shared/types';
 import type { TranslationProvider } from './types';
 import { classifyError } from './error';
+import { normalizeLlmProtocol, resolveLlmEndpoint } from './llm-protocol';
 
 function buildPrompt(text: string, targetLang: string, sourceLang?: string): string {
   const source = sourceLang ? `from ${sourceLang} ` : '';
@@ -10,15 +11,13 @@ function buildPrompt(text: string, targetLang: string, sourceLang?: string): str
 }
 
 /**
- * 调用 OpenAI 兼容接口
- * baseUrl 需为用户填写的完整接口路径（如 https://api.openai.com/v1/chat/completions），
- * 代码不再追加固定 path，仅去除末尾多余斜杠后直接使用。
+ * 调用 OpenAI Chat Completions 兼容接口。
  */
-async function callOpenAICompatible(
+async function callOpenAICompletions(
   provider: ProviderConfig,
   req: TranslateRequest,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -40,17 +39,64 @@ async function callOpenAICompatible(
   return { translatedText };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function extractResponsesText(value: unknown): string {
+  if (!isRecord(value)) return '';
+  if (typeof value.output_text === 'string') return value.output_text.trim();
+  if (!Array.isArray(value.output)) return '';
+
+  let translatedText = '';
+  for (const outputItem of value.output) {
+    if (!isRecord(outputItem) || !Array.isArray(outputItem.content)) continue;
+    for (const contentItem of outputItem.content) {
+      if (
+        isRecord(contentItem)
+        && contentItem.type === 'output_text'
+        && typeof contentItem.text === 'string'
+      ) {
+        translatedText += contentItem.text;
+      }
+    }
+  }
+  return translatedText.trim();
+}
+
+async function callOpenAIResponses(
+  provider: ProviderConfig,
+  req: TranslateRequest,
+): Promise<TranslateResult> {
+  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: provider.model,
+      input: buildPrompt(req.text, req.targetLang, req.sourceLang),
+    }),
+  });
+  if (!resp.ok) {
+    const errorType = classifyError(null, resp.status);
+    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
+  }
+  const data: unknown = await resp.json();
+  return { translatedText: extractResponsesText(data) };
+}
+
 /**
  * 调用原生 Anthropic Messages API 端点
- * baseUrl 需为用户填写的完整接口路径（如 https://api.anthropic.com/v1/messages），
- * 代码不追加固定 path，仅去除末尾多余斜杠后直接使用。
  * 鉴权用 x-api-key（非 Bearer）+ anthropic-version 头；翻译指令作顶层 system，原文作 user message。
  */
 async function callAnthropic(
   provider: ProviderConfig,
   req: TranslateRequest,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -77,14 +123,12 @@ async function callAnthropic(
 
 /**
  * 调用 Ollama 本地接口
- * baseUrl 需为用户填写的完整接口路径（如 http://localhost:11434/api/chat），
- * 代码不再追加固定 path，仅去除末尾多余斜杠后直接使用。
  */
 async function callOllama(
   provider: ProviderConfig,
   req: TranslateRequest,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -135,12 +179,12 @@ async function* readLines(reader: ReadableStreamDefaultReader<Uint8Array>): Asyn
  * body 加 stream: true，SSE 按 data: 行解析 choices[0].delta.content，遇 data: [DONE] 结束。
  * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
  */
-async function callOpenAICompatibleStream(
+async function callOpenAICompletionsStream(
   provider: ProviderConfig,
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -189,6 +233,63 @@ async function callOpenAICompatibleStream(
   return { translatedText: translatedText.trim() };
 }
 
+async function callOpenAIResponsesStream(
+  provider: ProviderConfig,
+  req: TranslateRequest,
+  onChunk: (chunk: TranslateChunk) => void,
+): Promise<TranslateResult> {
+  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: provider.model,
+      input: buildPrompt(req.text, req.targetLang, req.sourceLang),
+      stream: true,
+    }),
+  });
+  if (!resp.ok) {
+    const errorType = classifyError(null, resp.status);
+    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
+  }
+
+  const reader = resp.body!.getReader();
+  let translatedText = '';
+  try {
+    for await (const line of readLines(reader)) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const data = trimmed.slice(5).trim();
+      if (data === '[DONE]') break;
+      try {
+        const parsed: unknown = JSON.parse(data);
+        if (!isRecord(parsed)) continue;
+        if (parsed.type === 'response.completed') break;
+        if (
+          parsed.type === 'response.output_text.delta'
+          && typeof parsed.delta === 'string'
+        ) {
+          translatedText += parsed.delta;
+          onChunk({ deltaText: parsed.delta });
+        }
+      } catch {
+        // 兼容网关可能混入注释或无法解析的数据事件。
+      }
+    }
+  } catch (err) {
+    const errorType = classifyError(err);
+    return {
+      translatedText,
+      error: err instanceof Error ? err.message : String(err),
+      errorType,
+    };
+  }
+  return { translatedText: translatedText.trim() };
+}
+
 /**
  * 调用原生 Anthropic Messages API 端点（流式）
  * body 加 stream: true，SSE 解析 content_block_delta 事件取 delta.text，message_stop 结束。
@@ -199,7 +300,7 @@ async function callAnthropicStream(
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
   const resp = await fetch(url, {
     method: 'POST',
     headers: {
@@ -274,7 +375,7 @@ async function callOllamaStream(
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
 ): Promise<TranslateResult> {
-  const url = provider.baseUrl.replace(/\/+$/, '');
+  const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -321,8 +422,7 @@ async function callOllamaStream(
 
 /**
  * 创建 LLM 翻译源 provider 实例
- * 按 responseStyle 三路分发：ollama → callOllama；anthropic → callAnthropic；openai/缺省 → callOpenAICompatible。
- * 迁移自 shared/llm.ts，行为不变：相同输入产出相同 TranslateResult（新增 errorType 字段）。
+ * 按归一化后的 LLM 协议分发普通与流式请求。
  */
 export function createLLMProvider(config: ProviderConfig): TranslationProvider {
   return {
@@ -330,10 +430,11 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     type: 'llm' as const,
     async translate(req: TranslateRequest): Promise<TranslateResult> {
       try {
-        const style = config.responseStyle ?? 'openai';
-        if (style === 'ollama') return await callOllama(config, req);
-        if (style === 'anthropic') return await callAnthropic(config, req);
-        return await callOpenAICompatible(config, req);
+        const protocol = normalizeLlmProtocol(config.responseStyle);
+        if (protocol === 'openai-responses') return await callOpenAIResponses(config, req);
+        if (protocol === 'ollama') return await callOllama(config, req);
+        if (protocol === 'anthropic') return await callAnthropic(config, req);
+        return await callOpenAICompletions(config, req);
       } catch (err) {
         const errorType = classifyError(err);
         return {
@@ -348,10 +449,11 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     },
     async translateStream(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult> {
       try {
-        const style = config.responseStyle ?? 'openai';
-        if (style === 'ollama') return await callOllamaStream(config, req, onChunk);
-        if (style === 'anthropic') return await callAnthropicStream(config, req, onChunk);
-        return await callOpenAICompatibleStream(config, req, onChunk);
+        const protocol = normalizeLlmProtocol(config.responseStyle);
+        if (protocol === 'openai-responses') return await callOpenAIResponsesStream(config, req, onChunk);
+        if (protocol === 'ollama') return await callOllamaStream(config, req, onChunk);
+        if (protocol === 'anthropic') return await callAnthropicStream(config, req, onChunk);
+        return await callOpenAICompletionsStream(config, req, onChunk);
       } catch (err) {
         const errorType = classifyError(err);
         return {

@@ -10,9 +10,14 @@ import type {
   ProviderConfig,
   ProviderType,
   TranslateResult,
+  LlmProtocol,
 } from '@/shared/types';
 import { getProviders, setProviders, getSettings, setSettings } from '@/shared/storage';
 import { DEFAULT_ACTIVE_SOURCE_ID } from '@/shared/translator/builtin-sources';
+import {
+  DEFAULT_LLM_BASE_URL_BY_PROTOCOL,
+  resolveLlmEndpoint,
+} from '@/shared/translator/llm-protocol';
 import Button from '@/shared/ui/components/button/Button.vue';
 import Card from '@/shared/ui/components/card/Card.vue';
 import Input from '@/shared/ui/components/input/Input.vue';
@@ -36,23 +41,24 @@ const browserLang = ref(navigator.language || '');
 const collapsedCards = ref<Record<string, boolean>>({});
 
 const DEFAULT_BASE_URL: Record<ProviderType, string> = {
-  llm: 'https://api.openai.com/v1/chat/completions',
+  llm: DEFAULT_LLM_BASE_URL_BY_PROTOCOL['openai-completions'],
   google: 'https://translation.googleapis.com',
   microsoft: 'https://api.cognitive.microsofttranslator.com/translate',
 };
 
-const DEFAULT_BASE_URL_BY_STYLE: Record<string, string> = {
-  openai: 'https://api.openai.com/v1/chat/completions',
-  anthropic: 'https://api.anthropic.com/v1/messages',
-  ollama: 'http://localhost:11434/api/chat',
-};
+const LLM_PROTOCOLS: LlmProtocol[] = [
+  'openai-completions',
+  'openai-responses',
+  'anthropic',
+  'ollama',
+];
 
 const KNOWN_DEFAULT_BASE_URLS = new Set([
-  'https://api.openai.com',
-  'http://localhost:11434',
-  'https://api.anthropic.com',
   ...Object.values(DEFAULT_BASE_URL),
-  ...Object.values(DEFAULT_BASE_URL_BY_STYLE),
+  ...LLM_PROTOCOLS.flatMap((protocol) => {
+    const baseUrl = DEFAULT_LLM_BASE_URL_BY_PROTOCOL[protocol];
+    return [baseUrl, resolveLlmEndpoint(baseUrl, protocol)];
+  }),
 ]);
 const FALLBACK_SOURCE_ID = DEFAULT_ACTIVE_SOURCE_ID;
 
@@ -61,7 +67,7 @@ function isLlmType(type: ProviderType): boolean {
 }
 
 function baseUrlPlaceholder(type: ProviderType): string {
-  if (type === 'llm') return '完整接口路径,如 https://api.openai.com/v1/chat/completions';
+  if (type === 'llm') return '如 https://api.openai.com/v1';
   return '默认官方端点,可改';
 }
 
@@ -146,7 +152,7 @@ async function addProvider() {
     baseUrl: DEFAULT_BASE_URL['llm'],
     apiKey: '',
     model: 'gpt-4o-mini',
-    responseStyle: 'openai',
+    responseStyle: 'openai-completions',
   });
 
   if (props.variant === 'popup') {
@@ -183,7 +189,7 @@ async function onTypeChange(p: ProviderConfig) {
     p.baseUrl = DEFAULT_BASE_URL[p.type];
   }
   if (p.type !== 'llm') {
-    p.responseStyle = 'openai';
+    delete p.responseStyle;
   }
   const next = { ...testMsgs.value };
   delete next[p.id];
@@ -192,17 +198,19 @@ async function onTypeChange(p: ProviderConfig) {
 }
 
 function responseStyleHint(style: NonNullable<ProviderConfig['responseStyle']>): string {
+  if (style === 'openai-responses')
+    return '适用于 OpenAI Responses API(如 https://api.openai.com/v1)';
   if (style === 'anthropic')
-    return '适用于原生 Anthropic Messages API 端点(如 https://api.anthropic.com/v1/messages)';
+    return '适用于原生 Anthropic Messages API(如 https://api.anthropic.com/v1)';
   if (style === 'ollama')
-    return '适用于本地 Ollama 端点(如 http://localhost:11434/api/chat)';
-  return '适用于 OpenAI 兼容端点(如 https://api.openai.com/v1/chat/completions)';
+    return '适用于本地 Ollama Chat API(如 http://localhost:11434)';
+  return '适用于 OpenAI Chat Completions API(如 https://api.openai.com/v1)';
 }
 
-async function onResponseStyleChange(p: ProviderConfig, style: 'openai' | 'anthropic' | 'ollama') {
+async function onResponseStyleChange(p: ProviderConfig, style: LlmProtocol) {
   p.responseStyle = style;
   if (KNOWN_DEFAULT_BASE_URLS.has(p.baseUrl)) {
-    p.baseUrl = DEFAULT_BASE_URL_BY_STYLE[style];
+    p.baseUrl = DEFAULT_LLM_BASE_URL_BY_PROTOCOL[style];
   }
   const next = { ...testMsgs.value };
   delete next[p.id];
@@ -419,18 +427,28 @@ function isCollapsed(id: string): boolean {
           </Select>
 
           <div class="grid gap-2 sm:grid-cols-2">
-            <Input
-              v-model="p.baseUrl"
-              data-testid="base-url"
-              :placeholder="baseUrlPlaceholder(p.type)"
-              @change="saveProviders"
-            />
-            <Input
+            <div class="grid gap-1">
+              <Label :for="`base-url-${p.id}`">Base URL</Label>
+              <Input
+                :id="`base-url-${p.id}`"
+                v-model="p.baseUrl"
+                data-testid="base-url"
+                :placeholder="baseUrlPlaceholder(p.type)"
+                @change="saveProviders"
+              />
+            </div>
+            <div
               v-if="isLlmType(p.type)"
-              v-model="p.model"
-              placeholder="模型名"
-              @change="saveProviders"
-            />
+              class="grid gap-1"
+            >
+              <Label :for="`model-${p.id}`">模型名</Label>
+              <Input
+                :id="`model-${p.id}`"
+                v-model="p.model"
+                placeholder="模型名"
+                @change="saveProviders"
+              />
+            </div>
           </div>
 
           <div
@@ -438,16 +456,26 @@ function isCollapsed(id: string): boolean {
             class="flex flex-wrap items-center gap-2 rounded-md bg-muted p-2"
             data-testid="response-style"
           >
-            <span class="text-xs font-medium text-muted-foreground">响应风格</span>
+            <span class="text-xs font-medium text-muted-foreground">请求协议</span>
             <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
                 type="radio"
-                value="openai"
+                value="openai-completions"
                 :name="`response-style-${p.id}`"
-                :checked="(p.responseStyle ?? 'openai') === 'openai'"
-                @change="onResponseStyleChange(p, 'openai')"
+                :checked="(p.responseStyle ?? 'openai-completions') === 'openai-completions'"
+                @change="onResponseStyleChange(p, 'openai-completions')"
               >
-              openai
+              OpenAI Chat Completions
+            </label>
+            <label class="inline-flex items-center gap-1 text-xs text-foreground">
+              <input
+                type="radio"
+                value="openai-responses"
+                :name="`response-style-${p.id}`"
+                :checked="p.responseStyle === 'openai-responses'"
+                @change="onResponseStyleChange(p, 'openai-responses')"
+              >
+              OpenAI Responses
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
@@ -457,7 +485,7 @@ function isCollapsed(id: string): boolean {
                 :checked="p.responseStyle === 'anthropic'"
                 @change="onResponseStyleChange(p, 'anthropic')"
               >
-              anthropic
+              Anthropic Messages
             </label>
             <label class="inline-flex items-center gap-1 text-xs text-foreground">
               <input
@@ -467,10 +495,10 @@ function isCollapsed(id: string): boolean {
                 :checked="p.responseStyle === 'ollama'"
                 @change="onResponseStyleChange(p, 'ollama')"
               >
-              ollama
+              Ollama Chat
             </label>
             <span class="min-w-0 flex-1 text-xs leading-5 text-muted-foreground">
-              {{ responseStyleHint(p.responseStyle ?? 'openai') }}
+              {{ responseStyleHint(p.responseStyle ?? 'openai-completions') }}
             </span>
           </div>
 

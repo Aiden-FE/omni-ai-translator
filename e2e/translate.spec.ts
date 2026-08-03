@@ -1,6 +1,12 @@
 // 划词翻译全链路 e2e 测试
 import { test, expect } from './fixtures';
-import { startMockServer, getLastRequestBody, getLastRequestHeaders } from './mock-server';
+import {
+  startMockServer,
+  getLastRequestBody,
+  getLastRequestHeaders,
+  getRequestCount,
+  resetRequestCount,
+} from './mock-server';
 import path from 'node:path';
 
 const testPageUrl = `file://${path.resolve(process.cwd(), 'e2e/fixtures/test-page.html')}`;
@@ -101,6 +107,43 @@ test('配置的默认目标语言生效,prompt 使用用户配置值', async ({ 
   } | null;
   const prompt = body?.messages?.[0]?.content ?? '';
   expect(prompt).toContain('into 简体中文');
+});
+
+test('OpenAI Responses 使用 Base URL 连通并以 input 字段完成划词翻译', async ({ context, extensionId }) => {
+  resetRequestCount();
+
+  const optionsPage = await context.newPage();
+  await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
+  await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
+
+  const card = optionsPage.locator('.provider-card').last();
+  await card.locator('input[placeholder="名称"]').fill('responses-mock');
+  await card.getByRole('radio', { name: 'OpenAI Responses' }).check();
+  await card.getByTestId('base-url').fill(`${mockUrl}/v1`);
+  await card.locator('input[placeholder="模型名"]').fill('mock-model');
+
+  await card.getByRole('button', { name: '测试连通' }).click();
+  await expect(card.locator('.test-msg')).toContainText('✅', { timeout: 5_000 });
+  await card.getByRole('button', { name: '启用' }).click();
+  await optionsPage.close();
+
+  const page = await context.newPage();
+  await page.goto(testPageUrl);
+  const selectable = page.locator('#selectable');
+  await selectable.waitFor();
+  await selectable.selectText();
+  await page.mouse.up();
+
+  const trigger = page.locator('.llm-translator-trigger');
+  await expect(trigger).toBeVisible({ timeout: 5_000 });
+  await trigger.click();
+
+  const panel = page.frameLocator('iframe.llm-translator-panel-frame').locator('.llm-translator-panel');
+  await expect(panel).toContainText('你好,世界', { timeout: 15_000 });
+  expect(getRequestCount('/v1/responses')).toBeGreaterThanOrEqual(2);
+  expect(getLastRequestBody()).toMatchObject({
+    input: expect.stringContaining('Hello world'),
+  });
 });
 
 test('microsoft 有 Key 源启用后,划词翻译落到官方端点并携带 region', async ({ context, extensionId }) => {
@@ -336,4 +379,3 @@ test('ollama 响应风格划词翻译落到 /api/chat 并返回 mock 译文', as
   expect(body?.stream).toBe(true);
   expect(body?.messages?.[0]?.content).toBeTruthy();
 });
-

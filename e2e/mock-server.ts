@@ -1,5 +1,5 @@
 // E2E Mock LLM Server
-// 模拟 OpenAI 兼容 /v1/chat/completions、Anthropic /v1/messages、Ollama /api/chat 与微软官方 translate 接口。
+// 模拟 OpenAI /v1/chat/completions 与 /v1/responses、Anthropic /v1/messages、Ollama /api/chat 与微软官方 translate 接口。
 // 支持 stream: true 时返回流式响应(SSE / NDJSON),供 e2e 测试验证渐进渲染。
 // 全文翻译 e2e 扩展(v0.4.0):
 // - getRequestCount/resetRequestCount:按路由(pathname)累计请求数,供缓存复用/免重译断言
@@ -80,6 +80,23 @@ async function sendOpenAIStream(res: ServerResponse): Promise<void> {
     res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
     await sleep(CHUNK_DELAY_MS);
   }
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+
+/** 发送 OpenAI Responses SSE 流式响应:output_text delta 事件后以 completed + [DONE] 结束 */
+async function sendOpenAIResponsesStream(res: ServerResponse): Promise<void> {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.write(`data: ${JSON.stringify({ type: 'response.created' })}\n\n`);
+  for (const delta of STREAM_CHUNKS) {
+    res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', delta })}\n\n`);
+    await sleep(CHUNK_DELAY_MS);
+  }
+  res.write(`data: ${JSON.stringify({ type: 'response.completed' })}\n\n`);
   res.write('data: [DONE]\n\n');
   res.end();
 }
@@ -169,6 +186,18 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
                 ],
               }),
             );
+          }
+          return;
+        }
+
+        // OpenAI Responses API
+        if (req.method === 'POST' && req.url?.includes('/v1/responses')) {
+          if (isStream) {
+            await sendOpenAIResponsesStream(res);
+          } else {
+            await sleep(NONSTREAM_DELAY_MS);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ output_text: '你好,世界', output: [] }));
           }
           return;
         }
