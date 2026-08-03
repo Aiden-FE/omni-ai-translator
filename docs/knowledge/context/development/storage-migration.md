@@ -1,12 +1,13 @@
 ---
 id: context:development:storage-migration
 type: context
-status: draft
+status: active
 owner: project
-updated: 2026-07-30
-confidence: 0.85
+updated: 2026-08-03
+confidence: 0.95
 sources:
   - shared/storage.ts
+  - shared/translator/llm-protocol.ts
   - shared/translator/registry.ts
   - knowledges/context/development/on-read-storage-migration.md
 related:
@@ -14,23 +15,26 @@ related:
   - adr:005-response-style-as-llm-protocol-discriminator
 ---
 
-# on-read 存储迁移模式（初始化草稿）
+# on-read 存储迁移模式
 
 > 以 `shared/storage.ts` 的 `migrateProvider` 实现为准。
 
-`chrome.storage.local` 存量配置在数据模型演进时采用 **on-read backfill**：读出时补全新形态字段，**不回写存储**，用户无感。`getProviders` 读出时把旧 `type='ollama'` / `'openai-compatible'` 补全为 `type='llm'` + 对应 `responseStyle`，存储层不主动改写，直到用户下次主动写入才落新形态。
+`chrome.storage.local` 存量配置在数据模型演进时采用 **on-read backfill**：读出时补全新形态字段，**不回写存储**，用户无感。`getProviders` 把旧类型和协议值投影为运行时的 `ProviderConfig`；存储层不主动改写，直到用户下次主动保存才会落入新形态。
 
 ## 迁移规则（`migrateProvider`）
 
 | 旧形态 | 新形态 |
 |--------|--------|
 | `type='ollama'` | `type='llm'` + `responseStyle='ollama'` |
-| `type='openai-compatible'` | `type='llm'` + `responseStyle`（取原值，缺省 `'openai'`） |
-| `type='llm'` | 不变 |
+| `type='openai-compatible'` | `type='llm'` + `normalizeLlmProtocol(responseStyle)` |
+| `type='llm'` | 保持 `type='llm'`，并以 `normalizeLlmProtocol(responseStyle)` 规范协议 |
+| `responseStyle='openai'`、缺失或未知值 | `responseStyle='openai-completions'` |
+
+`normalizeLlmProtocol` 只保留 `openai-responses`、`anthropic`、`ollama` 三个非默认值；其余输入统一回退为 `openai-completions`。因此旧 OpenAI 配置不会在读取后意外变成 Responses 或其他协议。
 
 ## 关系
 
-- 存量配置（旧形态）→ `getProviders` on-read 补全 → 运行时新形态；存储层保持旧形态。
+- 存量配置（旧形态）→ `getProviders` 的 `migrateProvider` → 运行时新形态；存储层保持旧形态。
 - `registry.ts` 的 `inferCategory` 同时识别新 `llm` 与旧 `openai-compatible` / `ollama`，兜底迁移前其他代码路径直接传 config 的场景。
 
 ## 踩坑
@@ -46,4 +50,5 @@ related:
 ## 来源证据
 
 - `shared/storage.ts`：`migrateProvider` + `getProviders` 调 `map(migrateProvider)`，不回写。
+- `shared/translator/llm-protocol.ts`：`normalizeLlmProtocol` 的默认协议回退规则。
 - `shared/translator/registry.ts`：`inferCategory` 旧 type 兼容识别。

@@ -36,9 +36,10 @@ related:
 
 4. `applyReplace(seg)`：替换模式——译文写入 `textNodes[0].data`，其余置空，保留行内子元素结构。
 5. `applyBilingual(seg)`：双语模式——创建带 Shadow DOM 的译文块宿主，插入段后/块级祖先后。
-6. `markFailed(seg)` / `clearFailedMark(seg)`：段尾追加/移除失败徽标宿主。
-7. `switchMode(records, from, to)`：同步切换显示模式（零 API 调用）。
-8. `restoreAll(records)`：还原所有文本节点原始 data、移除注入 DOM、重置状态。
+6. `markLoading(seg)` / `clearLoadingMark(seg)`：段尾追加/移除幂等加载标记宿主。
+7. `markFailed(seg)` / `clearFailedMark(seg)`：段尾追加/移除失败徽标宿主。
+8. `switchMode(records, from, to)`：同步切换显示模式（零 API 调用）。
+9. `restoreAll(records)`：还原所有文本节点原始 data、移除注入 DOM、重置状态。
 
 渲染器为纯 DOM 操作，不持有翻译状态；状态全部来自 `SegmentRecord`。
 
@@ -57,6 +58,7 @@ related:
 | `errorType?` | string | 仅 `failed` 时存在 |
 | `blockHost?` | HTMLElement | 双语模式译文块宿主元素（`applyBilingual` 挂载，`switchMode`/`restoreAll` 移除） |
 | `originalTextNodesData?` | string[] | 渲染前各文本节点原始 `data` 快照（含原始空白分布；首次渲染时由渲染器 `captureOriginal` 写入，供逐字节恢复） |
+| `loadingMarkHost?` | HTMLElement | 加载标记宿主（`markLoading` 挂载，完成、失败或恢复时移除） |
 | `failedMarkHost?` | HTMLElement | 失败标记徽标宿主元素（`markFailed` 挂载，`clearFailedMark`/`restoreAll` 移除） |
 
 ### 缓存 key 格式
@@ -87,7 +89,7 @@ related:
 
 ### data-llm-translator 排除约定
 
-扩展自身注入的 DOM 子树（如译文浮层、双语对照块、失败徽标）以 `data-llm-translator` 属性标记，分段收集时整棵子树排除，防止扩展产物被误收集为翻译段。t3 渲染器所有注入宿主（`blockHost`、`failedMarkHost`）均携带该属性。
+扩展自身注入的 DOM 子树（如加载标记、译文浮层、双语对照块、失败徽标）以 `data-llm-translator` 属性标记，分段收集时整棵子树排除，防止扩展产物被误收集为翻译段。t3 渲染器所有注入宿主（`blockHost`、`loadingMarkHost`、`failedMarkHost`）均携带该属性。
 
 ### jsdom 可见性兼容
 
@@ -135,6 +137,12 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 在段尾追加带 shadow 的小徽标宿主 `div.llm-translator-failed-host`（⚠ + 虚线底边）。双语模式插到 `blockHost` 之后，替换模式插到 `seg.el` 之后。`markFailed` 先清除旧徽标再挂新的；`clearFailedMark` 移除并置 `undefined`，无徽标时不报错。
 
+### 加载标记（markLoading / clearLoadingMark）
+
+`markLoading` 在段尾创建 `div.llm-translator-loading-host[data-llm-translator]`，使用 open Shadow DOM、spinner、`role='status'` 和 `aria-label='正在翻译此段'`。已有且仍连接到 DOM 的宿主会被复用，因而重复调用不会产生多个标记。双语模式下标记插到当前 `blockHost` 之后，其余情况插到段元素之后；不会替换原文或改变段状态。
+
+`clearLoadingMark` 幂等移除宿主并清空 `loadingMarkHost`。`applyReplace`、`applyBilingual`、`markFailed` 与 `restoreAll` 都会先调用它，确保 `done` / `failed` / restore 为终态时没有遗留加载反馈。编排器负责在初始、重试和动态分段进入并发池之前调用 `markLoading`；本模块只管理单段 DOM，不持有任务进度或请求状态。
+
 ### 模式切换（switchMode）
 
 同步切换（零 API 调用，返回 `void`），两阶段批量操作全部 records：
@@ -148,7 +156,7 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 ### 全量恢复（restoreAll）
 
-逐字节还原 `textNodes` 原始 `data`（从 `originalTextNodesData` 快照）、移除全部 `blockHost` 与 `failedMarkHost`、重置 `status -> pending` / 清 `errorType`。**保留 `translatedText` 缓存值**供再次触发复用。对从未渲染过的段安全（`originalTextNodesData` 为 `undefined` 时跳过还原）。
+逐字节还原 `textNodes` 原始 `data`（从 `originalTextNodesData` 快照）、移除全部 `blockHost`、`loadingMarkHost` 与 `failedMarkHost`、重置 `status -> pending` / 清 `errorType`。**保留 `translatedText` 缓存值**供再次触发复用。对从未渲染过的段安全（`originalTextNodesData` 为 `undefined` 时跳过还原）。
 
 ### 逐字节文本节点恢复
 
@@ -171,15 +179,15 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 - **t2 内部**：`segmenter.ts` 产出 `SegmentRecord` 供 `translate-pool.ts` 翻译、`renderer.ts` 渲染。
 - **产出给 t5（编排器）**：
   - t2 接口：`collectSegments` / `runPool` / `retrySegments`、会话级缓存 Map 持有模式、`isActive` / `signal` 中止回调。
-  - t3 接口：`applyReplace` / `applyBilingual` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`。
-  - 数据契约：`SegmentRecord.originalTextNodesData` / `blockHost` / `failedMarkHost` 字段（渲染器写入，编排器管理生命周期）。
+  - t3 接口：`applyReplace` / `applyBilingual` / `markLoading` / `clearLoadingMark` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`。
+  - 数据契约：`SegmentRecord.originalTextNodesData` / `blockHost` / `loadingMarkHost` / `failedMarkHost` 字段（渲染器写入，编排器管理生命周期）。
 - **样式资源**：`assets/fullpage-block.css` 经 `?inline` 导入注入 shadow root；`vitest.config.ts` 需 `css: true` 才能在测试中拿到实际 CSS 内容（默认 `css:false` 会 stub 为空串）。
 
 ## 来源证据
 
-- `shared/fullpage/types.ts`：`SegmentStatus` / `SegmentRecord`（含 `originalTextNodesData` / `blockHost` / `failedMarkHost`）/ `SegmenterOptions` / `TranslatePoolOptions` / `TranslatePoolResult` 定义。
+- `shared/fullpage/types.ts`：`SegmentStatus` / `SegmentRecord`（含 `originalTextNodesData` / `blockHost` / `loadingMarkHost` / `failedMarkHost`）/ `TranslationProgress` / `SegmenterOptions` / `TranslatePoolOptions` / `TranslatePoolResult` 定义。
 - `shared/fullpage/segmenter.ts`：`collectSegments`（DOM 路径 ID、Document/Fragment 根、嵌套递归、剪枝、可见性兼容）、`SKIP_TAGS` / `BLOCK_TAGS` / `INLINE_TAGS` 常量。
 - `shared/fullpage/translate-pool.ts`：`runPool`（并发≤3、缓存、中止、`TranslateResult` 契约）、`retrySegments`、`CACHE_SEP` 常量。
-- `shared/fullpage/renderer.ts`：`applyReplace` / `applyBilingual` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll` 导出函数；`captureOriginal` / `restoreTextNodes` / `findInsertionRef` / `insertBlockAfter` / `createShadowHost` 内部函数；`BLOCK_SELECTOR` 常量。
+- `shared/fullpage/renderer.ts`：`applyReplace` / `applyBilingual` / `markLoading` / `clearLoadingMark` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll` 导出函数；`captureOriginal` / `restoreTextNodes` / `findInsertionRef` / `insertBlockAfter` / `createShadowHost` 内部函数；`BLOCK_SELECTOR` 常量。
 - `assets/fullpage-block.css`：`:host` / `:host(.llm-translator-failed-host)` / `.llm-translator-block-content` / `.llm-translator-failed-badge` 自足样式（显式重置继承属性）。
 - `shared/fullpage/renderer.test.ts`：499 行单测（jsdom），覆盖替换/双语/失败标记/模式切换/恢复/Shadow DOM 隔离。

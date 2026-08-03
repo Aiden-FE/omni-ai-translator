@@ -8,6 +8,8 @@ confidence: 0.9
 sources:
   - shared/fullpage/orchestrator.ts
   - shared/fullpage/orchestrator.test.ts
+  - shared/fullpage/renderer.ts
+  - shared/fullpage/toolbar.ts
   - entrypoints/fullpage.content.ts
   - docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md
   - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
@@ -60,6 +62,23 @@ segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是
 | `isFlushing` | `boolean` | flush 并发守卫 |
 
 测试钩子 `__getState()` / `__reset()` 导出内部状态快照与全量重置，供单元测试断言与隔离。
+
+## 可见翻译生命周期与聚合进度
+
+编排器在请求派发前创建工具栏，并在 `runPool` 前为本轮所有收集到的分段调用 `markLoading`。因此排队中的 `pending` 段和已派发的 `translating` 段都立即显示加载标记；标记是带 `data-llm-translator` 的 Shadow DOM 宿主，不替换原文。
+
+| 分段状态或操作 | 编排器动作 | 页面反馈 |
+|---|---|---|
+| `pending` / `translating` | 保持 loading marker | 段尾显示「正在翻译此段」状态 |
+| `done` | `clearLoadingMark` 后按当前模式渲染 | 替换译文或双语译文块 |
+| `failed` | `clearLoadingMark` 后 `markFailed` | 失败徽标，并更新重试计数 |
+| 重试开始 | 清失败徽标、重新 `markLoading` | 重试段回到加载状态 |
+| 增量内容 | 新段入 `records` 后先 `markLoading` 再入池 | 与首轮相同的加载生命周期 |
+| 恢复原文 | `restoreAll` | 移除加载、译文和失败宿主 |
+
+`updateProgress` 不维护额外计数器，而是从唯一状态 `records` 派生：`completed` 为 `done + failed`，`failed` 为失败段数，`active` 为是否还存在 `pending` 或 `translating`。因此失败也是已处理的终态，进度不会停滞。工具栏在初始收集、每次 settle、重试前后、增量收集和空页面启动时更新：活动时显示 `全文翻译 completed/total` 与 spinner，全部成功时显示 `全文翻译完成 total/total`，有失败时显示 `已完成 completed/total，失败 failed`，空页面显示 `未发现可翻译文本`。
+
+模式切换只切换已完成段的渲染，不创建或移除 loading marker。恢复原文会立刻移除所有注入宿主；晚到的请求结果受 `active` 守卫拦截，不能重新注入加载标记或译文。
 
 ## 可复用设计范式
 
@@ -154,7 +173,7 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 3. `records = collectSegments(document.body)`（v0.4 同步收集；大页面后续可用 `requestIdleCallback` 分片优化）
 4. `recordedEls = new Set(records.map(r => r.el))`
 5. `toolbar = createToolbar({ onSwitchMode, onRestore, onRetry, onCollapse, onRecall })`；`toolbar.setMode(mode)`（空分段页重复触发时先 `toolbar?.destroy()` 防重复挂载）
-6. `await runPool(records, { targetLang, concurrency: 3, cache, onSettled, isActive: () => active })`
+6. `markSegmentsLoading(records)` + `updateProgress()`，然后 `await runPool(records, { targetLang, concurrency: 3, cache, onSettled, isActive: () => active })`
 7. 若 `active`（翻译期间未被恢复）-> `startObserver()`
 
 ## 工具栏回调接线
@@ -195,7 +214,8 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 ## 来源证据
 
 - `shared/fullpage/orchestrator.ts`：模块级状态声明、`start` / `doStart`（复用路径 + 全新路径 + startInFlight 守卫）、`handleSettled`（active + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重）、`handleRestore`（保留 cache）、`handleRetry`（复用 retrySegments）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子。
-- `shared/fullpage/orchestrator.test.ts`：472 行 / 20 个单元测试（jsdom + fake timers），覆盖类型守卫、replace/bilingual 基本流程、空页面、重复触发不重复建栏、并发 start 守卫、复用路径（验收标准 10）、恢复后 cache 命中、工具栏回调（switchMode/restore/retry）、onSettled 防闪回与元素移除守卫、增量翻译（验收标准 9：新增节点翻译、过滤注入子树、防回环、recordedEls 去重、恢复后观察器断开）。
+- `shared/fullpage/orchestrator.test.ts`：覆盖即时加载标记、派生进度、成功/失败终态、重试、增量分段、空页面、恢复中的晚到结果、类型守卫和既有编排器状态机。
+- `shared/fullpage/renderer.ts` / `shared/fullpage/toolbar.ts`：分别提供幂等 loading marker 清理和状态行呈现 API。
 - `entrypoints/fullpage.content.ts`：`defineContentScript({ matches: ['<all_urls>'] })` + `runtime.onMessage` + `isBackgroundCommand` 守卫 + `start(msg.mode)` 调用 + catch console.warn。
 - `docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md`：编排器状态机总体架构、模块级状态表、start 流程、onSettled 回调、工具栏回调接线表、增量翻译设计、isActive 中止、关键设计权衡（模块级状态 vs 工厂函数、retrySegments vs runPool、observer 启动时机、复用路径不重建 toolbar）、边界与风险。
 - `docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md`：§4.3 资源与生命周期（MutationObserver 不重复创建、isActive 中止、toolbar.destroy 幂等、防抖管线、无闭包泄漏）、§4.4 并发与错误路径（并发≤3、sendMessage 契约、失败收集/重试/计数一致、SW 回收容错）、S3 retrySegments isActive 设计权衡、验收标准 1-12 逐条确认。
