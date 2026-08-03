@@ -1,6 +1,10 @@
 // E2E Mock LLM Server
 // 模拟 OpenAI 兼容 /v1/chat/completions、Anthropic /v1/messages、Ollama /api/chat 与微软官方 translate 接口。
 // 支持 stream: true 时返回流式响应(SSE / NDJSON),供 e2e 测试验证渐进渲染。
+// 全文翻译 e2e 扩展(v0.4.0):
+// - getRequestCount/resetRequestCount:按路由(pathname)累计请求数,供缓存复用/免重译断言
+// - setFailMode:失败开关,开启后 OpenAI 兼容路由对请求体含 __FAIL__ 标记的请求返回 500(快速失败,无延迟)
+// - NONSTREAM_DELAY_MS:非流式成功响应统一 300ms 可观测延迟,使「先译完的段落先渲染」可被断言
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { AddressInfo } from 'node:net';
 
@@ -21,6 +25,44 @@ const STREAM_CHUNKS = ['你', '好', ',世界'];
 
 /** chunk 间延迟(ms),模拟真实流式传输,使渐进渲染可被 e2e 捕获 */
 const CHUNK_DELAY_MS = 100;
+
+/** 非流式成功响应的可观测延迟(ms):使全文翻译「先译完的段落先渲染」可被 e2e 相对时序断言 */
+export const NONSTREAM_DELAY_MS = 300;
+
+/** 按路由(pathname,不含 query)累计的请求计数,供缓存复用/免重译断言 */
+const requestCounts = new Map<string, number>();
+
+/**
+ * 读取请求计数。
+ * @param route - 指定路由 pathname(如 /v1/chat/completions)时返回该路由计数;缺省返回总数
+ */
+export function getRequestCount(route?: string): number {
+  if (route !== undefined) {
+    return requestCounts.get(route) ?? 0;
+  }
+  let total = 0;
+  for (const n of requestCounts.values()) {
+    total += n;
+  }
+  return total;
+}
+
+/** 清空请求计数(用例间隔离,workers=1 单进程内模块状态跨 spec 文件共享) */
+export function resetRequestCount(): void {
+  requestCounts.clear();
+}
+
+/** 失败开关状态:开启后 OpenAI 兼容路由对含 __FAIL__ 标记的请求返回 500 */
+let failMode = false;
+
+/**
+ * 失败开关(用后须 setFailMode(false) 复位,避免污染后续用例)。
+ * 开启后仅对请求体含 __FAIL__ 标记的 OpenAI 兼容请求返回 500——
+ * 供失败重试 e2e 构造「部分失败」:其余段正常译出,仅标记段失败。
+ */
+export function setFailMode(on: boolean): void {
+  failMode = on;
+}
 
 /** 等待指定毫秒 */
 function sleep(ms: number): Promise<void> {
@@ -89,6 +131,10 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
         // 记录 headers,供 microsoft 有 Key e2e 断言鉴权 header
         lastRequestHeaders = { ...req.headers };
 
+        // 按路由(pathname)累计请求计数(含失败请求:缓存复用断言语义为「未发起新请求」)
+        const route = (req.url ?? '').split('?')[0];
+        requestCounts.set(route, (requestCounts.get(route) ?? 0) + 1);
+
         // 健康检查
         if (req.method === 'GET' && req.url === '/health') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -101,9 +147,16 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
 
         // OpenAI 兼容 chat completions
         if (req.method === 'POST' && req.url?.includes('/v1/chat/completions')) {
+          // 失败开关:仅对含 __FAIL__ 标记的请求返回 500(快速失败,不加非流式延迟)
+          if (failMode && body.includes('__FAIL__')) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'mock forced failure for __FAIL__ segment' } }));
+            return;
+          }
           if (isStream) {
             await sendOpenAIStream(res);
           } else {
+            await sleep(NONSTREAM_DELAY_MS);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -125,6 +178,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendAnthropicStream(res);
           } else {
+            await sleep(NONSTREAM_DELAY_MS);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -145,6 +199,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendOllamaStream(res);
           } else {
+            await sleep(NONSTREAM_DELAY_MS);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -160,6 +215,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
         // 微软官方 translate 端点（有 Key 场景）：POST /translate?api-version=3.0&to=...
         // 返回微软响应格式,供有 Key e2e 验证官方端点落点与鉴权 header
         if (req.method === 'POST' && req.url?.includes('/translate')) {
+          await sleep(NONSTREAM_DELAY_MS);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(
             JSON.stringify([{ translations: [{ text: '你好,世界', to: 'zh' }] }]),

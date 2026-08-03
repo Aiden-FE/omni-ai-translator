@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Fullpage E2E 测试页</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 24px;
+        max-width: 720px;
+        margin: 0 auto;
+      }
+      nav ul {
+        display: flex;
+        gap: 16px;
+        list-style: none;
+        padding: 0;
+      }
+      main p {
+        font-size: 16px;
+        line-height: 1.7;
+      }
+      footer {
+        margin-top: 32px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 分段清单(9 段):nav 链接 x3(行内段) + 正文段 x4(块级段) + footer + button(行内段) -->
+    <nav>
+      <ul>
+        <li><a href="#home">Home</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </nav>
+    <main>
+      <p id="para-1">The first paragraph describes a quiet morning in the small town.</p>
+      <p id="para-2">The second paragraph explains how the river winds through the valley.</p>
+      <p id="para-fail">This paragraph carries the __FAIL__ marker so the mock server can fail it on demand.</p>
+      <p id="para-4">The final paragraph closes the story with a hopeful note about tomorrow.</p>
+    </main>
+    <footer>Copyright 2026 Omni Translator fixture page.</footer>
+    <button id="add-paragraph" type="button">Add Paragraph</button>
+    <script>
+      // 增量翻译用:点击向 body 追加新段落,触发 MutationObserver 增量管线
+      (function () {
+        let count = 0;
+        document.getElementById('add-paragraph').addEventListener('click', function () {
+          count += 1;
+          const p = document.createElement('p');
+          p.id = 'added-para-' + count;
+          p.textContent = 'Dynamically added paragraph number ' + count + ' for incremental translation.';
+          document.body.appendChild(p);
+        });
+      })();
+    </script>
+  </body>
+</html>

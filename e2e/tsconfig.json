@@ -6,7 +6,7 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "types": ["node", "@playwright/test"],
+    "types": ["node", "@playwright/test", "chrome"],
     "lib": ["ESNext"]
   },
   "include": ["**/*.ts"]
