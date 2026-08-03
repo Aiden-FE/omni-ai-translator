@@ -2,6 +2,7 @@
 // Key 严禁外泄，仅存本地。详见 knowledges/context/development/coding-standard.md
 
 import type { ProviderConfig, Settings } from './types';
+import { normalizeLlmProtocol } from './translator/llm-protocol';
 
 const PROVIDERS_KEY = 'llm_translator:providers';
 const SETTINGS_KEY = 'llm_translator:settings';
@@ -36,7 +37,10 @@ function migrateProvider(p: ProviderConfig): ProviderConfig {
     return { ...p, type: 'llm', responseStyle: 'ollama' };
   }
   if (rawType === 'openai-compatible') {
-    return { ...p, type: 'llm', responseStyle: p.responseStyle ?? 'openai' };
+    return { ...p, type: 'llm', responseStyle: normalizeLlmProtocol(p.responseStyle) };
+  }
+  if (rawType === 'llm') {
+    return { ...p, responseStyle: normalizeLlmProtocol(p.responseStyle) };
   }
   return p;
 }

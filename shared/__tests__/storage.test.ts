@@ -1,10 +1,9 @@
 // 存储模块 on-read 迁移单元测试 — 覆盖旧 type(openai-compatible/ollama)→ 新 type(llm)+responseStyle 迁移
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getProviders } from '../storage';
-import type { ProviderConfig } from '../types';
 
 // Mock browser.storage.local
-function mockStorage(providers: ProviderConfig[] | null): void {
+function mockStorage(providers: unknown[] | null): void {
   const store: Record<string, unknown> = {};
   if (providers !== null) {
     store['llm_translator:providers'] = providers;
@@ -37,13 +36,13 @@ describe('getProviders — on-read 迁移', () => {
     expect(providers[0].model).toBe('llama3');
   });
 
-  it('旧 type=openai-compatible 无 responseStyle → type=llm + responseStyle=openai(缺省)', async () => {
+  it('旧 type=openai-compatible 无 responseStyle → type=llm + responseStyle=openai-completions', async () => {
     mockStorage([
       { id: 'p2', name: 'my-openai', type: 'openai-compatible' as string, baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o' },
     ]);
     const providers = await getProviders();
     expect(providers[0].type).toBe('llm');
-    expect(providers[0].responseStyle).toBe('openai');
+    expect(providers[0].responseStyle).toBe('openai-completions');
   });
 
   it('旧 type=openai-compatible + responseStyle=anthropic → type=llm + responseStyle=anthropic(保留)', async () => {
@@ -55,16 +54,25 @@ describe('getProviders — on-read 迁移', () => {
     expect(providers[0].responseStyle).toBe('anthropic');
   });
 
-  it('旧 type=openai-compatible + responseStyle=openai → type=llm + responseStyle=openai(保留)', async () => {
+  it('旧 type=openai-compatible + responseStyle=openai → type=llm + responseStyle=openai-completions', async () => {
     mockStorage([
       { id: 'p4', name: 'my-openai-explicit', type: 'openai-compatible' as string, baseUrl: 'https://api.openai.com/v1/chat/completions', model: 'gpt-4o', responseStyle: 'openai' },
     ]);
     const providers = await getProviders();
     expect(providers[0].type).toBe('llm');
-    expect(providers[0].responseStyle).toBe('openai');
+    expect(providers[0].responseStyle).toBe('openai-completions');
   });
 
-  it('新 type=llm → 不变(无迁移)', async () => {
+  it('新 type=llm + responseStyle=openai-responses → 保留 Responses 协议', async () => {
+    mockStorage([
+      { id: 'responses', name: 'Responses', type: 'llm', baseUrl: 'https://host/v1', model: 'm', responseStyle: 'openai-responses' },
+    ]);
+    const providers = await getProviders();
+    expect(providers[0].type).toBe('llm');
+    expect(providers[0].responseStyle).toBe('openai-responses');
+  });
+
+  it('新 type=llm + responseStyle=anthropic → 保留 Anthropic 协议', async () => {
     mockStorage([
       { id: 'p5', name: 'already-new', type: 'llm', baseUrl: 'http://x', model: 'm', responseStyle: 'anthropic' },
     ]);
@@ -94,7 +102,7 @@ describe('getProviders — on-read 迁移', () => {
     expect(providers[0].type).toBe('llm');
     expect(providers[0].responseStyle).toBe('ollama');
     expect(providers[1].type).toBe('llm');
-    expect(providers[1].responseStyle).toBe('openai');
+    expect(providers[1].responseStyle).toBe('openai-completions');
     expect(providers[2].type).toBe('google');
     expect(providers[3].type).toBe('llm');
     expect(providers[3].responseStyle).toBe('ollama');

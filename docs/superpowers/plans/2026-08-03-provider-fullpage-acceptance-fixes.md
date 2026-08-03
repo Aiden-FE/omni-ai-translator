@@ -97,7 +97,7 @@ Expected: FAIL because `llm-protocol.ts` does not exist and legacy migration sti
 
 - [ ] **Step 4: Implement the protocol contract and resolver**
 
-Add the strict protocol type to `shared/types.ts` and use it from `ProviderConfig`:
+Add the protocol type to `shared/types.ts`. During Task 1 only, keep legacy `'openai'` in the input union so the unchanged UI still typechecks; `getProviders` must nevertheless return normalized values at runtime:
 
 ```ts
 export type LlmProtocol =
@@ -106,7 +106,7 @@ export type LlmProtocol =
   | 'anthropic'
   | 'ollama';
 
-responseStyle?: LlmProtocol;
+responseStyle?: LlmProtocol | 'openai';
 ```
 
 Implement protocol metadata and suffix-safe resolution:
@@ -222,6 +222,8 @@ responseStyle: 'openai-completions',
 ```
 
 Change visible text to `Base URL` and examples such as `https://api.openai.com/v1`. When a known default or known complete endpoint is present, switching protocol replaces it with that protocol's default Base URL. Preserve custom values.
+
+After every UI and provider caller uses the new values, narrow `ProviderConfig.responseStyle` from `LlmProtocol | 'openai'` to `LlmProtocol`. Legacy `'openai'` remains accepted only as `unknown` persisted input in `migrateProvider` tests.
 
 - [ ] **Step 5: Add Responses mock route and provider E2E**
 

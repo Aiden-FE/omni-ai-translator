@@ -6,6 +6,13 @@ export type ProviderCategory = 'llm' | 'traditional';
 /** 具体源类型：LLM 类统一为 'llm'（由 responseStyle 区分协议格式）；传统翻译 google/microsoft 保持独立 */
 export type ProviderType = 'llm' | 'google' | 'microsoft';
 
+/** LLM 请求协议。openai 为存量配置兼容值，读取后归一化为 openai-completions。 */
+export type LlmProtocol =
+  | 'openai-completions'
+  | 'openai-responses'
+  | 'anthropic'
+  | 'ollama';
+
 /** 翻译错误类型，四类互斥，供前端差异化反馈（契约供 #11 消费） */
 export type ErrorType = 'no-config' | 'network' | 'rate-limit' | 'unreachable';
 
@@ -22,8 +29,8 @@ export interface ProviderConfig {
   model: string;
   /** microsoft Azure Translator 区域（如 eastus、global）；有 Key 时携带 Ocp-Apim-Subscription-Region。google 不使用。缺省则不发送该 header。 */
   region?: string;
-  /** 响应风格：对所有 LLM 源(type='llm')生效，区分协议格式。缺省 'openai'（向后兼容）。openai → OpenAI 兼容；anthropic → 原生 Anthropic Messages API；ollama → 本地 Ollama 协议。 */
-  responseStyle?: 'openai' | 'anthropic' | 'ollama';
+  /** LLM 请求协议；openai 仅用于读取迁移前的存量配置。 */
+  responseStyle?: LlmProtocol | 'openai';
 }
 
 /** 翻译请求 */

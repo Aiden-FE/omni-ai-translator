@@ -191,7 +191,7 @@ async function onTypeChange(p: ProviderConfig) {
   await saveProviders();
 }
 
-function responseStyleHint(style: 'openai' | 'anthropic' | 'ollama'): string {
+function responseStyleHint(style: NonNullable<ProviderConfig['responseStyle']>): string {
   if (style === 'anthropic')
     return '适用于原生 Anthropic Messages API 端点(如 https://api.anthropic.com/v1/messages)';
   if (style === 'ollama')
