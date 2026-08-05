@@ -127,4 +127,16 @@
 
 ## 沉淀映射
 
-无新增/变更产品代码；本次仅扩展 e2e 覆盖。视口优先调度的产品代码（`shared/fullpage/translate-pool.ts` `isSegmentInViewport` / `createViewportObserver`、`shared/fullpage/orchestrator.ts` `enqueueSegments` 提取 + `viewportObserver` 共享句柄 + `handleRestore` 末尾 disconnect 清理）已在任务 `83a350c8-48b5-4875-b7a2-8f97e90f13af` 落地。
+无新增/变更产品代码;本次仅扩展 e2e 覆盖。视口优先调度的产品代码(`shared/fullpage/translate-pool.ts` `isSegmentInViewport` / `createViewportObserver`、`shared/fullpage/orchestrator.ts` `enqueueSegments` 提取 + `viewportObserver` 共享句柄 + `handleRestore` 末尾 disconnect 清理)已在任务 `83a350c8-48b5-4875-b7a2-8f97e90f13af` 落地。
+
+## 知识沉淀
+
+本次 e2e 扩展中提炼出两条可复用 e2e 技术,合并归并到现有长期知识 `runbook:e2e:fullpage-trigger-assertions` 文档(同一文档已覆盖 SW 广播触发、相对时序断言、shadow DOM 断言、waitForSettled 等待点,本轮追加「IO 滚动」与「disconnect 双断言」两条技术 3/4):
+
+- **知识 ID**: `runbook:e2e:fullpage-trigger-assertions`(复用稳定 ID,同一 runbook 增补「技术 3:IO 触发的分步滚动策略」与「技术 4:disconnect/cleanup 验证的强/弱双断言」两节,未创建新文档,避免重复)
+- **候选映射**:
+  - 候选 0(技术 3:分步滚动)→ 合并至 `runbook:e2e:fullpage-trigger-assertions`
+  - 候选 1(技术 4:强/弱双断言)→ 合并至 `runbook:e2e:fullpage-trigger-assertions`
+- **复用场景**:
+  - **技术 3** 适用于后续编写依赖 IntersectionObserver / 滚动触发的 Playwright e2e 用例(懒加载、视口优先调度、文本阅读进度跟踪等)时,复用「半视口步进 + rAF + 末尾 scrollTo bottom」模式,避免单次 scrollTo 跳到底部导致 IO 不触发的常见陷阱。
+  - **技术 4** 适用于编写「disconnect / cleanup 副作用已被清理」类断言(如验证 observer 句柄、订阅、worker 终止)时,组合「强观察(宿主 / 副作用元素计数为 0)+ 弱观察(请求 / 事件计数不变)」双断言避免假阳性,同时确认 fixture 让被清理资源真实被创建。
