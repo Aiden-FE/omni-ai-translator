@@ -97,15 +97,18 @@ export function applyReplace(seg: SegmentRecord): void {
   if (textNodes.length === 0) return;
   captureOriginal(seg);
 
-  if (seg.parts && seg.translatedParts?.length === seg.parts.length) {
+  if (seg.parts) {
+    const translatedParts = seg.translatedParts;
+    if (translatedParts?.length !== seg.parts.length) return;
     seg.parts.forEach((part, index) => {
-      const translatedText = seg.translatedParts![index];
+      const translatedText = translatedParts[index];
       part.node.data = translatedText;
       part.translatedText = translatedText;
     });
     return;
   }
 
+  // 传统平铺分段没有 parts，继续沿用单译文回填行为。
   const text = seg.translatedText ?? '';
   textNodes[0].data = text;
   for (let i = 1; i < textNodes.length; i++) {

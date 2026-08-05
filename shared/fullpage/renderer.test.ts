@@ -103,6 +103,20 @@ describe('applyReplace', () => {
     expect(document.querySelector('p')?.textContent).toBe('你好世界');
     expect(document.querySelector('strong')).not.toBeNull();
   });
+
+  it.each([
+    ['missing', undefined],
+    ['mismatched', ['你好']],
+  ] as const)('keeps original semantic text when translated parts are %s', (_, translatedParts) => {
+    document.body.innerHTML = '<p>Hello <strong>world</strong></p>';
+    const [segment] = collectSemanticSegments(document.body);
+    segment.translatedText = '你好世界';
+    segment.translatedParts = translatedParts;
+
+    applyReplace(segment);
+
+    expect(document.querySelector('p')?.innerHTML).toBe('Hello <strong>world</strong>');
+  });
 });
 
 describe('applyBilingual', () => {
