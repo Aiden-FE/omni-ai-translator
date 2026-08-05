@@ -26,7 +26,11 @@ const STREAM_CHUNKS = ['你', '好', ',世界'];
 /** chunk 间延迟(ms),模拟真实流式传输,使渐进渲染可被 e2e 捕获 */
 const CHUNK_DELAY_MS = 100;
 
-const BATCH_PROMPT_MARKER = 'Output one compact JSON object per completed chunk and no other text.';
+const BATCH_PROMPT_PREFIX = 'Translate every chunk into ';
+const BATCH_REASONING_INSTRUCTION =
+  'Do not reason or output analysis, <think>, <analysis>, or control tokens.';
+const BATCH_OUTPUT_INSTRUCTION =
+  'Output one compact JSON object per completed chunk and no other text.';
 const MOCK_TRANSLATION = '你好,世界';
 
 interface MockBatchPart {
@@ -41,11 +45,27 @@ interface MockBatchChunk {
   parts: MockBatchPart[];
 }
 
+interface CapturedBatchRequest {
+  chunks: MockBatchChunk[];
+}
+
+interface PendingBatchChunk {
+  chunkId: string;
+  release: () => void;
+}
+
 /** 非流式成功响应的可观测延迟(ms):使全文翻译「先译完的段落先渲染」可被 e2e 相对时序断言 */
 export const NONSTREAM_DELAY_MS = 300;
 
 /** 按路由(pathname,不含 query)累计的请求计数,供缓存复用/免重译断言 */
 const requestCounts = new Map<string, number>();
+const capturedBatchRequests: CapturedBatchRequest[] = [];
+const emittedBatchChunkIds: string[] = [];
+const pendingBatchChunks: PendingBatchChunk[] = [];
+let activeBatchRequests = 0;
+let maxActiveBatchRequests = 0;
+let batchChunkGateEnabled = false;
+let batchObservationGeneration = 0;
 
 /**
  * 读取请求计数。
@@ -64,7 +84,61 @@ export function getRequestCount(route?: string): number {
 
 /** 清空请求计数(用例间隔离,workers=1 单进程内模块状态跨 spec 文件共享) */
 export function resetRequestCount(): void {
+  releaseAllBatchChunks();
+  batchChunkGateEnabled = false;
+  batchObservationGeneration += 1;
   requestCounts.clear();
+  capturedBatchRequests.length = 0;
+  emittedBatchChunkIds.length = 0;
+  activeBatchRequests = 0;
+  maxActiveBatchRequests = 0;
+}
+
+function cloneBatchChunks(chunks: MockBatchChunk[]): MockBatchChunk[] {
+  return chunks.map((chunk) => ({
+    chunkId: chunk.chunkId,
+    segmentId: chunk.segmentId,
+    parts: chunk.parts.map((part) => ({ ...part })),
+  }));
+}
+
+/** 返回 batch wire 的只读快照，避免测试修改 server 内部状态。 */
+export function getCapturedBatchRequests(): CapturedBatchRequest[] {
+  return capturedBatchRequests.map((request) => ({ chunks: cloneBatchChunks(request.chunks) }));
+}
+
+export function getMaxActiveBatchRequests(): number {
+  return maxActiveBatchRequests;
+}
+
+export function getActiveBatchRequests(): number {
+  return activeBatchRequests;
+}
+
+export function getPendingBatchChunkCount(): number {
+  return pendingBatchChunks.length;
+}
+
+export function getEmittedBatchChunkIds(): string[] {
+  return [...emittedBatchChunkIds];
+}
+
+export function setBatchChunkGate(enabled: boolean): void {
+  batchChunkGateEnabled = enabled;
+  if (!enabled) releaseAllBatchChunks();
+}
+
+export function releaseNextBatchChunk(): boolean {
+  const pending = pendingBatchChunks.shift();
+  if (!pending) return false;
+  pending.release();
+  return true;
+}
+
+export function releaseAllBatchChunks(): void {
+  while (releaseNextBatchChunk()) {
+    // Drain every waiter so a failed test cannot strand an HTTP response.
+  }
 }
 
 /** 失败开关状态:开启后 OpenAI 兼容路由对含 __FAIL__ 标记的请求返回 500 */
@@ -104,7 +178,7 @@ function isMockBatchChunk(value: unknown): value is MockBatchChunk {
     && value.parts.every(isMockBatchPart);
 }
 
-/** 仅识别 buildBatchPrompt 的 wire payload；普通划词流式 prompt 不进入批量 mock。 */
+/** 仅识别 buildBatchPrompt 的完整四行协议；普通划词文本无法伪造 batch route。 */
 function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
   if (!isRecord(requestBody) || !Array.isArray(requestBody.messages)) return null;
   const userMessage = requestBody.messages.find(
@@ -113,18 +187,31 @@ function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
   if (!isRecord(userMessage) || typeof userMessage.content !== 'string') return null;
 
   const prompt = userMessage.content;
-  if (!prompt.includes(BATCH_PROMPT_MARKER)) return null;
-  const wireStart = prompt.lastIndexOf('\n');
-  if (wireStart < 0) return null;
+  const lines = prompt.split('\n');
+  if (lines.length !== 4
+    || !lines[0].startsWith(BATCH_PROMPT_PREFIX)
+    || !lines[0].endsWith('.')
+    || lines[0].slice(BATCH_PROMPT_PREFIX.length, -1).length === 0
+    || lines[1] !== BATCH_REASONING_INSTRUCTION
+    || lines[2] !== BATCH_OUTPUT_INSTRUCTION) {
+    return null;
+  }
 
   try {
-    const chunks: unknown = JSON.parse(prompt.slice(wireStart + 1));
+    const chunks: unknown = JSON.parse(lines[3]);
     return Array.isArray(chunks) && chunks.length > 0 && chunks.every(isMockBatchChunk)
       ? chunks
       : null;
   } catch {
     return null;
   }
+}
+
+async function waitForBatchChunkRelease(chunkId: string): Promise<void> {
+  if (!batchChunkGateEnabled) return;
+  await new Promise<void>((release) => {
+    pendingBatchChunks.push({ chunkId, release });
+  });
 }
 
 function writeOpenAIDelta(res: ServerResponse, content: string): void {
@@ -135,6 +222,7 @@ async function sendOpenAIBatchStream(
   res: ServerResponse,
   chunks: MockBatchChunk[],
   omitFailedChunks: boolean,
+  observationGeneration: number,
 ): Promise<void> {
   writeOpenAIDelta(res, '<think>mock private reasoning</think>\n');
 
@@ -144,6 +232,7 @@ async function sendOpenAIBatchStream(
 
   for (let index = 0; index < completedChunks.length; index += 1) {
     const chunk = completedChunks[index];
+    await waitForBatchChunkRelease(chunk.chunkId);
     const objectText = JSON.stringify({
       chunkId: chunk.chunkId,
       translatedParts: chunk.parts.map((part) => ({
@@ -160,6 +249,9 @@ async function sendOpenAIBatchStream(
       writeOpenAIDelta(res, objectText.slice(splitAt));
     } else {
       writeOpenAIDelta(res, objectText);
+    }
+    if (observationGeneration === batchObservationGeneration) {
+      emittedBatchChunkIds.push(chunk.chunkId);
     }
 
     if (index < completedChunks.length - 1) await sleep(CHUNK_DELAY_MS);
@@ -180,12 +272,30 @@ async function sendOpenAIStream(
 
   const batchChunks = extractBatchChunks(requestBody);
   if (batchChunks) {
-    await sendOpenAIBatchStream(res, batchChunks, omitFailedChunks);
-  } else {
-    for (const chunk of STREAM_CHUNKS) {
-      writeOpenAIDelta(res, chunk);
-      await sleep(CHUNK_DELAY_MS);
+    const observationGeneration = batchObservationGeneration;
+    capturedBatchRequests.push({ chunks: cloneBatchChunks(batchChunks) });
+    activeBatchRequests += 1;
+    maxActiveBatchRequests = Math.max(maxActiveBatchRequests, activeBatchRequests);
+    try {
+      await sendOpenAIBatchStream(
+        res,
+        batchChunks,
+        omitFailedChunks,
+        observationGeneration,
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } finally {
+      if (observationGeneration === batchObservationGeneration) {
+        activeBatchRequests -= 1;
+      }
     }
+    return;
+  }
+
+  for (const chunk of STREAM_CHUNKS) {
+    writeOpenAIDelta(res, chunk);
+    await sleep(CHUNK_DELAY_MS);
   }
   res.write('data: [DONE]\n\n');
   res.end();
