@@ -27,7 +27,7 @@
     </style>
   </head>
   <body>
-    <!-- 分段清单(9 段):nav 链接 x3(行内段) + 正文段 x4(块级段) + footer + button(行内段) -->
+    <!-- 分段清单(10 段):nav 项 x3 + 正文语义段 x5 + footer + button -->
     <nav>
       <ul>
         <li><a href="#home">Home</a></li>
@@ -37,6 +37,10 @@
     </nav>
     <main>
       <p id="para-1">The first paragraph describes a quiet morning in the small town.</p>
+      <p id="inline-paragraph">
+        Direct paragraph text surrounds <strong>important inline wording</strong> and an
+        <a href="#inline-reference">inline reference</a> without creating extra blocks.
+      </p>
       <p id="para-2">The second paragraph explains how the river winds through the valley.</p>
       <p id="para-fail">This paragraph carries the __FAIL__ marker so the mock server can fail it on demand.</p>
       <p id="para-4">The final paragraph closes the story with a hopeful note about tomorrow.</p>

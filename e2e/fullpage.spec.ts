@@ -1,8 +1,8 @@
 // 全文翻译全链路 e2e 测试(v0.4.0)
 // 触发通道:Playwright 无法操作原生右键菜单,经 service worker 直发 BackgroundCommand
 // ({ type: 'fullpage-translate', mode })——与真实右键链路在 content script 侧汇合。
-// 段清单(9 段,fixture 注释已实测):3 nav 链接(行内) + 4 正文段 + footer + #add-paragraph 按钮。
-// 并发池 concurrency=3 + mock 300ms 非流式延迟 ⇒ 分 3 批 settle,支撑渐进渲染相对时序断言。
+// 段清单(10 个语义段):3 nav 项 + 5 正文段 + footer + #add-paragraph 按钮。
+// LLM 全文翻译走单个 batch stream，mock 逐对象延迟输出以支撑渐进渲染相对时序断言。
 import { test, expect } from './fixtures';
 import {
   startMockServer,
@@ -24,8 +24,14 @@ const MOCK_TRANSLATION = '你好,世界';
 /** 请求计数路由:本 spec 仅配置 OpenAI 兼容提供方 */
 const CHAT_ROUTE = '/v1/chat/completions';
 
-/** 首触发请求总数 = 9 段 × 1 请求(jsdom + collectSegments 实测 9 段,见 PLAN s1) */
-const INITIAL_REQUEST_COUNT = 9;
+/** 小页面全部语义段都满足 20 chunks / 6000 chars 预算，因此首触发只有一个请求。 */
+const INITIAL_REQUEST_COUNT = 1;
+
+/** 初始 fixture 的语义段总数。 */
+const INITIAL_SEGMENT_COUNT = 10;
+
+/** 视口 fixture：首屏一批 + 同一 25ms 窗口进入视口的一批。 */
+const VIEWPORT_REQUEST_COUNT = 2;
 
 const PARA1_ORIGINAL = 'The first paragraph describes a quiet morning in the small town.';
 const PARA4_ORIGINAL = 'The final paragraph closes the story with a hopeful note about tomorrow.';
@@ -77,7 +83,7 @@ async function configureMockProvider(context: BrowserContext, extensionId: strin
   await optionsPage.close();
 }
 
-/** 新开测试页并等待关键锚点渲染(默认 9 段 fixture) */
+/** 新开测试页并等待关键锚点渲染(默认 10 段 fixture) */
 async function openTestPage(context: BrowserContext): Promise<Page> {
   return openTestPageUrl(context, testPageUrl);
 }
@@ -128,8 +134,7 @@ async function triggerFullpageTranslate(
 }
 
 /**
- * 等待「全部请求落盘」(替换模式):#para-4/footer/#add-paragraph 同属第 3 批,
- * 三者均渲染译文 ⇒ 第 3 批全部 settle ⇒ 此前批次更早完成 ⇒ 请求计数稳定。
+ * 等待 batch stream 的尾部语义段全部落地，保证请求计数与完成状态稳定。
  */
 async function waitForReplaceSettled(page: Page): Promise<void> {
   await expect(page.locator('#para-4')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
@@ -142,27 +147,33 @@ test('替换模式触发全文翻译,段落渐进渲染', async ({ context, exte
   const page = await openTestPage(context);
   await triggerFullpageTranslate(context, 'replace');
 
-  // 首个 300ms 延迟响应返回前，全部分段已同步进入 loading，聚合进度从 0/9 开始。
+  // batch 首对象落地前，全部分段已同步进入 loading，聚合进度从 0/10 开始。
   const loadingHosts = page.locator('.llm-translator-loading-host');
   const progress = page.locator('.llm-translator-toolbar-progress');
   await Promise.all([
-    expect(loadingHosts).toHaveCount(INITIAL_REQUEST_COUNT),
-    expect(progress).toContainText('全文翻译 0/9'),
+    expect(loadingHosts).toHaveCount(INITIAL_SEGMENT_COUNT),
+    expect(progress).toContainText('全文翻译 0/10'),
   ]);
 
-  // 相对时序断言:第 2 批的 #para-1 已译出时,第 3 批的 #para-4 仍是原文(依赖 mock 300ms 延迟)。
-  // 第一条等待至译出即返回,第二条此刻立即命中原文;若时序被打破第二条会 polling 超时失败(自校验)。
-  await expect(page.locator('#para-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
-  await expect(page.locator('#para-4')).toHaveText(PARA4_ORIGINAL);
+  // 相对时序断言：同一 response 中 #para-1 对象完成时，后续 #para-4 对象尚未完成。
+  await expect
+    .poll(
+      async () => ({
+        firstText: await page.locator('#para-1').textContent(),
+        laterText: await page.locator('#para-4').textContent(),
+      }),
+      { timeout: 15_000 },
+    )
+    .toEqual({ firstText: MOCK_TRANSLATION, laterText: PARA4_ORIGINAL });
 
-  // 最终全部段落含 mock 译文(4 正文段 + nav 链接 + footer + 按钮)
+  // 最终全部语义段含 mock 译文。
   await expect(page.locator('#para-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#para-fail')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#para-4')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('nav a').first()).toHaveText(MOCK_TRANSLATION);
   await expect(page.locator('footer')).toHaveText(MOCK_TRANSLATION);
   await expect(page.locator('#add-paragraph')).toHaveText(MOCK_TRANSLATION);
-  await expect(progress).toContainText('全文翻译完成 9/9');
+  await expect(progress).toContainText('全文翻译完成 10/10');
   await expect(loadingHosts).toHaveCount(0);
 
   // 工具栏出现(替换模式下切换按钮提示「切换为双语对照」)
@@ -174,9 +185,9 @@ test('双语对照模式保留原文并在段后渲染 shadow 译文块', async 
   const page = await openTestPage(context);
   await triggerFullpageTranslate(context, 'bilingual');
 
-  // 9 段全部渲染译文块宿主(3 nav 链接 + 4 正文段 + footer + 按钮)
+  // 10 个语义段全部渲染译文块宿主。
   const blockHosts = page.locator('.llm-translator-block-host');
-  await expect(blockHosts).toHaveCount(9, { timeout: 15_000 });
+  await expect(blockHosts).toHaveCount(INITIAL_SEGMENT_COUNT, { timeout: 15_000 });
 
   // 原文段落文本不变
   await expect(page.locator('#para-1')).toHaveText(PARA1_ORIGINAL);
@@ -188,6 +199,35 @@ test('双语对照模式保留原文并在段后渲染 shadow 译文块', async 
   await expect
     .poll(() => host.evaluate((el) => el.shadowRoot?.textContent ?? ''), { timeout: 5_000 })
     .toContain(MOCK_TRANSLATION);
+});
+
+test('LLM full-page translation batches requests and reveals no reasoning', async ({
+  context,
+  extensionId,
+}) => {
+  await configureMockProvider(context, extensionId);
+  const page = await openTestPage(context);
+  await triggerFullpageTranslate(context, 'bilingual');
+
+  // 同一个 provider response 中，较早完成的语义块先落地，后续对象仍保持原文。
+  await expect
+    .poll(
+      async () => ({
+        firstBlockCount: await page.locator('#para-1 + .llm-translator-block-host').count(),
+        laterBlockCount: await page.locator('#para-4 + .llm-translator-block-host').count(),
+        laterText: await page.locator('#para-4').textContent(),
+      }),
+      { timeout: 15_000 },
+    )
+    .toEqual({ firstBlockCount: 1, laterBlockCount: 0, laterText: PARA4_ORIGINAL });
+
+  // 含 direct text + inline markup 的段落只归属一个语义块。
+  await expect(page.locator('#inline-paragraph + .llm-translator-block-host')).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  await expect(page.locator('body')).not.toContainText('mock private reasoning');
+  await expect(page.locator('body')).not.toContainText('</think>');
+  expect(getRequestCount(CHAT_ROUTE)).toBe(1);
 });
 
 test('切换显示模式零重译:DOM 翻转且请求计数不变', async ({ context, extensionId }) => {
@@ -203,7 +243,9 @@ test('切换显示模式零重译:DOM 翻转且请求计数不变', async ({ con
   await page.getByRole('button', { name: '切换为双语对照' }).click();
 
   // DOM 翻转:译文块出现、原文还原、切换按钮文案翻转
-  await expect(page.locator('.llm-translator-block-host')).toHaveCount(9, { timeout: 5_000 });
+  await expect(page.locator('.llm-translator-block-host')).toHaveCount(INITIAL_SEGMENT_COUNT, {
+    timeout: 5_000,
+  });
   await expect(page.locator('#para-1')).toHaveText(PARA1_ORIGINAL);
   await expect(page.getByRole('button', { name: '切换为替换' })).toBeVisible();
 
@@ -217,6 +259,9 @@ test('恢复原文后无注入残留且原文逐字还原', async ({ context, ex
   await triggerFullpageTranslate(context, 'replace');
   await waitForReplaceSettled(page);
 
+  const countBefore = getRequestCount(CHAT_ROUTE);
+  expect(countBefore).toBe(INITIAL_REQUEST_COUNT);
+
   await page.getByRole('button', { name: '恢复原文' }).click();
 
   // 无注入残留(工具栏宿主/译文块/失败徽标均带 data-llm-translator,恢复后全部移除)
@@ -226,6 +271,7 @@ test('恢复原文后无注入残留且原文逐字还原', async ({ context, ex
   expect(await page.locator('#para-1').textContent()).toBe(PARA1_ORIGINAL);
   expect(await page.locator('#para-4').textContent()).toBe(PARA4_ORIGINAL);
   expect(await page.locator('#para-fail').textContent()).toBe(PARA_FAIL_ORIGINAL);
+  expect(getRequestCount(CHAT_ROUTE)).toBe(countBefore);
 });
 
 test('失败段落保留原文并标记,复位后重试译出且标记消失', async ({ context, extensionId }) => {
@@ -314,18 +360,18 @@ test('工具栏收起后迷你把手可见,点把手恢复工具栏', async ({ c
   await expect(miniHandle).toBeHidden();
 });
 
-test('视口外段落滚动到视口后才入池', async ({ context, extensionId }) => {
+test('视口外段落同窗口进入后合并为一个批请求', async ({ context, extensionId }) => {
   await configureMockProvider(context, extensionId);
   const page = await openTestPageUrl(context, viewportTestPageUrl);
   await triggerFullpageTranslate(context, 'replace');
 
-  // 视口内 3 段(#in-1..#in-3)立即译出：并发池派发后 ~300ms 内首段完成,断言前等待至译出。
+  // 视口内 3 段由首个 batch request 一起译出。
   await expect(page.locator('#in-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
 
-  // 此时视口外段不应被派发：请求计数 = 3（仅视口内）
-  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
+  // 此时视口外段不应被派发：请求计数 = 1（仅视口内批次）。
+  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
 
   // 视口外 6 段仍为原文(loading 标记可见但段文本未变,Playwright 断言不要求在视口内)
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
@@ -333,35 +379,23 @@ test('视口外段落滚动到视口后才入池', async ({ context, extensionId
     await expect(seg).not.toHaveText(MOCK_TRANSLATION);
   }
 
-  // 逐步滚动(分 30 步)让每个 #out-N 都经过视口 -> IntersectionObserver 逐个触发。
-  // 单次 scrollTo 跳到底部时位于视口上方的段不会被 IO 触发(状态从“未相交”变“仍未相交”)。
-  await page.evaluate(async () => {
-    const total = document.body.scrollHeight;
-    const step = window.innerHeight / 2; // 半视口步进,保证每步都跨越新内容
-    for (let y = 0; y <= total; y += step) {
-      window.scrollTo(0, y);
-      // 让 IO callback 排入微任务
-      await new Promise((r) => requestAnimationFrame(() => r()));
-    }
-    // 最后跳到底部确保 out-6 也被触发
-    window.scrollTo(0, total);
-    await new Promise((r) => requestAnimationFrame(() => r()));
-  });
+  // 扩大视口让 6 段在同一个 IO callback 中进入，覆盖 25ms micro-batch 聚合窗口。
+  await page.setViewportSize({ width: 1280, height: 16_000 });
 
-  // IO 触发是异步的(microtask / task),runPool 派发 + 300ms 延迟 + onSettled,需充足 poll timeout
+  // IO callback、25ms queue、provider 对象流均为异步，按真实落块等待。
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
     await expect(page.locator(`#${id}`)).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   }
 
-  // 滚动后全部 9 段入池：请求计数 = 9(初次 3 + 滚动后 6)
-  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
+  // 初次首屏一批 + 同窗口进入的一批，总计两个 provider 请求。
+  expect(getRequestCount(CHAT_ROUTE)).toBe(VIEWPORT_REQUEST_COUNT);
 });
 
 test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loading 宿主', async ({
   context,
   extensionId,
 }) => {
-  // 审查反馈修订:原用例 2 使用现有 fixture(9 段全视口内),`viewportObserver` 句柄不会被创建,
+  // 审查反馈修订:原用例 2 使用默认 fixture(全部段落都在视口内),`viewportObserver` 句柄不会被创建,
   // 断言「请求计数不变」无法捕获 `handleRestore` 末尾 `disconnect` 调用被移除的回归(假阳性)。
   // 修订:用 viewportTestPageUrl(3 视口内 + 6 视口外),让 6 视口外段真实注册到 IO。
   // 加「`[data-llm-translator]` count = 0」强断言(loading 宿主在 runPool 提前 break 之前已加,
@@ -374,7 +408,7 @@ test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loa
   await expect(page.locator('#in-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
-  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
+  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
 
   // 视口外 6 段仍为原文(loading 宿主可见,IO 监听中)
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
@@ -419,7 +453,7 @@ test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loa
     await expect(seg).not.toHaveText(MOCK_TRANSLATION);
   }
 
-  // Sanity check(弱观察):请求计数仍为 3。runPool 的 shouldStop 会阻止新请求,
+  // Sanity check(弱观察):请求计数仍为 1。runPool 的 shouldStop 会阻止新请求,
   // 即使 IO 未 disconnect,此断言也通过;但与强断言组合,共同锁定「IO 已 disconnect」语义。
-  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
+  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
 });

@@ -26,6 +26,21 @@ const STREAM_CHUNKS = ['你', '好', ',世界'];
 /** chunk 间延迟(ms),模拟真实流式传输,使渐进渲染可被 e2e 捕获 */
 const CHUNK_DELAY_MS = 100;
 
+const BATCH_PROMPT_MARKER = 'Output one compact JSON object per completed chunk and no other text.';
+const MOCK_TRANSLATION = '你好,世界';
+
+interface MockBatchPart {
+  partId: number;
+  sliceIndex: number;
+  text: string;
+}
+
+interface MockBatchChunk {
+  chunkId: string;
+  segmentId: string;
+  parts: MockBatchPart[];
+}
+
 /** 非流式成功响应的可观测延迟(ms):使全文翻译「先译完的段落先渲染」可被 e2e 相对时序断言 */
 export const NONSTREAM_DELAY_MS = 300;
 
@@ -69,16 +84,108 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isMockBatchPart(value: unknown): value is MockBatchPart {
+  return isRecord(value)
+    && typeof value.partId === 'number'
+    && typeof value.sliceIndex === 'number'
+    && typeof value.text === 'string';
+}
+
+function isMockBatchChunk(value: unknown): value is MockBatchChunk {
+  return isRecord(value)
+    && typeof value.chunkId === 'string'
+    && typeof value.segmentId === 'string'
+    && Array.isArray(value.parts)
+    && value.parts.length > 0
+    && value.parts.every(isMockBatchPart);
+}
+
+/** 仅识别 buildBatchPrompt 的 wire payload；普通划词流式 prompt 不进入批量 mock。 */
+function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
+  if (!isRecord(requestBody) || !Array.isArray(requestBody.messages)) return null;
+  const userMessage = requestBody.messages.find(
+    (message) => isRecord(message) && message.role === 'user' && typeof message.content === 'string',
+  );
+  if (!isRecord(userMessage) || typeof userMessage.content !== 'string') return null;
+
+  const prompt = userMessage.content;
+  if (!prompt.includes(BATCH_PROMPT_MARKER)) return null;
+  const wireStart = prompt.lastIndexOf('\n');
+  if (wireStart < 0) return null;
+
+  try {
+    const chunks: unknown = JSON.parse(prompt.slice(wireStart + 1));
+    return Array.isArray(chunks) && chunks.length > 0 && chunks.every(isMockBatchChunk)
+      ? chunks
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeOpenAIDelta(res: ServerResponse, content: string): void {
+  res.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+}
+
+async function sendOpenAIBatchStream(
+  res: ServerResponse,
+  chunks: MockBatchChunk[],
+  omitFailedChunks: boolean,
+): Promise<void> {
+  writeOpenAIDelta(res, '<think>mock private reasoning</think>\n');
+
+  const completedChunks = omitFailedChunks
+    ? chunks.filter((chunk) => !chunk.parts.some((part) => part.text.includes('__FAIL__')))
+    : chunks;
+
+  for (let index = 0; index < completedChunks.length; index += 1) {
+    const chunk = completedChunks[index];
+    const objectText = JSON.stringify({
+      chunkId: chunk.chunkId,
+      translatedParts: chunk.parts.map((part) => ({
+        partId: part.partId,
+        sliceIndex: part.sliceIndex,
+        text: MOCK_TRANSLATION,
+      })),
+    });
+
+    // 首对象跨两个真实 SSE delta，覆盖 provider 行解析器与 batch object scanner 的组合边界。
+    if (index === 0) {
+      const splitAt = Math.max(1, Math.floor(objectText.length / 2));
+      writeOpenAIDelta(res, objectText.slice(0, splitAt));
+      writeOpenAIDelta(res, objectText.slice(splitAt));
+    } else {
+      writeOpenAIDelta(res, objectText);
+    }
+
+    if (index < completedChunks.length - 1) await sleep(CHUNK_DELAY_MS);
+  }
+}
+
 /** 发送 OpenAI 兼容 SSE 流式响应:逐 chunk data 行,以 data: [DONE] 结束 */
-async function sendOpenAIStream(res: ServerResponse): Promise<void> {
+async function sendOpenAIStream(
+  res: ServerResponse,
+  requestBody: unknown,
+  omitFailedChunks: boolean,
+): Promise<void> {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive',
   });
-  for (const chunk of STREAM_CHUNKS) {
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
-    await sleep(CHUNK_DELAY_MS);
+
+  const batchChunks = extractBatchChunks(requestBody);
+  if (batchChunks) {
+    await sendOpenAIBatchStream(res, batchChunks, omitFailedChunks);
+  } else {
+    for (const chunk of STREAM_CHUNKS) {
+      writeOpenAIDelta(res, chunk);
+      await sleep(CHUNK_DELAY_MS);
+    }
   }
   res.write('data: [DONE]\n\n');
   res.end();
@@ -164,14 +271,15 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
 
         // OpenAI 兼容 chat completions
         if (req.method === 'POST' && req.url?.includes('/v1/chat/completions')) {
+          const batchChunks = isStream ? extractBatchChunks(parsedBody) : null;
           // 失败开关:仅对含 __FAIL__ 标记的请求返回 500(快速失败,不加非流式延迟)
-          if (failMode && body.includes('__FAIL__')) {
+          if (failMode && body.includes('__FAIL__') && batchChunks === null) {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: { message: 'mock forced failure for __FAIL__ segment' } }));
             return;
           }
           if (isStream) {
-            await sendOpenAIStream(res);
+            await sendOpenAIStream(res, parsedBody, failMode);
           } else {
             await sleep(NONSTREAM_DELAY_MS);
             res.writeHead(200, { 'Content-Type': 'application/json' });
