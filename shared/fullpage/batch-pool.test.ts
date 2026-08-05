@@ -314,6 +314,111 @@ describe('runBatchPool', () => {
     await laterPromise;
   });
 
+  it('fails every unresolved owner before rejecting the first settlement error', async () => {
+    const requestGate = createBatchRequestGate();
+    const segments = [
+      semanticSegment('first-unresolved', ['First']),
+      semanticSegment('second-unresolved', ['Second']),
+      semanticSegment('third-unresolved', ['Third']),
+    ];
+    const settlementErrors = new Map(
+      segments.map((segment, index) => [segment, new Error(`settlement failed ${index}`)]),
+    );
+    const poolPromise = runBatchPool(segments, {
+      ...options(),
+      requestGate,
+      onSettled: vi.fn((segment: SegmentRecord) => {
+        if (segment.status === 'failed') throw settlementErrors.get(segment);
+      }),
+    });
+    const port = runtime.ports[0];
+    expect(runtime.ports).toHaveLength(1);
+    expect(port.request.chunks).toHaveLength(3);
+
+    port.emitDone(port.request.chunks.map((chunk) => chunk.chunkId));
+
+    await expect(poolPromise).rejects.toBe(settlementErrors.get(segments[0]));
+    expect(segments.map((segment) => segment.status)).toEqual([
+      'failed',
+      'failed',
+      'failed',
+    ]);
+    expect(segments.map((segment) => segment.errorType)).toEqual([
+      'network',
+      'network',
+      'network',
+    ]);
+    expect(port.disconnect).toHaveBeenCalledTimes(1);
+    expect(runtime.activePortCount()).toBe(0);
+
+    const laterSegments = Array.from(
+      { length: 3 },
+      (_, index) => semanticSegment(`after-owner-errors-${index}`, ['x'.repeat(6000)]),
+    );
+    const laterPromise = runBatchPool(laterSegments, {
+      ...options(),
+      requestGate,
+    });
+    expect(runtime.ports).toHaveLength(4);
+    expect(runtime.activePortCount()).toBe(3);
+    for (const laterPort of runtime.ports.slice(1)) {
+      laterPort.emitChunk(translatedChunk(laterPort, 0));
+      laterPort.emitDone();
+    }
+    await laterPromise;
+  });
+
+  it('waits for every worker to finish before propagating a settlement error', async () => {
+    const requestGate = createBatchRequestGate();
+    const settlementError = new Error('first worker settlement failed');
+    const segments = [
+      semanticSegment('failing-worker', ['x'.repeat(6000)]),
+      semanticSegment('pending-worker', ['y'.repeat(6000)]),
+    ];
+    const poolPromise = runBatchPool(segments, {
+      ...options(),
+      requestGate,
+      onSettled: vi.fn((segment: SegmentRecord) => {
+        if (segment === segments[0] && segment.status === 'failed') throw settlementError;
+      }),
+    });
+    const observed = observePromise(poolPromise);
+    expect(runtime.ports).toHaveLength(2);
+
+    const failingPort = runtime.ports[0];
+    failingPort.emitDone(failingPort.request.chunks.map((chunk) => chunk.chunkId));
+    await drainMicrotasks();
+
+    expect(segments[0].status).toBe('failed');
+    expect(segments[1].status).toBe('translating');
+    expect(observed.state()).toBe('pending');
+    expect(runtime.activePortCount()).toBe(1);
+
+    const pendingPort = runtime.ports[1];
+    pendingPort.emitChunk(translatedChunk(pendingPort, 0));
+    pendingPort.emitDone();
+
+    await expect(poolPromise).rejects.toBe(settlementError);
+    expect(segments[1].status).toBe('done');
+    expect(runtime.activePortCount()).toBe(0);
+
+    const laterSegments = Array.from(
+      { length: 3 },
+      (_, index) => semanticSegment(`after-worker-error-${index}`, ['z'.repeat(6000)]),
+    );
+    const laterPromise = runBatchPool(laterSegments, {
+      ...options(),
+      requestGate,
+    });
+    expect(runtime.ports).toHaveLength(5);
+    expect(runtime.activePortCount()).toBe(3);
+    for (const laterPort of runtime.ports.slice(2)) {
+      laterPort.emitChunk(translatedChunk(laterPort, 0));
+      laterPort.emitDone();
+    }
+    await laterPromise;
+  });
+
   it('releases the shared permit when isActive throws after acquisition', async () => {
     const requestGate = createBatchRequestGate();
     const activeCheckError = new Error('active check failed');

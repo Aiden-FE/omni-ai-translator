@@ -314,17 +314,24 @@ export async function runBatchPool(
         finished = true;
 
         let settlementError: { value: unknown } | null = null;
+        const failOwner = (owner: OwnerState) => {
+          try {
+            settleFailed(owner, errorType);
+          } catch (error) {
+            settlementError ??= { value: error };
+          }
+        };
         try {
           if (kind === 'done') {
             for (const chunk of batch) {
               const owner = chunkOwners.get(chunk.chunkId);
-              if (owner && !owner.received.has(chunk.chunkId)) settleFailed(owner, errorType);
+              if (owner && !owner.received.has(chunk.chunkId)) failOwner(owner);
             }
           } else {
-            for (const owner of batchOwners) settleFailed(owner, errorType);
+            for (const owner of batchOwners) failOwner(owner);
           }
         } catch (error) {
-          settlementError = { value: error };
+          settlementError ??= { value: error };
         } finally {
           closePort();
           if (settlementError) reject(settlementError.value);
@@ -388,7 +395,15 @@ export async function runBatchPool(
   }
 
   const workerCount = Math.min(opts.concurrency ?? 3, batches.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  const workerErrors: unknown[] = [];
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    try {
+      await worker();
+    } catch (error) {
+      workerErrors.push(error);
+    }
+  }));
+  if (workerErrors.length > 0) throw workerErrors[0];
 
   return {
     succeeded: segments.filter((segment) => succeeded.has(segment)),
