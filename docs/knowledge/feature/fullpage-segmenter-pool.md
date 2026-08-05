@@ -139,7 +139,7 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 ### 加载标记（markLoading / clearLoadingMark）
 
-`markLoading` 在段尾创建 `div.llm-translator-loading-host[data-llm-translator]`，使用 open Shadow DOM、spinner、`role='status'` 和 `aria-label='正在翻译此段'`。已有且仍连接到 DOM 的宿主会被复用，因而重复调用不会产生多个标记。双语模式下标记插到当前 `blockHost` 之后，其余情况插到段元素之后；不会替换原文或改变段状态。
+`markLoading` 在段尾创建 `div.llm-translator-loading-host[data-llm-translator]`，使用 open Shadow DOM、spinner 和 `role='status'`（无文案）。已有且仍连接到 DOM 的宿主会被复用，因而重复调用不会产生多个标记。双语模式下标记插到当前 `blockHost` 之后，其余情况插到段元素之后；不会替换原文或改变段状态。
 
 `clearLoadingMark` 幂等移除宿主并清空 `loadingMarkHost`。`applyReplace`、`applyBilingual`、`markFailed` 与 `restoreAll` 都会先调用它，确保 `done` / `failed` / restore 为终态时没有遗留加载反馈。编排器负责在初始、重试和动态分段进入并发池之前调用 `markLoading`；本模块只管理单段 DOM，不持有任务进度或请求状态。
 

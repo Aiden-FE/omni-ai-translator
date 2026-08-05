@@ -212,9 +212,10 @@ describe('markLoading / clearLoadingMark', () => {
     markLoading(seg);
 
     expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
-    expect(seg.loadingMarkHost?.shadowRoot?.querySelector('[role="status"]')?.getAttribute('aria-label')).toBe(
-      '正在翻译此段',
-    );
+    const statusEl = seg.loadingMarkHost?.shadowRoot?.querySelector('[role="status"]');
+    // 无 aria-label 文案，仅保留 role="status" 语义
+    expect(statusEl?.getAttribute('aria-label')).toBeNull();
+    expect(statusEl?.getAttribute('role')).toBe('status');
     expect(document.querySelector('[role="status"]')).toBeNull();
 
     clearLoadingMark(seg);

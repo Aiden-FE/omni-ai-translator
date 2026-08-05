@@ -128,8 +128,9 @@ export function applyBilingual(seg: SegmentRecord): void {
 }
 
 /**
- * 加载标记：在段尾追加带 Shadow DOM 的 spinner 与状态文本。
+ * 加载标记：在段尾追加带 Shadow DOM 的 spinner。
  * 已存在且仍挂载的标记直接复用，避免翻译生命周期重复回调时产生多个宿主。
+ * 仅保留 role="status" 无障碍语义，不含文案（不破坏页面结构）。
  */
 export function markLoading(seg: SegmentRecord): void {
   if (seg.loadingMarkHost?.isConnected) return;
@@ -140,16 +141,12 @@ export function markLoading(seg: SegmentRecord): void {
   const status = document.createElement('span');
   status.className = 'llm-translator-loading-status';
   status.setAttribute('role', 'status');
-  status.setAttribute('aria-label', '正在翻译此段');
 
   const spinner = document.createElement('span');
   spinner.className = 'llm-translator-loading-spinner';
   spinner.setAttribute('aria-hidden', 'true');
   status.appendChild(spinner);
 
-  const label = document.createElement('span');
-  label.textContent = '正在翻译此段';
-  status.appendChild(label);
   shadow.appendChild(status);
 
   const ref = seg.failedMarkHost ?? seg.blockHost ?? seg.el;
