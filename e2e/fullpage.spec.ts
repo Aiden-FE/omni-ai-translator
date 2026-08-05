@@ -15,6 +15,9 @@ import type { BrowserContext, Page } from '@playwright/test';
 
 const testPageUrl = `file://${path.resolve(process.cwd(), 'e2e/fixtures/fullpage-test-page.html')}`;
 
+/** 视口优先调度专用 fixture：3 视口内段（#in-1..#in-3）+ 6 视口外段（#out-1..#out-6）。 */
+const viewportTestPageUrl = `file://${path.resolve(process.cwd(), 'e2e/fixtures/fullpage-viewport-test-page.html')}`;
+
 /** mock 固定译文(非流式响应) */
 const MOCK_TRANSLATION = '你好,世界';
 
@@ -74,11 +77,16 @@ async function configureMockProvider(context: BrowserContext, extensionId: strin
   await optionsPage.close();
 }
 
-/** 新开测试页并等待关键锚点渲染 */
+/** 新开测试页并等待关键锚点渲染(默认 9 段 fixture) */
 async function openTestPage(context: BrowserContext): Promise<Page> {
+  return openTestPageUrl(context, testPageUrl);
+}
+
+/** 新开指定 URL 测试页并等待关键锚点渲染(支持视口优先调度专用 fixture) */
+async function openTestPageUrl(context: BrowserContext, url: string): Promise<Page> {
   const page = await context.newPage();
-  await page.goto(testPageUrl);
-  await page.locator('#para-1').waitFor();
+  await page.goto(url);
+  await page.locator('#in-1, #para-1').first().waitFor();
   return page;
 }
 
@@ -304,4 +312,114 @@ test('工具栏收起后迷你把手可见,点把手恢复工具栏', async ({ c
   await miniHandle.click();
   await expect(switchBtn).toBeVisible();
   await expect(miniHandle).toBeHidden();
+});
+
+test('视口外段落滚动到视口后才入池', async ({ context, extensionId }) => {
+  await configureMockProvider(context, extensionId);
+  const page = await openTestPageUrl(context, viewportTestPageUrl);
+  await triggerFullpageTranslate(context, 'replace');
+
+  // 视口内 3 段(#in-1..#in-3)立即译出：并发池派发后 ~300ms 内首段完成,断言前等待至译出。
+  await expect(page.locator('#in-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+
+  // 此时视口外段不应被派发：请求计数 = 3（仅视口内）
+  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
+
+  // 视口外 6 段仍为原文(loading 标记可见但段文本未变,Playwright 断言不要求在视口内)
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    const seg = page.locator(`#${id}`);
+    await expect(seg).not.toHaveText(MOCK_TRANSLATION);
+  }
+
+  // 逐步滚动(分 30 步)让每个 #out-N 都经过视口 -> IntersectionObserver 逐个触发。
+  // 单次 scrollTo 跳到底部时位于视口上方的段不会被 IO 触发(状态从“未相交”变“仍未相交”)。
+  await page.evaluate(async () => {
+    const total = document.body.scrollHeight;
+    const step = window.innerHeight / 2; // 半视口步进,保证每步都跨越新内容
+    for (let y = 0; y <= total; y += step) {
+      window.scrollTo(0, y);
+      // 让 IO callback 排入微任务
+      await new Promise((r) => requestAnimationFrame(() => r()));
+    }
+    // 最后跳到底部确保 out-6 也被触发
+    window.scrollTo(0, total);
+    await new Promise((r) => requestAnimationFrame(() => r()));
+  });
+
+  // IO 触发是异步的(microtask / task),runPool 派发 + 300ms 延迟 + onSettled,需充足 poll timeout
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    await expect(page.locator(`#${id}`)).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  }
+
+  // 滚动后全部 9 段入池：请求计数 = 9(初次 3 + 滚动后 6)
+  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
+});
+
+test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loading 宿主', async ({
+  context,
+  extensionId,
+}) => {
+  // 审查反馈修订:原用例 2 使用现有 fixture(9 段全视口内),`viewportObserver` 句柄不会被创建,
+  // 断言「请求计数不变」无法捕获 `handleRestore` 末尾 `disconnect` 调用被移除的回归(假阳性)。
+  // 修订:用 viewportTestPageUrl(3 视口内 + 6 视口外),让 6 视口外段真实注册到 IO。
+  // 加「`[data-llm-translator]` count = 0」强断言(loading 宿主在 runPool 提前 break 之前已加,
+  // 断绝派发但不切断 onEnter 副作用),并保留请求计数 sanity check。
+  await configureMockProvider(context, extensionId);
+  const page = await openTestPageUrl(context, viewportTestPageUrl);
+  await triggerFullpageTranslate(context, 'replace');
+
+  // 视口内 3 段立即译出,视口外 6 段保留 loading 宿主且仍为原文(已注册到 IO)
+  await expect(page.locator('#in-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
+
+  // 视口外 6 段仍为原文(loading 宿主可见,IO 监听中)
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    const seg = page.locator(`#${id}`);
+    await expect(seg).not.toHaveText(MOCK_TRANSLATION);
+  }
+
+  // 恢复原文:编排器 handleRestore 末尾应 viewportObserver?.disconnect(); viewportObserver = null;
+  // 视口外段 IO 监听终止,段元素 + 文本还原,全部注入宿主清理
+  await page.getByRole('button', { name: '恢复原文' }).click();
+  await expect(page.locator('[data-llm-translator]')).toHaveCount(0);
+
+  // 6 视口外段恢复为原文(与视口内段共用 restoreAll 路径,验证段元素未损坏)
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    const seg = page.locator(`#${id}`);
+    await expect(seg).not.toHaveText(MOCK_TRANSLATION);
+  }
+
+  // 分步滚动(半视口步进,与用例 1 一致),让每个 #out-N 都经过视口中央 -> 若 IO 未 disconnect
+  // 会逐个触发 onEnter -> enqueueSegments -> markSegmentsLoading 加 loading 宿主。
+  await page.evaluate(async () => {
+    const total = document.body.scrollHeight;
+    const step = window.innerHeight / 2;
+    for (let y = 0; y <= total; y += step) {
+      window.scrollTo(0, y);
+      await new Promise((r) => requestAnimationFrame(() => r()));
+    }
+    window.scrollTo(0, total);
+    await new Promise((r) => requestAnimationFrame(() => r()));
+  });
+
+  // 等 IO callback 排入微任务 + onEnter 内部 enqueueSegments 执行
+  await page.waitForTimeout(2_000);
+
+  // 核心断言(强观察):滚动后 0 个 [data-llm-translator] 宿主。IO 已 disconnect 时 onEnter 永不触发,
+  // 不会加新的 loading 宿主。若 disconnect 被移除,此处会显示 6 个新 loading 宿主。
+  await expect(page.locator('[data-llm-translator]')).toHaveCount(0);
+
+  // 6 视口外段仍为原文(IO 未触发 onEnter -> 未派发翻译请求)
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    const seg = page.locator(`#${id}`);
+    await expect(seg).not.toHaveText(MOCK_TRANSLATION);
+  }
+
+  // Sanity check(弱观察):请求计数仍为 3。runPool 的 shouldStop 会阻止新请求,
+  // 即使 IO 未 disconnect,此断言也通过;但与强断言组合,共同锁定「IO 已 disconnect」语义。
+  expect(getRequestCount(CHAT_ROUTE)).toBe(3);
 });
