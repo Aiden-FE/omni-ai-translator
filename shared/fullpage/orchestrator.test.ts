@@ -96,6 +96,96 @@ function getRetryButton(): HTMLButtonElement {
   return getToolbarShadow().querySelector('.llm-translator-toolbar-retry') as HTMLButtonElement;
 }
 
+/**
+ * 视口布局 mock：根据可见文本集合决定每个段元素的几何位置。
+ * - 在 visibleTexts 中的段 → 视为视口内（top=0..100, bottom=100）
+ * - 否则 → 视为视口外（top=2000, bottom=2100）
+ *
+ * 重要：仅 mock `getBoundingClientRect`，不动 `getClientRects`（避免影响
+ * renderer.ts / segmenter.ts 的可见性剪枝；display:none 剪枝测试需真实 getClientRects）。
+ * 调用方仍需在每个段元素上用 `Object.defineProperty(seg.el, 'getClientRects', ...)`
+ * 返回非空数组，使 isSegmentInViewport 跳过 jsdom 兑底。
+ */
+function mockViewportLayout(visibleTexts: Set<string>): void {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const text = this.textContent ?? '';
+    const visible = [...visibleTexts].some((t) => text.includes(t));
+    return visible
+      ? { top: 0, bottom: 100, left: 0, right: 100, width: 100, height: 100, x: 0, y: 0, toJSON() {} } as DOMRect
+      : { top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100, x: 0, y: 2000, toJSON() {} } as DOMRect;
+  });
+}
+
+/**
+ * 为收集到的段元素覆写 getClientRects 返回非空数组。
+ * jsdom 默认 getClientRects() 长度为 0，会让 isSegmentInViewport 走兜底视为视口内；
+ * 设置非空后才会走几何判定路径。
+ */
+function setClientRectsNonEmpty(els: Iterable<HTMLElement>): void {
+  for (const el of els) {
+    Object.defineProperty(el, 'getClientRects', {
+      value: () => [{} as DOMRect],
+      configurable: true,
+    });
+  }
+}
+
+/**
+ * 安装可控的 mock IntersectionObserver，返回一个 trigger 函数用于测试中
+ * 模拟“进入视口”回调。记录每个 observe 回调 + 每个 IO 实例以便断言。
+ */
+function installMockIO(): {
+  trigger: (targets: Element[]) => void;
+  instances: Array<{
+    observed: Set<Element>;
+    disconnect: () => void;
+  }>;
+} {
+  const observedCallbacks: Array<(entries: Array<{ isIntersecting: boolean; target: Element }>) => void> = [];
+  const instances: Array<{
+    observed: Set<Element>;
+    disconnect: () => void;
+  }> = [];
+
+  class MockIO {
+    cb: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void;
+    observed: Set<Element> = new Set();
+    disconnected = false;
+    constructor(
+      cb: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void,
+    ) {
+      this.cb = cb;
+      observedCallbacks.push(cb);
+      instances.push({
+        observed: this.observed,
+        disconnect: () => {
+          this.disconnected = true;
+          this.observed.clear();
+        },
+      });
+    }
+    observe(el: Element) {
+      this.observed.add(el);
+    }
+    unobserve(el: Element) {
+      this.observed.delete(el);
+    }
+    disconnect() {
+      this.disconnected = true;
+      this.observed.clear();
+    }
+  }
+  vi.stubGlobal('IntersectionObserver', MockIO);
+  return {
+    trigger: (targets: Element[]) => {
+      for (const cb of observedCallbacks) {
+        cb(targets.map((t) => ({ isIntersecting: true, target: t })));
+      }
+    },
+    instances,
+  };
+}
+
 beforeEach(() => {
   __reset();
   document.body.innerHTML = '';
@@ -1042,6 +1132,157 @@ describe('视口分组调度（IntersectionObserver）', () => {
       expect(firstIO.disconnectCalls).toBe(1);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('视口优先调度', () => {
+  /**
+   * 任务所要求的视口优先调度单测：3 段在视口内、2 段在视口外。
+   * 仅 mock `getBoundingClientRect`（不 mock `getClientRects`），并为每个段元素单独
+   * 定义 `getClientRects` 返回非空数组以跳过 jsdom 兑底。
+   */
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it('视口内段优先入池：3 段在视口内、2 段在视口外', async () => {
+    // 设置视口尺寸：jsdom 默认 0×0，需改写才能使几何判定生效
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    // DOM：5 段，文本含“in view N”与“out of view N”以驱动 mockViewportLayout
+    document.body.innerHTML =
+      '<p>in view 1</p><p>in view 2</p><p>in view 3</p><p>out of view 1</p><p>out of view 2</p>';
+    const ps = Array.from(document.querySelectorAll('p')) as HTMLElement[];
+
+    // 几何判定兑底：jsdom 默认 getClientRects 为空 → isSegmentInViewport 走兑底
+    // 返回 true。为模拟生产路径需让 getClientRects 返回非空。
+    setClientRectsNonEmpty(ps);
+
+    // mock 视口布局：前 3 段视为视口内，后 2 段视为视口外
+    const visibleTexts = new Set(['in view 1', 'in view 2', 'in view 3']);
+    mockViewportLayout(visibleTexts);
+
+    // mock IO：视口外段挂到 IO 上等待进入视口
+    const { trigger, instances } = installMockIO();
+
+    try {
+      const { sendMessage } = setupBrowser();
+      const startPromise = start('replace');
+      await drainMicrotasks();
+
+      // 初始：仅 3 个视口内段发起 sendMessage，视口外段只 markLoading
+      expect(sendMessage).toHaveBeenCalledTimes(3);
+      const calledTexts = sendMessage.mock.calls.map(
+        (c) => (c[0] as { payload: { text: string } }).payload.text,
+      );
+      expect(calledTexts).toEqual(
+        expect.arrayContaining(['in view 1', 'in view 2', 'in view 3']),
+      );
+      // 视口外段不发起
+      expect(calledTexts).not.toContain('out of view 1');
+      expect(calledTexts).not.toContain('out of view 2');
+
+      // 创建了一个 IO 实例，视口外 2 段被 observe
+      expect(instances).toHaveLength(1);
+      const io = instances[0];
+      expect(io.observed.size).toBe(2);
+      expect(io.observed.has(ps[3])).toBe(true);
+      expect(io.observed.has(ps[4])).toBe(true);
+
+      // 释放前 3 段门控，避免在途入池占用并发（可选，不影响本断言）
+      await drainMicrotasks();
+      // 释放 IO 回调 → 后 2 段入池
+      trigger([ps[3], ps[4]]);
+      await drainMicrotasks();
+
+      expect(sendMessage).toHaveBeenCalledTimes(5);
+      const calledTextsAfter = sendMessage.mock.calls.map(
+        (c) => (c[0] as { payload: { text: string } }).payload.text,
+      );
+      expect(calledTextsAfter).toEqual(
+        expect.arrayContaining(['in view 1', 'in view 2', 'in view 3', 'out of view 1', 'out of view 2']),
+      );
+
+      await startPromise;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('jsdom 兑底：IO 缺失时视口外段立即入池', async () => {
+    // 设置视口尺寸但不使用 mockViewportLayout——jsdom 下 getClientRects 兑底使
+    // 所有段被判定为视口内；但任务本测要点是 IO 缺失时视口外段也立即入池。
+    // 这里靠删除全局 IntersectionObserver 走 t2 降级路径：观察 5 段全部入池。
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    document.body.innerHTML =
+      '<p>in view 1</p><p>in view 2</p><p>in view 3</p><p>out of view 1</p><p>out of view 2</p>';
+    const ps = Array.from(document.querySelectorAll('p')) as HTMLElement[];
+    setClientRectsNonEmpty(ps);
+    // 模拟“后 2 段在视口外”的几何状态
+    mockViewportLayout(new Set(['in view 1', 'in view 2', 'in view 3']));
+
+    // 删除全局 IntersectionObserver → t2 降级路径同步触发 onEnter
+    vi.stubGlobal('IntersectionObserver', undefined);
+
+    try {
+      const { sendMessage } = setupBrowser();
+      const startPromise = start('replace');
+      await drainMicrotasks();
+
+      // jsdom 兑底：视口外段也同步入池（与视口内段一起被 runPool 调度）
+      // 总 5 段：3 视口内同步 + 2 视口外通过 IO 兑底路径同步 → 全部发起
+      expect(sendMessage).toHaveBeenCalledTimes(5);
+      const calledTexts = sendMessage.mock.calls.map(
+        (c) => (c[0] as { payload: { text: string } }).payload.text,
+      );
+      expect(calledTexts).toEqual(
+        expect.arrayContaining(['in view 1', 'in view 2', 'in view 3', 'out of view 1', 'out of view 2']),
+      );
+
+      await startPromise;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('恢复原文清理 viewportObserver：disconnect 被调用', async () => {
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    document.body.innerHTML = '<p>in view</p><p>out of view</p>';
+    const ps = Array.from(document.querySelectorAll('p')) as HTMLElement[];
+    setClientRectsNonEmpty(ps);
+    mockViewportLayout(new Set(['in view']));
+    const { instances } = installMockIO();
+
+    try {
+      setupBrowser();
+      const startPromise = start('replace');
+      await drainMicrotasks();
+
+      // 有视口外段时创建了 1 个 viewportObserver 并 observe
+      expect(instances).toHaveLength(1);
+      const io = instances[0];
+      expect(io.observed.has(ps[1])).toBe(true);
+
+      // 恢复原文
+      clickToolbarButtonByText('恢复原文');
+
+      // disconnect 被调用
+      expect(io.disconnect).toBeDefined();
+      // mockIO 的 disconnect 由 setClientRectsNonEmpty / createViewportObserver 内部调用
+      // 通过检查 observed 为空确认 disconnect 生效
+      expect(io.observed.size).toBe(0);
+      // 状态被重置
+      expect(__getState().active).toBe(false);
+
+      await startPromise;
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
     }
   });
 });
