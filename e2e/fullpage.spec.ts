@@ -67,6 +67,16 @@ function batchSourceCodePoints(request: CapturedBatchRequest): number {
   );
 }
 
+function batchSourceCodeUnits(request: CapturedBatchRequest): number {
+  return request.chunks.reduce(
+    (total, chunk) => total + chunk.parts.reduce(
+      (chunkTotal, part) => chunkTotal + part.text.length,
+      0,
+    ),
+    0,
+  );
+}
+
 const PARA1_ORIGINAL = 'The first paragraph describes a quiet morning in the small town.';
 const PARA4_ORIGINAL = 'The final paragraph closes the story with a hopeful note about tomorrow.';
 const PARA_FAIL_ORIGINAL =
@@ -349,6 +359,9 @@ test('batch wire limits and session concurrency are observable end to end', asyn
     expect(request.chunks.length).toBeLessThanOrEqual(20);
     expect(batchSourceCodePoints(request)).toBeLessThanOrEqual(6000);
   }
+  const chunkSizes = requests.map((request) => request.chunks.length).sort((a, b) => b - a);
+  expect(chunkSizes).toEqual([20, 20, 20, 1]);
+  expect(chunkSizes.reduce((total, size) => total + size, 0)).toBe(61);
   expect(getMaxActiveBatchRequests()).toBe(3);
 });
 
@@ -358,7 +371,7 @@ test('batch wire packs exactly 6000 code points and moves overflow to the next r
 }) => {
   await configureMockProvider(context, extensionId);
   const page = await openTestPage(context);
-  await replaceBodyWithParagraphs(page, ['A'.repeat(3000), 'B'.repeat(3000), 'C']);
+  await replaceBodyWithParagraphs(page, ['𠮷'.repeat(3000), 'A'.repeat(3000), 'C']);
 
   await triggerFullpageTranslate(context, 'replace');
   await expect(page.locator('#generated-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
@@ -367,7 +380,12 @@ test('batch wire packs exactly 6000 code points and moves overflow to the next r
   expect(requests).toHaveLength(2);
   expect(requests.map(batchSourceCodePoints).sort((a, b) => a - b)).toEqual([1, 6000]);
   const exactBoundary = requests.find((request) => batchSourceCodePoints(request) === 6000);
-  expect(exactBoundary?.chunks.map((chunk) => chunk.parts[0].text.length)).toEqual([3000, 3000]);
+  expect(exactBoundary).toBeDefined();
+  if (!exactBoundary) throw new Error('exact 6000-code-point batch missing');
+  expect(batchSourceCodeUnits(exactBoundary)).toBeGreaterThan(6000);
+  expect(exactBoundary.chunks.map((chunk) => Array.from(chunk.parts[0].text).length))
+    .toEqual([3000, 3000]);
+  expect(exactBoundary.chunks.map((chunk) => chunk.parts[0].text.length)).toEqual([6000, 3000]);
 });
 
 test('oversized semantic segment renders only after every transport chunk arrives', async ({
