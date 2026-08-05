@@ -91,6 +91,7 @@ class FakeBatchPort {
   readonly disconnect = vi.fn(() => {
     if (this.disconnected) return;
     this.disconnected = true;
+    this.onClosed();
     for (const listener of [...this.disconnectListeners]) listener();
   });
   request?: Extract<BatchStreamPortMessage, { type: 'request' }>;
@@ -98,7 +99,10 @@ class FakeBatchPort {
   private readonly disconnectListeners: Array<() => void> = [];
   private disconnected = false;
 
-  constructor(private readonly autoRespond: boolean) {}
+  constructor(
+    private readonly autoRespond: boolean,
+    private readonly onClosed: () => void,
+  ) {}
 
   emit(message: BatchStreamPortMessage): void {
     for (const listener of [...this.messageListeners]) listener(message);
@@ -136,8 +140,14 @@ function setupBatchBrowser(autoRespond = true) {
     return {};
   });
   const ports: FakeBatchPort[] = [];
+  let activePorts = 0;
+  let maxActivePorts = 0;
   const connect = vi.fn(() => {
-    const port = new FakeBatchPort(autoRespond);
+    activePorts += 1;
+    maxActivePorts = Math.max(maxActivePorts, activePorts);
+    const port = new FakeBatchPort(autoRespond, () => {
+      activePorts -= 1;
+    });
     ports.push(port);
     return port;
   });
@@ -151,7 +161,14 @@ function setupBatchBrowser(autoRespond = true) {
       },
     },
   });
-  return { sendMessage: translateMessage, runtimeSendMessage: sendMessage, connect, ports };
+  return {
+    sendMessage: translateMessage,
+    runtimeSendMessage: sendMessage,
+    connect,
+    ports,
+    activePortCount: () => activePorts,
+    maxActivePortCount: () => maxActivePorts,
+  };
 }
 
 /** 排空微任务队列：让纯 Promise 链（getTargetLang / runPool / sendMessage mock）完整推进 */
@@ -1572,6 +1589,78 @@ describe('LLM semantic batch orchestration', () => {
     expect(__getState().active).toBe(false);
     expect(__getState().targetLang).toBe('');
     expect(document.querySelector('[data-llm-translator]')).toBeNull();
+  });
+
+  it('shares three Port slots across viewport windows, dynamic nodes, and retry', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    const outOfViewTexts = ['a', 'b', 'c'].map((suffix) => `${'x'.repeat(5999)}${suffix}`);
+    document.body.innerHTML = [
+      '<p>initial failure</p>',
+      ...outOfViewTexts.map((text) => `<p>${text}</p>`),
+    ].join('');
+    const paragraphs = Array.from(document.querySelectorAll('p')) as HTMLElement[];
+    setClientRectsNonEmpty(paragraphs);
+    const visibleTexts = new Set(['initial failure']);
+    mockViewportLayout(visibleTexts);
+    const { trigger } = installMockIO();
+    const {
+      ports,
+      activePortCount,
+      maxActivePortCount,
+    } = setupBatchBrowser(false);
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+    const initialRequest = ports[0].request!;
+    ports[0].emit({
+      type: 'error',
+      requestId: initialRequest.requestId,
+      result: {
+        missingChunkIds: initialRequest.chunks.map((chunk) => chunk.chunkId),
+        error: 'retry later',
+        errorType: 'network',
+      },
+    });
+    await startPromise;
+    expect(activePortCount()).toBe(0);
+
+    trigger(paragraphs.slice(1));
+    await vi.advanceTimersByTimeAsync(25);
+    expect(ports).toHaveLength(4);
+    expect(activePortCount()).toBe(3);
+
+    getRetryButton().click();
+    const dynamicText = 'd'.repeat(6000);
+    visibleTexts.add(dynamicText);
+    const dynamic = document.createElement('p');
+    dynamic.textContent = dynamicText;
+    document.body.appendChild(dynamic);
+    setClientRectsNonEmpty([dynamic]);
+    await drainMicrotasks();
+    await vi.advanceTimersByTimeAsync(225);
+
+    expect(ports).toHaveLength(4);
+    expect(activePortCount()).toBe(3);
+    expect(maxActivePortCount()).toBe(3);
+
+    ports[1].complete();
+    await drainMicrotasks();
+    expect(ports).toHaveLength(5);
+    expect(ports[4].request?.chunks[0].parts[0].text).toBe('initial failure');
+    expect(activePortCount()).toBe(3);
+
+    ports[2].complete();
+    await drainMicrotasks();
+    expect(ports).toHaveLength(6);
+    expect(ports[5].request?.chunks[0].parts[0].text).toBe(dynamicText);
+    expect(activePortCount()).toBe(3);
+    expect(maxActivePortCount()).toBe(3);
+
+    for (const port of ports.slice(3)) port.complete();
+    await drainMicrotasks();
+    expect(activePortCount()).toBe(0);
   });
 
   it('retries only failed semantic owners through the batch port', async () => {

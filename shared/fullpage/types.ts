@@ -87,6 +87,12 @@ export interface SemanticTranslation {
   translatedParts: string[];
 }
 
+/** 多个 batch pool 调用之间共享的请求并发门。 */
+export interface BatchRequestGate {
+  /** 等待一个请求槽位；返回的 release 必须在 Port 终止后调用一次。 */
+  acquire(): (() => void) | Promise<() => void>;
+}
+
 /** LLM 批量流式翻译池执行选项。 */
 export interface BatchPoolOptions {
   /** 目标语言 */
@@ -95,6 +101,8 @@ export interface BatchPoolOptions {
   concurrency?: 3;
   /** 结构化语义译文缓存 */
   cache: Map<string, SemanticTranslation>;
+  /** 跨 initial / viewport / dynamic / retry pool 共享的并发门 */
+  requestGate?: BatchRequestGate;
   /** 每个分段状态变化时的回调 */
   onSettled: (segment: SegmentRecord) => void;
   /** 返回 false 时停止派发新的 batch，已在途请求继续收尾 */

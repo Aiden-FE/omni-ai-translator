@@ -274,6 +274,32 @@ describe('runBatchPool', () => {
     expect(second.status).toBe('done');
   });
 
+  it('distinguishes equal joined text with different ordered source-part boundaries', async () => {
+    const cache = new Map();
+    const first = semanticSegment('first-boundary', ['A', 'BC']);
+    const firstPromise = runBatchPool([first], options(cache));
+    const firstPort = runtime.ports[0];
+    firstPort.emitChunk(translatedChunk(firstPort, 0));
+    firstPort.emitDone();
+    await firstPromise;
+
+    const differentBoundary = semanticSegment('different-boundary', ['AB', 'C']);
+    const differentPromise = runBatchPool([differentBoundary], options(cache));
+
+    expect(runtime.ports).toHaveLength(2);
+    const differentPort = runtime.ports[1];
+    differentPort.emitChunk(translatedChunk(differentPort, 0));
+    differentPort.emitDone();
+    await differentPromise;
+
+    const sameBoundary = semanticSegment('same-boundary', ['AB', 'C']);
+    const cachedResult = await runBatchPool([sameBoundary], options(cache));
+
+    expect(runtime.ports).toHaveLength(2);
+    expect(cachedResult.succeeded).toEqual([sameBoundary]);
+    expect(sameBoundary.translatedParts).toEqual(['[译]AB', '[译]C']);
+  });
+
   it('preserves a completed owner when a later batch error fails its sibling', async () => {
     const segments = [semanticSegment('s0', ['Hello']), semanticSegment('s1', ['World'])];
     const poolPromise = runBatchPool(segments, options());

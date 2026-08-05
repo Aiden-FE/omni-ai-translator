@@ -16,7 +16,11 @@ import {
   createViewportObserver,
   type ViewportObserver,
 } from './translate-pool';
-import { retryBatchSegments, runBatchPool } from './batch-pool';
+import {
+  createBatchRequestGate,
+  retryBatchSegments,
+  runBatchPool,
+} from './batch-pool';
 import {
   applyReplace,
   applyBilingual,
@@ -51,6 +55,8 @@ let cache: Map<string, string> = new Map();
 let semanticCache: Map<string, SemanticTranslation> = new Map();
 /** 当前会话翻译路径，由 capability 查询确定并供 retry / dynamic nodes 复用。 */
 let batchStreamEnabled = false;
+/** 所有会话入口共享同一个三槽 gate，避免 viewport/dynamic/retry pool 叠加并发。 */
+const batchRequestGate = createBatchRequestGate();
 /** 工具栏实例 */
 let toolbar: ToolbarApi | null = null;
 /** 增量翻译观察器（仅含初始分段的 active 会话连接） */
@@ -190,6 +196,7 @@ async function enqueueSegments(
       targetLang,
       concurrency: 3,
       cache: semanticCache,
+      requestGate: batchRequestGate,
       onSettled: (seg) => handleSettled(seg, generation),
       isActive: () => isSessionActive(generation),
     });
@@ -360,6 +367,7 @@ async function handleRetry(): Promise<void> {
       targetLang,
       concurrency: 3,
       cache: semanticCache,
+      requestGate: batchRequestGate,
       onSettled: (seg) => handleSettled(seg, generation),
       isActive: () => isSessionActive(generation),
     });

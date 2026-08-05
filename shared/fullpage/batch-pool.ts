@@ -8,17 +8,50 @@ import type {
 import { createTransportChunks, packTransportBatches } from './batch-packer';
 import type {
   BatchPoolOptions,
+  BatchRequestGate,
   SegmentRecord,
   SemanticTranslation,
   TranslatePoolResult,
 } from './types';
 
-export type { BatchPoolOptions } from './types';
+export type { BatchPoolOptions, BatchRequestGate } from './types';
 
 const BATCH_PORT_NAME = 'fullpage-translate-batch-stream';
 const SEMANTIC_CACHE_VERSION = 'semantic-v1';
 const CACHE_SEP = '\u0000';
 let requestSequence = 0;
+
+/** 创建一个 FIFO 三槽请求门，供同一 orchestrator 的多个 pool 调用共享。 */
+export function createBatchRequestGate(concurrency: 3 = 3): BatchRequestGate {
+  let active = 0;
+  const waiters: Array<(release: () => void) => void> = [];
+
+  const createRelease = (): (() => void) => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = waiters.shift();
+      if (next) {
+        next(createRelease());
+      } else {
+        active -= 1;
+      }
+    };
+  };
+
+  return {
+    acquire(): (() => void) | Promise<() => void> {
+      if (active < concurrency) {
+        active += 1;
+        return createRelease();
+      }
+      return new Promise((resolve) => {
+        waiters.push(resolve);
+      });
+    },
+  };
+}
 
 interface BatchPort {
   onMessage: {
@@ -49,8 +82,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function semanticCacheKey(targetLang: string, originalText: string): string {
-  return `${SEMANTIC_CACHE_VERSION}${CACHE_SEP}${targetLang}${CACHE_SEP}${originalText}`;
+function semanticCacheKey(targetLang: string, segment: SegmentRecord): string {
+  const sourcePartSignature = JSON.stringify(
+    segment.parts?.map((part) => part.sourceText) ?? [],
+  );
+  return [
+    SEMANTIC_CACHE_VERSION,
+    targetLang,
+    segment.originalText,
+    sourcePartSignature,
+  ].join(CACHE_SEP);
 }
 
 function isCompleteCachedTranslation(
@@ -132,7 +173,7 @@ export async function runBatchPool(
     owner.segment.errorType = undefined;
     owner.segment.status = 'done';
     opts.cache.set(
-      semanticCacheKey(opts.targetLang, owner.segment.originalText),
+      semanticCacheKey(opts.targetLang, owner.segment),
       {
         translatedText: translation.translatedText,
         translatedParts: [...translation.translatedParts],
@@ -197,7 +238,7 @@ export async function runBatchPool(
   for (const segment of segments) {
     if (shouldStop()) break;
     const expectedPartCount = segment.parts?.length ?? 0;
-    const cached = opts.cache.get(semanticCacheKey(opts.targetLang, segment.originalText));
+    const cached = opts.cache.get(semanticCacheKey(opts.targetLang, segment));
     if (isCompleteCachedTranslation(cached, expectedPartCount)) {
       const owner: OwnerState = {
         segment,
@@ -240,6 +281,7 @@ export async function runBatchPool(
   }
 
   const batches = packTransportBatches(transportChunks);
+  const requestGate = opts.requestGate ?? createBatchRequestGate(opts.concurrency ?? 3);
   let nextBatchIndex = 0;
 
   async function runBatch(batch: BatchTranslateChunk[]): Promise<void> {
@@ -327,7 +369,17 @@ export async function runBatchPool(
       const index = nextBatchIndex;
       if (index >= batches.length) return;
       nextBatchIndex += 1;
-      await runBatch(batches[index]);
+      const acquired = requestGate.acquire();
+      const release = typeof acquired === 'function' ? acquired : await acquired;
+      if (shouldStop()) {
+        release();
+        return;
+      }
+      try {
+        await runBatch(batches[index]);
+      } finally {
+        release();
+      }
     }
   }
 
