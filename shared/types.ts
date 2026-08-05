@@ -48,6 +48,34 @@ export interface TranslateResult {
   errorType?: ErrorType;
 }
 
+/** 全文翻译批量请求中的一个原文片段。 */
+export interface BatchTranslatePart {
+  partId: number;
+  sliceIndex: number;
+  text: string;
+}
+
+/** 全文翻译批量请求中的一个传输 chunk。 */
+export interface BatchTranslateChunk {
+  chunkId: string;
+  segmentId: string;
+  parts: BatchTranslatePart[];
+}
+
+/** 全文翻译批量响应中的一个译文片段。 */
+export interface BatchTranslatedPart {
+  partId: number;
+  sliceIndex: number;
+  translatedText: string;
+}
+
+/** 全文翻译批量响应中的一个已翻译 transport chunk。 */
+export interface BatchTranslatedChunk {
+  chunkId: string;
+  segmentId: string;
+  parts: BatchTranslatedPart[];
+}
+
 /** 插件设置 */
 export interface Settings {
   activeProviderId: string | null;
