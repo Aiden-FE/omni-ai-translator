@@ -1,5 +1,5 @@
 // 适配层统一入口单元测试 — 覆盖默认源路由、no-config、builtin 源、getActiveSources/setActiveSource
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   translateWithAdapter,
   translateWithAdapterStream,
@@ -421,18 +421,51 @@ describe('batch translation capability and routing', () => {
   });
 });
 
-describe('background batch stream port', () => {
-  it('ignores wrong and duplicate messages while preserving requestId through chunk and done', async () => {
-    type PortMessageListener = (message: BatchStreamPortMessage) => void;
-    interface TestPort {
-      name: string;
-      onMessage: { addListener: (listener: PortMessageListener) => void };
-      postMessage: ReturnType<typeof vi.fn>;
-      disconnect: ReturnType<typeof vi.fn>;
-    }
+type PortMessageListener = (message: unknown) => void;
 
-    let connectListener: ((port: TestPort) => void) | undefined;
-    const runtimeMessageListeners: Array<(message: unknown) => unknown> = [];
+interface TestPort {
+  name: string;
+  onMessage: { addListener: (listener: PortMessageListener) => void };
+  onDisconnect: { addListener: (listener: () => void) => void };
+  postMessage: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+}
+
+interface TestPortHarness {
+  port: TestPort;
+  send(message: unknown): void;
+  emitDisconnect(): void;
+}
+
+let batchConnectListener: ((port: TestPort) => void) | undefined;
+let translatorModule: typeof import('../index');
+
+function createBatchPort(postMessage = vi.fn()): TestPortHarness {
+  const messageListeners: PortMessageListener[] = [];
+  const disconnectListeners: Array<() => void> = [];
+  const port: TestPort = {
+    name: 'fullpage-translate-batch-stream',
+    onMessage: { addListener: (listener) => messageListeners.push(listener) },
+    onDisconnect: { addListener: (listener) => disconnectListeners.push(listener) },
+    postMessage,
+    disconnect: vi.fn(),
+  };
+  batchConnectListener!(port);
+
+  return {
+    port,
+    send(message) {
+      expect(messageListeners).toHaveLength(1);
+      messageListeners[0](message);
+    },
+    emitDisconnect() {
+      for (const listener of disconnectListeners) listener();
+    },
+  };
+}
+
+describe('background batch stream port', () => {
+  beforeAll(async () => {
     vi.stubGlobal('browser', {
       contextMenus: {
         onClicked: { addListener: vi.fn() },
@@ -440,14 +473,10 @@ describe('background batch stream port', () => {
       },
       runtime: {
         onInstalled: { addListener: vi.fn() },
-        onMessage: {
-          addListener: (listener: (message: unknown) => unknown) => {
-            runtimeMessageListeners.push(listener);
-          },
-        },
+        onMessage: { addListener: vi.fn() },
         onConnect: {
           addListener: (listener: (port: TestPort) => void) => {
-            connectListener = listener;
+            batchConnectListener = listener;
           },
         },
       },
@@ -458,13 +487,26 @@ describe('background batch stream port', () => {
       return setup;
     });
 
-    const translator = await import('../index');
+    translatorModule = await import('../index');
+    await import('@/entrypoints/background');
+    expect(batchConnectListener).toBeTypeOf('function');
+  });
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('ignores wrong and duplicate messages while preserving requestId through chunk and done', async () => {
     let finishBatch: ((result: BatchTranslateResult) => void) | undefined;
     const batchResult = new Promise<BatchTranslateResult>((resolve) => {
       finishBatch = resolve;
     });
     const translateBatchSpy = vi
-      .spyOn(translator, 'translateBatchWithAdapterStream')
+      .spyOn(translatorModule, 'translateBatchWithAdapterStream')
       .mockImplementation(async (_request, onChunk) => {
         onChunk({
           chunkId: 'c1',
@@ -472,21 +514,7 @@ describe('background batch stream port', () => {
         });
         return batchResult;
       });
-
-    await import('@/entrypoints/background');
-
-    expect(connectListener).toBeTypeOf('function');
-    const portMessageListeners: PortMessageListener[] = [];
-    const port: TestPort = {
-      name: 'fullpage-translate-batch-stream',
-      onMessage: {
-        addListener: (listener) => portMessageListeners.push(listener),
-      },
-      postMessage: vi.fn(),
-      disconnect: vi.fn(),
-    };
-    connectListener!(port);
-    expect(portMessageListeners).toHaveLength(1);
+    const harness = createBatchPort();
 
     const request: BatchStreamPortMessage = {
       type: 'request',
@@ -494,16 +522,16 @@ describe('background batch stream port', () => {
       targetLang: batchRequest.targetLang,
       chunks: batchRequest.chunks,
     };
-    portMessageListeners[0]({
+    harness.send({
       type: 'done',
       requestId: 'wrong-type',
       missingChunkIds: [],
     });
-    portMessageListeners[0](request);
-    portMessageListeners[0](request);
+    harness.send(request);
+    harness.send(request);
 
     expect(translateBatchSpy).toHaveBeenCalledTimes(1);
-    expect(port.postMessage).toHaveBeenCalledWith({
+    expect(harness.port.postMessage).toHaveBeenCalledWith({
       type: 'chunk',
       requestId: 'request-7',
       chunk: {
@@ -514,12 +542,122 @@ describe('background batch stream port', () => {
 
     finishBatch!({ missingChunkIds: [] });
     await vi.waitFor(() => {
-      expect(port.postMessage).toHaveBeenCalledWith({
+      expect(harness.port.postMessage).toHaveBeenCalledWith({
         type: 'done',
         requestId: 'request-7',
         missingChunkIds: [],
       });
-      expect(port.disconnect).toHaveBeenCalledTimes(1);
+      expect(harness.port.disconnect).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('ignores malformed request shapes without locking out the first valid request', async () => {
+    const translateBatchSpy = vi
+      .spyOn(translatorModule, 'translateBatchWithAdapterStream')
+      .mockResolvedValue({ missingChunkIds: [] });
+    const harness = createBatchPort();
+    const malformedMessages: unknown[] = [
+      { type: 'request' },
+      { type: 'request', requestId: 7, targetLang: '中文', chunks: [] },
+      { type: 'request', requestId: 'r', targetLang: null, chunks: [] },
+      { type: 'request', requestId: 'r', targetLang: '中文', chunks: {} },
+      {
+        type: 'request',
+        requestId: 'r',
+        targetLang: '中文',
+        chunks: [{ chunkId: 'c1', parts: [] }],
+      },
+      {
+        type: 'request',
+        requestId: 'r',
+        targetLang: '中文',
+        chunks: [{
+          chunkId: 'c1',
+          segmentId: 'segment-1',
+          parts: [{ partId: '0', sliceIndex: 0, text: 'Hello' }],
+        }],
+      },
+    ];
+
+    for (const message of malformedMessages) harness.send(message);
+    expect(translateBatchSpy).not.toHaveBeenCalled();
+
+    harness.send({
+      type: 'request',
+      requestId: 'valid-request',
+      targetLang: batchRequest.targetLang,
+      chunks: batchRequest.chunks,
+    });
+
+    expect(translateBatchSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(harness.port.postMessage).toHaveBeenCalledWith({
+        type: 'done',
+        requestId: 'valid-request',
+        missingChunkIds: [],
+      });
+      expect(harness.port.disconnect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('stops forwarding and does not finalize after the peer disconnects early', async () => {
+    const attemptedChunks: string[] = [];
+    vi.spyOn(translatorModule, 'translateBatchWithAdapterStream')
+      .mockImplementation(async (_request, onChunk) => {
+        await Promise.resolve();
+        attemptedChunks.push('c1');
+        onChunk({
+          chunkId: 'c1',
+          translatedParts: [{ partId: 0, sliceIndex: 0, text: '你好' }],
+        });
+        attemptedChunks.push('c2');
+        onChunk({
+          chunkId: 'c2',
+          translatedParts: [{ partId: 1, sliceIndex: 0, text: '世界' }],
+        });
+        return { missingChunkIds: [] };
+      });
+    const harness = createBatchPort();
+
+    harness.send({
+      type: 'request',
+      requestId: 'early-disconnect',
+      targetLang: batchRequest.targetLang,
+      chunks: batchRequest.chunks,
+    });
+    harness.emitDisconnect();
+
+    await vi.waitFor(() => expect(attemptedChunks).toEqual(['c1']));
+    expect(harness.port.postMessage).not.toHaveBeenCalled();
+    expect(harness.port.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('stops after postMessage throws and disconnects at most once without a second post', async () => {
+    const attemptedChunks: string[] = [];
+    vi.spyOn(translatorModule, 'translateBatchWithAdapterStream')
+      .mockImplementation(async (_request, onChunk) => {
+        attemptedChunks.push('c1');
+        onChunk({
+          chunkId: 'c1',
+          translatedParts: [{ partId: 0, sliceIndex: 0, text: '你好' }],
+        });
+        attemptedChunks.push('c2');
+        return { missingChunkIds: [] };
+      });
+    const postMessage = vi.fn(() => {
+      throw new Error('Port is disconnected');
+    });
+    const harness = createBatchPort(postMessage);
+
+    harness.send({
+      type: 'request',
+      requestId: 'post-failure',
+      targetLang: batchRequest.targetLang,
+      chunks: batchRequest.chunks,
+    });
+
+    await vi.waitFor(() => expect(harness.port.disconnect).toHaveBeenCalledTimes(1));
+    expect(attemptedChunks).toEqual(['c1']);
+    expect(postMessage).toHaveBeenCalledTimes(1);
   });
 });

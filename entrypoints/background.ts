@@ -22,6 +22,31 @@ import type {
   StreamPortMessage,
 } from '@/shared/types';
 
+type BatchStreamRequestMessage = Extract<BatchStreamPortMessage, { type: 'request' }>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isBatchStreamRequestMessage(value: unknown): value is BatchStreamRequestMessage {
+  if (!isRecord(value)
+    || value.type !== 'request'
+    || typeof value.requestId !== 'string'
+    || typeof value.targetLang !== 'string'
+    || !Array.isArray(value.chunks)) {
+    return false;
+  }
+
+  return value.chunks.every((chunk) => isRecord(chunk)
+    && typeof chunk.chunkId === 'string'
+    && typeof chunk.segmentId === 'string'
+    && Array.isArray(chunk.parts)
+    && chunk.parts.every((part) => isRecord(part)
+      && Number.isInteger(part.partId)
+      && Number.isInteger(part.sliceIndex)
+      && typeof part.text === 'string'));
+}
+
 export default defineBackground(() => {
   // 右键菜单「全文翻译」点击事件（v0.4.0 入口）。
   // MV3 约束：onClicked 监听必须顶层同步注册——SW 被菜单点击事件唤醒时，
@@ -105,9 +130,42 @@ export default defineBackground(() => {
   browser.runtime.onConnect.addListener((port) => {
     if (port.name === 'fullpage-translate-batch-stream') {
       let requestAccepted = false;
+      let disconnected = false;
+      let terminalSent = false;
 
-      port.onMessage.addListener((msg: BatchStreamPortMessage) => {
-        if (msg.type !== 'request' || requestAccepted) return;
+      port.onDisconnect.addListener(() => {
+        disconnected = true;
+      });
+
+      const disconnectOnce = () => {
+        if (disconnected) return;
+        disconnected = true;
+        try {
+          port.disconnect();
+        } catch {
+          // The peer can disappear between the state check and disconnect().
+        }
+      };
+
+      const postMessage = (message: BatchStreamPortMessage): boolean => {
+        if (disconnected) return false;
+        try {
+          port.postMessage(message);
+          return true;
+        } catch {
+          disconnectOnce();
+          return false;
+        }
+      };
+
+      const finalize = (message: BatchStreamPortMessage) => {
+        if (disconnected || terminalSent) return;
+        terminalSent = true;
+        if (postMessage(message)) disconnectOnce();
+      };
+
+      port.onMessage.addListener((msg: unknown) => {
+        if (disconnected || requestAccepted || !isBatchStreamRequestMessage(msg)) return;
         requestAccepted = true;
         const { requestId, targetLang, chunks } = msg;
 
@@ -115,26 +173,27 @@ export default defineBackground(() => {
           { targetLang, chunks },
           (chunk) => {
             const message: BatchStreamPortMessage = { type: 'chunk', requestId, chunk };
-            port.postMessage(message);
+            if (!postMessage(message)) {
+              throw new Error('Batch translation port disconnected');
+            }
           },
         )
-          .then((result) => {
-            const message: BatchStreamPortMessage = result.error
-              ? { type: 'error', requestId, result }
-              : { type: 'done', requestId, missingChunkIds: result.missingChunkIds };
-            port.postMessage(message);
-            port.disconnect();
-          })
-          .catch((err) => {
-            const result: BatchTranslateResult = {
-              missingChunkIds: chunks.map((chunk) => chunk.chunkId),
-              error: err instanceof Error ? err.message : String(err),
-              errorType: 'network',
-            };
-            const message: BatchStreamPortMessage = { type: 'error', requestId, result };
-            port.postMessage(message);
-            port.disconnect();
-          });
+          .then(
+            (result) => {
+              const message: BatchStreamPortMessage = result.error
+                ? { type: 'error', requestId, result }
+                : { type: 'done', requestId, missingChunkIds: result.missingChunkIds };
+              finalize(message);
+            },
+            (err) => {
+              const result: BatchTranslateResult = {
+                missingChunkIds: chunks.map((chunk) => chunk.chunkId),
+                error: err instanceof Error ? err.message : String(err),
+                errorType: 'network',
+              };
+              finalize({ type: 'error', requestId, result });
+            },
+          );
       });
       return;
     }

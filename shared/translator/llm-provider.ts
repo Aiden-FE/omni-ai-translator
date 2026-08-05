@@ -200,6 +200,32 @@ async function callOllama(
 
 type DeltaHandler = (delta: string) => void;
 
+function createProviderDeltaFilter(onDelta: DeltaHandler): {
+  push(delta: string): void;
+  finish(): string;
+  rethrowCallbackFailure(): void;
+} {
+  let callbackFailed = false;
+  let callbackError: unknown;
+  const filter = createReasoningStreamFilter((delta) => {
+    try {
+      onDelta(delta);
+    } catch (err) {
+      callbackFailed = true;
+      callbackError = err;
+      throw err;
+    }
+  });
+
+  return {
+    push: filter.push,
+    finish: filter.finish,
+    rethrowCallbackFailure() {
+      if (callbackFailed) throw callbackError;
+    },
+  };
+}
+
 /**
  * 从 ReadableStream 读取全部内容并按行分割（支持跨 chunk 行拼接）。
  * 返回逐行 yield 的异步生成器。
@@ -253,24 +279,27 @@ async function callOpenAICompletionsPromptStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter(onDelta);
+  const filter = createProviderDeltaFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
       if (!trimmed || !trimmed.startsWith('data:')) continue;
       const data = trimmed.slice(5).trim();
       if (data === '[DONE]') break;
+      let parsed;
       try {
-        const parsed = JSON.parse(data);
-        const delta = parsed?.choices?.[0]?.delta?.content;
-        if (delta) {
-          filter.push(delta);
-        }
+        parsed = JSON.parse(data);
       } catch {
         // 跳过无法解析的行（可能是 SSE 注释行或不完整 JSON）
+        continue;
+      }
+      const delta = parsed?.choices?.[0]?.delta?.content;
+      if (delta) {
+        filter.push(delta);
       }
     }
   } catch (err) {
+    filter.rethrowCallbackFailure();
     // 流读取中断：返回已收到的部分译文 + network 错误
     const errorType = classifyError(err);
     return {
@@ -306,36 +335,39 @@ async function callOpenAIResponsesPromptStream(
   }
 
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter(onDelta);
+  const filter = createProviderDeltaFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
       if (!trimmed.startsWith('data:')) continue;
       const data = trimmed.slice(5).trim();
       if (data === '[DONE]') break;
+      let parsed: unknown;
       try {
-        const parsed: unknown = JSON.parse(data);
-        if (!isRecord(parsed)) continue;
-        const failure = extractResponsesStreamFailure(parsed, provider.apiKey);
-        if (failure) {
-          return {
-            translatedText: filter.finish(),
-            error: failure,
-            errorType: 'unreachable',
-          };
-        }
-        if (parsed.type === 'response.completed') break;
-        if (
-          parsed.type === 'response.output_text.delta'
-          && typeof parsed.delta === 'string'
-        ) {
-          filter.push(parsed.delta);
-        }
+        parsed = JSON.parse(data);
       } catch {
         // 兼容网关可能混入注释或无法解析的数据事件。
+        continue;
+      }
+      if (!isRecord(parsed)) continue;
+      const failure = extractResponsesStreamFailure(parsed, provider.apiKey);
+      if (failure) {
+        return {
+          translatedText: filter.finish(),
+          error: failure,
+          errorType: 'unreachable',
+        };
+      }
+      if (parsed.type === 'response.completed') break;
+      if (
+        parsed.type === 'response.output_text.delta'
+        && typeof parsed.delta === 'string'
+      ) {
+        filter.push(parsed.delta);
       }
     }
   } catch (err) {
+    filter.rethrowCallbackFailure();
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),
@@ -379,7 +411,7 @@ async function callAnthropicPromptStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter(onDelta);
+  const filter = createProviderDeltaFilter(onDelta);
   let currentEvent = '';
   try {
     for await (const line of readLines(reader)) {
@@ -398,19 +430,22 @@ async function callAnthropicPromptStream(
         const data = trimmed.slice(5).trim();
         if (currentEvent === 'message_stop') break;
         if (currentEvent === 'content_block_delta') {
+          let parsed;
           try {
-            const parsed = JSON.parse(data);
-            const delta = parsed?.delta?.text;
-            if (delta) {
-              filter.push(delta);
-            }
+            parsed = JSON.parse(data);
           } catch {
             // 跳过无法解析的行
+            continue;
+          }
+          const delta = parsed?.delta?.text;
+          if (delta) {
+            filter.push(delta);
           }
         }
       }
     }
   } catch (err) {
+    filter.rethrowCallbackFailure();
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),
@@ -448,24 +483,27 @@ async function callOllamaPromptStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter(onDelta);
+  const filter = createProviderDeltaFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
       if (!trimmed) continue;
+      let parsed;
       try {
-        const parsed = JSON.parse(trimmed);
-        const delta = parsed?.message?.content;
-        if (delta) {
-          filter.push(delta);
-        }
-        // Ollama 流结束信号：done=true 或 response 为空
-        if (parsed?.done) break;
+        parsed = JSON.parse(trimmed);
       } catch {
         // 跳过无法解析的行
+        continue;
       }
+      const delta = parsed?.message?.content;
+      if (delta) {
+        filter.push(delta);
+      }
+      // Ollama 流结束信号：done=true 或 response 为空
+      if (parsed?.done) break;
     }
   } catch (err) {
+    filter.rethrowCallbackFailure();
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),

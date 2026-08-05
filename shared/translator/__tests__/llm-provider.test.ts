@@ -899,4 +899,57 @@ describe('LLM Provider batch streaming', () => {
     expect(result.error).toContain('[REDACTED]');
     expect(result.error).not.toContain(apiKey);
   });
+
+  const callbackFailureFixtures: Array<[
+    string,
+    NonNullable<ProviderConfig['responseStyle']>,
+    string[],
+  ]> = [
+    ['OpenAI Chat Completions', 'openai-completions', [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: batchChunkText('c1', 0, '你好') } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: batchChunkText('c2', 1, '世界') } }] })}\n\n`,
+      'data: [DONE]\n\n',
+    ]],
+    ['OpenAI Responses', 'openai-responses', [
+      `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: batchChunkText('c1', 0, '你好') })}\n\n`,
+      `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: batchChunkText('c2', 1, '世界') })}\n\n`,
+      'data: [DONE]\n\n',
+    ]],
+    ['Anthropic', 'anthropic', [
+      'event: content_block_delta\n',
+      `data: ${JSON.stringify({ delta: { text: batchChunkText('c1', 0, '你好') } })}\n\n`,
+      'event: content_block_delta\n',
+      `data: ${JSON.stringify({ delta: { text: batchChunkText('c2', 1, '世界') } })}\n\n`,
+      'event: message_stop\n',
+      'data: {"type":"message_stop"}\n\n',
+    ]],
+    ['Ollama', 'ollama', [
+      `${JSON.stringify({ message: { content: batchChunkText('c1', 0, '你好') }, done: false })}\n`,
+      `${JSON.stringify({ message: { content: batchChunkText('c2', 1, '世界') }, done: false })}\n`,
+      '{"message":{"content":""},"done":true}\n',
+    ]],
+  ];
+
+  it.each(callbackFailureFixtures)(
+    '%s stops the stream and classifies an onChunk callback failure',
+    async (_name, responseStyle, streamChunks) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        body: makeReadableStream(streamChunks),
+      }));
+      const provider = createLLMProvider(makeOpenAIConfig({ responseStyle }));
+      const seen: string[] = [];
+
+      const result = await provider.translateBatchStream!(batchRequest, (chunk) => {
+        seen.push(chunk.chunkId);
+        throw new Error('batch consumer closed');
+      });
+
+      expect(seen).toEqual(['c1']);
+      expect(result.missingChunkIds).toEqual(['c1', 'c2']);
+      expect(result.errorType).toBe('network');
+      expect(result.error).toContain('batch consumer closed');
+    },
+  );
 });
