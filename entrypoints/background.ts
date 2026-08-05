@@ -28,12 +28,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function isDenseNonEmptyArray(value: unknown[]): boolean {
+  if (value.length === 0) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
 function isBatchStreamRequestMessage(value: unknown): value is BatchStreamRequestMessage {
   if (!isRecord(value)
     || value.type !== 'request'
     || typeof value.requestId !== 'string'
     || typeof value.targetLang !== 'string'
-    || !Array.isArray(value.chunks)) {
+    || !Array.isArray(value.chunks)
+    || !isDenseNonEmptyArray(value.chunks)) {
     return false;
   }
 
@@ -41,6 +50,7 @@ function isBatchStreamRequestMessage(value: unknown): value is BatchStreamReques
     && typeof chunk.chunkId === 'string'
     && typeof chunk.segmentId === 'string'
     && Array.isArray(chunk.parts)
+    && isDenseNonEmptyArray(chunk.parts)
     && chunk.parts.every((part) => isRecord(part)
       && Number.isInteger(part.partId)
       && Number.isInteger(part.sliceIndex)

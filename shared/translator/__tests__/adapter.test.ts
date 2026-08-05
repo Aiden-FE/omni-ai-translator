@@ -556,11 +556,14 @@ describe('background batch stream port', () => {
       .spyOn(translatorModule, 'translateBatchWithAdapterStream')
       .mockResolvedValue({ missingChunkIds: [] });
     const harness = createBatchPort();
+    const sparseChunks = new Array<unknown>(1);
+    const sparseParts = new Array<unknown>(1);
     const malformedMessages: unknown[] = [
       { type: 'request' },
       { type: 'request', requestId: 7, targetLang: '中文', chunks: [] },
       { type: 'request', requestId: 'r', targetLang: null, chunks: [] },
       { type: 'request', requestId: 'r', targetLang: '中文', chunks: {} },
+      { type: 'request', requestId: 'empty-chunks', targetLang: '中文', chunks: [] },
       {
         type: 'request',
         requestId: 'r',
@@ -575,6 +578,64 @@ describe('background batch stream port', () => {
           chunkId: 'c1',
           segmentId: 'segment-1',
           parts: [{ partId: '0', sliceIndex: 0, text: 'Hello' }],
+        }],
+      },
+      {
+        type: 'request',
+        requestId: 'empty-parts',
+        targetLang: '中文',
+        chunks: [{ chunkId: 'c1', segmentId: 'segment-1', parts: [] }],
+      },
+      {
+        type: 'request',
+        requestId: 'sparse-chunks',
+        targetLang: '中文',
+        chunks: sparseChunks,
+      },
+      {
+        type: 'request',
+        requestId: 'sparse-parts',
+        targetLang: '中文',
+        chunks: [{ chunkId: 'c1', segmentId: 'segment-1', parts: sparseParts }],
+      },
+      {
+        type: 'request',
+        requestId: 'nan-part-id',
+        targetLang: '中文',
+        chunks: [{
+          chunkId: 'c1',
+          segmentId: 'segment-1',
+          parts: [{ partId: Number.NaN, sliceIndex: 0, text: 'Hello' }],
+        }],
+      },
+      {
+        type: 'request',
+        requestId: 'fractional-slice-index',
+        targetLang: '中文',
+        chunks: [{
+          chunkId: 'c1',
+          segmentId: 'segment-1',
+          parts: [{ partId: 0, sliceIndex: 0.5, text: 'Hello' }],
+        }],
+      },
+      {
+        type: 'request',
+        requestId: 'fractional-part-id',
+        targetLang: '中文',
+        chunks: [{
+          chunkId: 'c1',
+          segmentId: 'segment-1',
+          parts: [{ partId: 0.5, sliceIndex: 0, text: 'Hello' }],
+        }],
+      },
+      {
+        type: 'request',
+        requestId: 'nan-slice-index',
+        targetLang: '中文',
+        chunks: [{
+          chunkId: 'c1',
+          segmentId: 'segment-1',
+          parts: [{ partId: 0, sliceIndex: Number.NaN, text: 'Hello' }],
         }],
       },
     ];
