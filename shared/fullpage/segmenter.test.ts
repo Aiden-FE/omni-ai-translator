@@ -2,7 +2,7 @@
 // 分段收集器单元测试
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { collectSegments } from './segmenter';
+import { collectSegments, collectSemanticSegments } from './segmenter';
 
 describe('collectSegments', () => {
   beforeEach(() => {
@@ -275,5 +275,39 @@ describe('collectSegments', () => {
     const segments = collectSegments(document.body);
     expect(segments).toHaveLength(1);
     expect(segments[0].originalText).toBe('real text');
+  });
+});
+
+describe('collectSemanticSegments', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+  });
+
+  it('collects inline descendants as one semantic paragraph', () => {
+    document.body.innerHTML = '<p>Hello <strong>secure AI</strong> world</p>';
+    const [segment] = collectSemanticSegments(document.body);
+    expect(segment.originalText).toBe('Hello secure AI world');
+    expect(segment.parts?.map((part) => part.sourceText)).toEqual([
+      'Hello ', 'secure AI', ' world',
+    ]);
+    expect(collectSemanticSegments(document.body)).toHaveLength(1);
+  });
+
+  it('stops at nested block boundaries', () => {
+    document.body.innerHTML = '<div>intro<p>paragraph <em>text</em></p>outro</div>';
+    expect(collectSemanticSegments(document.body).map((s) => s.originalText)).toEqual([
+      'introoutro', 'paragraph text',
+    ]);
+  });
+
+  it('keeps collectSegments direct-node and inline records for traditional providers', () => {
+    document.body.innerHTML = '<p>Hello <strong>secure AI</strong> world</p>';
+    expect(collectSegments(document.body).map((segment) => ({
+      tag: segment.el.tagName,
+      text: segment.originalText,
+    }))).toEqual([
+      { tag: 'P', text: 'Hello  world' },
+      { tag: 'STRONG', text: 'secure AI' },
+    ]);
   });
 });

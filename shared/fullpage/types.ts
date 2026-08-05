@@ -3,6 +3,18 @@
 /** 分段状态 */
 export type SegmentStatus = 'pending' | 'translating' | 'done' | 'failed';
 
+/** 语义段内一个可独立回填的文本节点。 */
+export interface SegmentTextPart {
+  /** 段内文本节点序号 */
+  id: number;
+  /** 原页面文本节点引用 */
+  node: Text;
+  /** 收集时的原始文本（保留空白） */
+  sourceText: string;
+  /** 该部分的译文 */
+  translatedText?: string;
+}
+
 /** 分段记录 — 一段可翻译文本及其状态 */
 export interface SegmentRecord {
   /** 唯一标识（基于 DOM 路径 + 文本哈希） */
@@ -15,6 +27,10 @@ export interface SegmentRecord {
   originalText: string;
   /** 译文（翻译成功后写入） */
   translatedText?: string;
+  /** 语义段内的所有文本部分；传统平铺段不设置此字段 */
+  parts?: SegmentTextPart[];
+  /** 与 parts 一一对应的译文，用于保留行内标记结构 */
+  translatedParts?: string[];
   /** 当前状态 */
   status: SegmentStatus;
   /** 错误类型（仅 status=failed 时存在） */

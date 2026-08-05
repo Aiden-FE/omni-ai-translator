@@ -19,21 +19,27 @@ import type { SegmentRecord } from './types';
 const BLOCK_SELECTOR =
   'p,h1,h2,h3,h4,h5,h6,li,td,th,blockquote,figcaption,div,section,article,header,footer,aside,main,nav,pre,code,ul,ol,dl,dt,dd,hr,fieldset,legend,caption,tr';
 
+/** 语义段优先使用其 parts 节点，传统段继续使用直接文本节点。 */
+function getSegmentTextNodes(seg: SegmentRecord): Text[] {
+  return seg.parts?.map((part) => part.node) ?? seg.textNodes;
+}
+
 /**
  * 捕获段文本节点的原始 data 快照（首次渲染时写入，供逐字节恢复含原始空白）。
  * originalText 是 trimmed 拼接，丢失了各节点原始空白分布，无法用于逐字节还原。
  */
 function captureOriginal(seg: SegmentRecord): void {
   if (seg.originalTextNodesData === undefined) {
-    seg.originalTextNodesData = seg.textNodes.map((tn) => tn.data);
+    seg.originalTextNodesData = getSegmentTextNodes(seg).map((tn) => tn.data);
   }
 }
 
 /** 从快照逐字节还原文本节点原始 data */
 function restoreTextNodes(seg: SegmentRecord): void {
   if (seg.originalTextNodesData === undefined) return;
-  for (let i = 0; i < seg.textNodes.length; i++) {
-    seg.textNodes[i].data = seg.originalTextNodesData[i] ?? '';
+  const textNodes = getSegmentTextNodes(seg);
+  for (let i = 0; i < textNodes.length; i++) {
+    textNodes[i].data = seg.originalTextNodesData[i] ?? '';
   }
 }
 
@@ -87,12 +93,23 @@ function createShadowHost(className: string): [HTMLElement, ShadowRoot] {
  */
 export function applyReplace(seg: SegmentRecord): void {
   clearLoadingMark(seg);
-  if (seg.textNodes.length === 0) return;
+  const textNodes = getSegmentTextNodes(seg);
+  if (textNodes.length === 0) return;
   captureOriginal(seg);
+
+  if (seg.parts && seg.translatedParts?.length === seg.parts.length) {
+    seg.parts.forEach((part, index) => {
+      const translatedText = seg.translatedParts![index];
+      part.node.data = translatedText;
+      part.translatedText = translatedText;
+    });
+    return;
+  }
+
   const text = seg.translatedText ?? '';
-  seg.textNodes[0].data = text;
-  for (let i = 1; i < seg.textNodes.length; i++) {
-    seg.textNodes[i].data = '';
+  textNodes[0].data = text;
+  for (let i = 1; i < textNodes.length; i++) {
+    textNodes[i].data = '';
   }
 }
 

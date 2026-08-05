@@ -2,7 +2,7 @@
 // 渲染器单元测试 - 替换/双语双模式渲染与 Shadow DOM 译文块隔离
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { collectSegments } from './segmenter';
+import { collectSegments, collectSemanticSegments } from './segmenter';
 import {
   applyReplace,
   applyBilingual,
@@ -90,6 +90,18 @@ describe('applyReplace', () => {
     segs[0].translatedText = undefined;
     applyReplace(segs[0]);
     expect(segs[0].textNodes[0].data).toBe('');
+  });
+
+  it('writes translated parts back without removing strong or links', () => {
+    document.body.innerHTML = '<p>Hello <strong>world</strong></p>';
+    const [segment] = collectSemanticSegments(document.body);
+    segment.translatedParts = ['你好', '世界'];
+    segment.translatedText = '你好世界';
+
+    applyReplace(segment);
+
+    expect(document.querySelector('p')?.textContent).toBe('你好世界');
+    expect(document.querySelector('strong')).not.toBeNull();
   });
 });
 
@@ -197,6 +209,16 @@ describe('applyBilingual', () => {
     expect(oldHost.isConnected).toBe(false);
     expect(segs[0].blockHost).not.toBe(oldHost);
     expect(segs[0].blockHost!.isConnected).toBe(true);
+  });
+
+  it('creates one bilingual block for one semantic paragraph', () => {
+    document.body.innerHTML = '<p>Hello <strong>world</strong></p>';
+    const [segment] = collectSemanticSegments(document.body);
+    segment.translatedText = '你好世界';
+
+    applyBilingual(segment);
+
+    expect(document.querySelectorAll('.llm-translator-block-host')).toHaveLength(1);
   });
 });
 
@@ -542,6 +564,18 @@ describe('restoreAll', () => {
 
     expect(segs[0].blockHost).toBeUndefined();
     expect(segs[0].textNodes[0].data).toBe('  Hello  ');
+  });
+
+  it('逐字节还原语义段的所有文本部分', () => {
+    document.body.innerHTML = '<p>Hello <strong>secure AI</strong> world</p>';
+    const [segment] = collectSemanticSegments(document.body);
+    segment.translatedParts = ['你好', '安全 AI', '世界'];
+    segment.translatedText = '你好安全 AI世界';
+    applyReplace(segment);
+
+    restoreAll([segment]);
+
+    expect(document.querySelector('p')?.innerHTML).toBe('Hello <strong>secure AI</strong> world');
   });
 });
 

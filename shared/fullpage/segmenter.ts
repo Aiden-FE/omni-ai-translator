@@ -1,6 +1,6 @@
 // 页面分段收集器 - 从 DOM 递归遍历提取可翻译文本段
 
-import type { SegmentRecord, SegmenterOptions } from './types';
+import type { SegmentRecord, SegmenterOptions, SegmentTextPart } from './types';
 
 /** 应跳过的元素标签名集合 */
 const SKIP_TAGS = new Set([
@@ -100,6 +100,11 @@ function isBlockElement(el: Element): boolean {
 /** 判断元素是否行内 */
 function isInlineElement(el: Element): boolean {
   return INLINE_TAGS.has(el.tagName);
+}
+
+/** 语义块边界不包含同时声明为行内元素的 CODE。 */
+function isSemanticBlockElement(el: Element): boolean {
+  return isBlockElement(el) && !isInlineElement(el);
 }
 
 /**
@@ -261,5 +266,112 @@ export function collectSegments(
   }
 
   traverse(root);
+  return segments;
+}
+
+/** 判断语义收集时是否应剪枝当前元素及其全部子树。 */
+function shouldPruneSemanticElement(el: Element, options: SegmenterOptions): boolean {
+  return (
+    shouldSkipElement(el) ||
+    hasTranslatorAncestor(el) ||
+    SKIP_TAGS.has(el.tagName) ||
+    (!options.skipVisibilityCheck && el instanceof HTMLElement && isHiddenByDisplay(el))
+  );
+}
+
+/**
+ * 收集一个语义所有者的文本节点，穿透行内后代并在嵌套块级元素前停止。
+ * 调用方已验证 owner 可参与收集，因此此处只处理其子树边界和剪枝规则。
+ */
+function getSemanticTextNodes(owner: Element, options: SegmenterOptions): Text[] {
+  const textNodes: Text[] = [];
+
+  function traverse(node: Node): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      textNodes.push(node as Text);
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+    const el = node as Element;
+    if (shouldPruneSemanticElement(el, options) || isSemanticBlockElement(el)) {
+      return;
+    }
+    for (const child of el.childNodes) {
+      traverse(child);
+    }
+  }
+
+  for (const child of owner.childNodes) {
+    traverse(child);
+  }
+  return textNodes;
+}
+
+/**
+ * 收集语义段：一个可翻译块拥有其所有行内后代文本，但不跨越嵌套块级边界。
+ * 未被块级元素拥有的独立行内/控件元素仍作为单独段，供页面孤立交互元素翻译。
+ */
+export function collectSemanticSegments(
+  root: ParentNode,
+  options: SegmenterOptions = {},
+): SegmentRecord[] {
+  const segments: SegmentRecord[] = [];
+
+  function addSegment(el: HTMLElement): void {
+    const textNodes = getSemanticTextNodes(el, options);
+    const rawText = textNodes.map((node) => node.data).join('');
+    const originalText = rawText.trim();
+    if (originalText.length === 0 || !hasLetterChar(originalText)) return;
+
+    const parts: SegmentTextPart[] = textNodes.map((node, id) => ({
+      id,
+      node,
+      sourceText: node.data,
+    }));
+    segments.push({
+      id: generateSegmentId(el, originalText),
+      el,
+      textNodes,
+      originalText,
+      parts,
+      status: 'pending',
+    });
+  }
+
+  function traverse(node: Node, ownedBySemanticOwner: boolean): void {
+    if (node.nodeType === Node.TEXT_NODE) return;
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as Element;
+      if (shouldPruneSemanticElement(el, options)) return;
+
+      const isBlockOwner = isSemanticBlockElement(el);
+      const isStandaloneInlineOwner = !ownedBySemanticOwner && isInlineElement(el);
+      const isSemanticOwner = isBlockOwner || isStandaloneInlineOwner;
+      if (isSemanticOwner) {
+        addSegment(el as HTMLElement);
+      }
+
+      for (const child of el.childNodes) {
+        // Nested blocks start a new ownership boundary even inside inline markup.
+        const startsNestedBlock =
+          child.nodeType === Node.ELEMENT_NODE && isSemanticBlockElement(child as Element);
+        traverse(child, startsNestedBlock ? false : ownedBySemanticOwner || isSemanticOwner);
+      }
+      return;
+    }
+
+    if (
+      node.nodeType === Node.DOCUMENT_NODE ||
+      node.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+    ) {
+      for (const child of node.childNodes) {
+        traverse(child, false);
+      }
+    }
+  }
+
+  traverse(root, false);
   return segments;
 }
