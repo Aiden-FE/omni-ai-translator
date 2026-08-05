@@ -9,13 +9,18 @@ sources:
   - shared/fullpage/types.ts
   - shared/fullpage/segmenter.ts
   - shared/fullpage/translate-pool.ts
+  - shared/fullpage/translate-pool.test.ts
   - shared/fullpage/renderer.ts
   - assets/fullpage-block.css
+  - releases/v0.4/viewport-scheduler/DESIGN.md
+  - releases/v0.4/viewport-scheduler/PLAN.md
+  - releases/v0.4/viewport-scheduler/CHANGELOG.md
   - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
 related:
   - feature:fullpage:command-channel
   - feature:translator:unified-adapter
   - context:system:plugin-architecture
+  - feature:fullpage:orchestrator
 ---
 
 # 全文翻译分段收集器、并发翻译池与双模式渲染器（v0.4.0）
@@ -32,14 +37,22 @@ related:
 2. `runPool(segments, opts)`：并发受限（默认≤3）翻译池，带会话级缓存与中止支持。
 3. `retrySegments(failed, opts)`：重试失败分段，复用 `runPool` 逻辑。
 
+### t2-扩展：视口判定与 IntersectionObserver 调度工具
+
+> 视口工具位于 `translate-pool.ts` 顶部，与 `runPool`/`retrySegments` 核心签名解耦；视口分组由编排器在调用 `runPool` 前完成。
+
+4. `isSegmentInViewport(seg)`：快照式判定分段是否在视口内（jsdom/扩展注入双兜底 + 严格不等式几何判定）。
+5. `createViewportObserver(onEnter)`：基于 `IntersectionObserver` 的视口外段观察器（一次性进入即出列、jsdom 无 IO 降级、`disconnect` 后 `observe` 为 no-op）。
+6. `ViewportObserver` 接口：`{ observe(seg), unobserve(seg), disconnect() }`，三方法幂等。
+
 ### t3：双模式渲染器
 
-4. `applyReplace(seg)`：替换模式——译文写入 `textNodes[0].data`，其余置空，保留行内子元素结构。
-5. `applyBilingual(seg)`：双语模式——创建带 Shadow DOM 的译文块宿主，插入段后/块级祖先后。
-6. `markLoading(seg)` / `clearLoadingMark(seg)`：段尾追加/移除幂等加载标记宿主。
-7. `markFailed(seg)` / `clearFailedMark(seg)`：段尾追加/移除失败徽标宿主。
-8. `switchMode(records, from, to)`：同步切换显示模式（零 API 调用）。
-9. `restoreAll(records)`：还原所有文本节点原始 data、移除注入 DOM、重置状态。
+7. `applyReplace(seg)`：替换模式——译文写入 `textNodes[0].data`，其余置空，保留行内子元素结构。
+8. `applyBilingual(seg)`：双语模式——创建带 Shadow DOM 的译文块宿主，插入段后/块级祖先后。
+9. `markLoading(seg)` / `clearLoadingMark(seg)`：段尾追加/移除幂等加载标记宿主。
+10. `markFailed(seg)` / `clearFailedMark(seg)`：段尾追加/移除失败徽标宿主。
+11. `switchMode(records, from, to)`：同步切换显示模式（零 API 调用）。
+12. `restoreAll(records)`：还原所有文本节点原始 data、移除注入 DOM、重置状态。
 
 渲染器为纯 DOM 操作，不持有翻译状态；状态全部来自 `SegmentRecord`。
 
@@ -111,6 +124,60 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 重置失败段状态（`status -> pending`、清 `errorType` / `translatedText`）后复用 `runPool`，**不清缓存**（已失败 key 可在重试时命中或成功）。`retrySegments` 转发 `isActive`，restore 使当前会话失效后，池等待已派发请求结束但不再派发排队段。
 
+## 视口判定与 IntersectionObserver 调度工具
+
+> 本节描述 `shared/fullpage/translate-pool.ts` 顶部新增的可复用工具，供 t5 编排器在调用 `runPool` 之前完成“视口内先入池 / 视口外挂 IO 观察”拆分。**未修改** `runPool` / `retrySegments` 的核心签名。
+
+### `isSegmentInViewport(seg: SegmentRecord): boolean`
+
+快照式判定（不监听滚动），返回 `true` 的短路优先级：
+
+1. **jsdom / SSR 兜底**：`typeof window === 'undefined' || window.innerHeight === 0` → `true`。jsdom 无布局，避免把全部段误判为视口外导致整页拖入 IO 队列。
+2. **`getClientRects().length === 0`** → `true`。jsdom 同样恒空，与既有可见性兼容路径一致（`isHiddenByDisplay` 在 segmenter 中走同一启发式）。
+3. **`el.closest('[data-llm-translator]')` 命中** → `true`。防御性兜底：扩展注入元素（加载标记 / 译文浮层 / 失败徽标）理论上不会是 `seg.el`，但避免误判为视口外。
+4. **几何判定**：`rect.top < innerHeight && rect.bottom > 0 && rect.left < innerWidth && rect.right > 0`。边界相切（`top === innerHeight` 或 `bottom === 0`）视为视口外——采用**严格不等式**避免 `top === innerHeight` 的“刚好在视口外”元素被误判为视口内。
+
+> jsdom 下由于第 1/2 条先短路，全部段都被视为视口内，与原“启动时全部入池”行为一致。
+
+### `ViewportObserver` 接口
+
+```typescript
+export interface ViewportObserver {
+  /** 注册分段到观察器。重复注册同一 seg 幂等（不会重复注册到 IO）。 */
+  observe(seg: SegmentRecord): void;
+  /** 注销分段。未注册或重复注销幂等。 */
+  unobserve(seg: SegmentRecord): void;
+  /** 断开观察器并清空内部映射。重复调用安全。断开后 observe 为 no-op。 */
+  disconnect(): void;
+}
+```
+
+### `createViewportObserver(onEnter: (seg: SegmentRecord) => void): ViewportObserver`
+
+基于 `IntersectionObserver` 封装：
+
+- **配置**：`{ root: null, rootMargin: '0px', threshold: 0 }`——严格视口边界，任何像素进入即触发。
+- **内部状态**：`Map<Element, SegmentRecord>`（`seg.el` → `seg`）+ 单个 `IntersectionObserver`。
+- **IO callback 语义**：命中（`entry.isIntersecting === true`）时从 map 取 `seg`，调用 `onEnter(seg)`，**并 `unobserve(seg.el)`**——一次性进入即出列，避免重复入池。出列逻辑（`elToSeg.delete` + `io.unobserve`）**先于** `onEnter` 调用执行，即使 `onEnter` 抛错元素仍正确出列；错误传播给调用方。
+- **幂等性**：`observe(seg)` 重复注册不重复 `io.observe`；`unobserve(seg)` 未注册或重复注销安全；`disconnect()` 多次调用安全。
+- **环境兜底**：`typeof IntersectionObserver === 'undefined'`（如 jsdom）时返回降级观察器——`observe(seg)` 同步调用 `onEnter(seg)`，`unobserve`/`disconnect` 为 no-op。这与“视口外段直接全部入池”原行为一致。
+- **`disconnect` 语义**：**仅本实例失效，不重新创建 IO**。后续 `observe` 是 no-op（`isAlive = false` 守卫），不重建 IO。编排器如需继续观察，应创建新实例（明确生命周期边界）。常用于“恢复原文 / 二次触发清理”场景。
+
+### 编排器集成约定（复用注意事项）
+
+后续 t5 编排器集成该工具时必须遵守：
+
+1. **先按视口分组再分别 `runPool`**：`runPool` 输入数组顺序决定派发顺序，编排器需先对收集到的分段按 `isSegmentInViewport` 拆分为视口内/视口外两组，视口内先 `runPool`（快照式、不需 IO），视口外全部 `observer.observe(seg)`（IO 接管后续滚动进入）。
+2. **`observer.onEnter` 内部异常需 try/catch**：onEnter 抛错会从 IO callback 向上传播，且元素已出列，编排器需保证状态机不被破坏（参考 `feature:fullpage:orchestrator` 范式 4「会话身份与元素连接双重校验」）。
+3. **恢复原文时必须 `disconnect`**：`handleRestore` 需同时调 `observer.disconnect()`，并避免 disconnect 后又重新 `observe`（disconnect 是终态、需创建新实例）。
+4. **jsdom 下 IO 兜底路径安全**：`typeof IntersectionObserver === 'undefined'` 兜底后视口外段会**同步**全部 `onEnter`，编排器需准备应对“同步被驱动全部入池”的场景（验证现有入池逻辑不依赖 IO 异步回调）。
+
+### 边缘与风险
+
+- **`position: fixed` 元素**（工具栏、loading 标记）：其 `getBoundingClientRect` 报“在视口内”会被误判；但兜底路径 3（`closest('[data-llm-translator]')`）已使这些元素被视为“视口内”，与“拍入视口内组”语义一致（它们本就不入池）。
+- **脱离 DOM 的段**（`el.isConnected === false`）：`getBoundingClientRect()` 返回零矩形，几何判定会视为视口外。理论上不保留在编排器的 records 中；此处不专门加守卫。
+- **map 与 IO 同步**：`observe(seg)` 写入 map 后 `io.observe(seg.el)`；`unobserve(seg)` 从 map 删除后 `io.unobserve(seg.el)`；IO callback 仅在 `entry.target` 对应 map 项时触发 `onEnter`（避免 callback 触发时 seg 已被 `unobserve` 仍误入池）。
+
 ## 双模式渲染器（renderer）
 
 ### 设计原则
@@ -179,6 +246,7 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 - **t2 内部**：`segmenter.ts` 产出 `SegmentRecord` 供 `translate-pool.ts` 翻译、`renderer.ts` 渲染。
 - **产出给 t5（编排器）**：
   - t2 接口：`collectSegments` / `runPool` / `retrySegments`、会话级缓存 Map 持有模式、`isActive` / `signal` 中止回调。
+  - 视口工具接口：`isSegmentInViewport(seg)` / `createViewportObserver(onEnter)` / `ViewportObserver` 接口（见上节「视口判定与 IntersectionObserver 调度工具」）；编排器需先按视口分组再分别 `runPool`。
   - t3 接口：`applyReplace` / `applyBilingual` / `markLoading` / `clearLoadingMark` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`。
   - 数据契约：`SegmentRecord.originalTextNodesData` / `blockHost` / `loadingMarkHost` / `failedMarkHost` 字段（渲染器写入，编排器管理生命周期）。
 - **样式资源**：`assets/fullpage-block.css` 经 `?inline` 导入注入 shadow root；`vitest.config.ts` 需 `css: true` 才能在测试中拿到实际 CSS 内容（默认 `css:false` 会 stub 为空串）。
@@ -187,7 +255,11 @@ jsdom 无布局，`getClientRects` 恒空。采用「`getClientRects` 空 -> 再
 
 - `shared/fullpage/types.ts`：`SegmentStatus` / `SegmentRecord`（含 `originalTextNodesData` / `blockHost` / `loadingMarkHost` / `failedMarkHost`）/ `TranslationProgress` / `SegmenterOptions` / `TranslatePoolOptions` / `TranslatePoolResult` 定义。
 - `shared/fullpage/segmenter.ts`：`collectSegments`（DOM 路径 ID、Document/Fragment 根、嵌套递归、剪枝、可见性兼容）、`SKIP_TAGS` / `BLOCK_TAGS` / `INLINE_TAGS` 常量。
-- `shared/fullpage/translate-pool.ts`：`runPool`（并发≤3、缓存、中止、`TranslateResult` 契约）、`retrySegments`、`CACHE_SEP` 常量。
+- `shared/fullpage/translate-pool.ts`：`runPool`（并发≤3、缓存、中止、`TranslateResult` 契约）、`retrySegments`、`CACHE_SEP` 常量；视口工具 `isSegmentInViewport` / `createViewportObserver` / `ViewportObserver` 接口。
+- `shared/fullpage/translate-pool.test.ts`：视口工具 19 个单元测试（jsdom + mock IntersectionObserver），覆盖 jsdom 兜底、`innerHeight === 0` 兜底、扩展注入兜底、几何判定（顶/底/左/右/边界相切）、无 IO 环境降级、有 IO 环境 observe→相交→unobserve、幂等性（重复 observe / unobserve 未注册 / disconnect 多次）、disconnect 后 observe 不触发、onEnter 抛错时仍 unobserve、IO 创建参数。
 - `shared/fullpage/renderer.ts`：`applyReplace` / `applyBilingual` / `markLoading` / `clearLoadingMark` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll` 导出函数；`captureOriginal` / `restoreTextNodes` / `findInsertionRef` / `insertBlockAfter` / `createShadowHost` 内部函数；`BLOCK_SELECTOR` 常量。
 - `assets/fullpage-block.css`：`:host` / `:host(.llm-translator-failed-host)` / `.llm-translator-block-content` / `.llm-translator-failed-badge` 自足样式（显式重置继承属性）。
 - `shared/fullpage/renderer.test.ts`：499 行单测（jsdom），覆盖替换/双语/失败标记/模式切换/恢复/Shadow DOM 隔离。
+- `releases/v0.4/viewport-scheduler/DESIGN.md`：视口工具总体架构、数据契约（短路优先级、`ViewportObserver` 接口、`disconnect` 语义）、关键约定、边缘与风险、不在本任务范围（编排器集成需后续任务）。
+- `releases/v0.4/viewport-scheduler/PLAN.md`：实施清单（设计 / TDD 红 / TDD 绿 / 验证）、关键设计权衡、测试覆盖矩阵。
+- `releases/v0.4/viewport-scheduler/CHANGELOG.md`：视口工具新增接口详情与设计决策说明。
