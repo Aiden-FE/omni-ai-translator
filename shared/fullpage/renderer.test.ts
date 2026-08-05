@@ -217,6 +217,15 @@ describe('markLoading / clearLoadingMark', () => {
     expect(statusEl?.getAttribute('aria-label')).toBeNull();
     expect(statusEl?.getAttribute('role')).toBe('status');
     expect(document.querySelector('[role="status"]')).toBeNull();
+    // spinner 节点仍存在（视觉反馈）：标记仅含视觉元素，不带文案
+    const shadowSpinner = seg.loadingMarkHost?.shadowRoot?.querySelector(
+      '.llm-translator-loading-spinner',
+    );
+    expect(shadowSpinner).toBeDefined();
+    expect(shadowSpinner?.getAttribute('aria-hidden')).toBe('true');
+    // 防回退：shadow root 内不应出现中文文案（避免设计回退到「正在翻译此段」等可读文本）
+    const shadowContent = seg.loadingMarkHost?.shadowRoot?.textContent ?? '';
+    expect(shadowContent).not.toContain('正在翻译此段');
 
     clearLoadingMark(seg);
 
