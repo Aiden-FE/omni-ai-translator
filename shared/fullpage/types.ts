@@ -79,6 +79,28 @@ export interface TranslatePoolOptions {
   isActive?: () => boolean;
 }
 
+/** 可安全回填语义段所有文本节点的结构化译文。 */
+export interface SemanticTranslation {
+  /** 按语义段原始 part 顺序拼接的完整译文 */
+  translatedText: string;
+  /** 与 SegmentRecord.parts 一一对应的译文 */
+  translatedParts: string[];
+}
+
+/** LLM 批量流式翻译池执行选项。 */
+export interface BatchPoolOptions {
+  /** 目标语言 */
+  targetLang: string;
+  /** 固定最多三个并行 batch Port */
+  concurrency?: 3;
+  /** 结构化语义译文缓存 */
+  cache: Map<string, SemanticTranslation>;
+  /** 每个分段状态变化时的回调 */
+  onSettled: (segment: SegmentRecord) => void;
+  /** 返回 false 时停止派发新的 batch，已在途请求继续收尾 */
+  isActive?: () => boolean;
+}
+
 /** 翻译池执行结果 */
 export interface TranslatePoolResult {
   /** 成功翻译的分段 */

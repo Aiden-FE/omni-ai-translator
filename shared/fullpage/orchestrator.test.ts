@@ -7,6 +7,7 @@
 // 与 storage.local.get（getTargetLang 读取用户配置的目标语言）。
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { BatchStreamPortMessage } from '@/shared/types';
 import { start, isBackgroundCommand, __reset, __getState } from './orchestrator';
 
 /** 翻译通道响应（与 background translate 返回体一致） */
@@ -26,16 +27,22 @@ const TOOLBAR_HOST_SELECTOR =
 
 /** Mock browser 全局：runtime.sendMessage（翻译池）+ storage.local.get（目标语言设置） */
 function setupBrowser(translateImpl: TranslateImpl = defaultTranslate) {
+  const translateMessage = vi.fn();
   const sendMessage = vi.fn(
     async (msg: { type: string; payload?: { text: string; targetLang: string } }) => {
+      if (msg.type === 'get-translation-capabilities') {
+        return { batchStream: false };
+      }
       if (msg.type === 'translate' && msg.payload) {
+        translateMessage(msg);
         return translateImpl(msg.payload.text);
       }
       return {};
     },
   );
+  const connect = vi.fn();
   vi.stubGlobal('browser', {
-    runtime: { sendMessage },
+    runtime: { sendMessage, connect },
     storage: {
       local: {
         get: vi.fn(async (key: string) => ({
@@ -44,7 +51,107 @@ function setupBrowser(translateImpl: TranslateImpl = defaultTranslate) {
       },
     },
   });
-  return { sendMessage };
+  return { sendMessage: translateMessage, runtimeSendMessage: sendMessage, connect };
+}
+
+class FakeBatchPort {
+  readonly onMessage = {
+    addListener: (listener: (message: BatchStreamPortMessage) => void) => {
+      this.messageListeners.push(listener);
+    },
+  };
+  readonly onDisconnect = {
+    addListener: (listener: () => void) => {
+      this.disconnectListeners.push(listener);
+    },
+  };
+  readonly postMessage = vi.fn((message: BatchStreamPortMessage) => {
+    if (message.type !== 'request') return;
+    this.request = message;
+    if (this.autoRespond) {
+      queueMicrotask(() => {
+        for (const chunk of message.chunks) {
+          this.emit({
+            type: 'chunk',
+            requestId: message.requestId,
+            chunk: {
+              chunkId: chunk.chunkId,
+              translatedParts: chunk.parts.map((part) => ({
+                partId: part.partId,
+                sliceIndex: part.sliceIndex,
+                text: `[批] ${part.text}`,
+              })),
+            },
+          });
+        }
+        this.emit({ type: 'done', requestId: message.requestId, missingChunkIds: [] });
+      });
+    }
+  });
+  readonly disconnect = vi.fn(() => {
+    if (this.disconnected) return;
+    this.disconnected = true;
+    for (const listener of [...this.disconnectListeners]) listener();
+  });
+  request?: Extract<BatchStreamPortMessage, { type: 'request' }>;
+  private readonly messageListeners: Array<(message: BatchStreamPortMessage) => void> = [];
+  private readonly disconnectListeners: Array<() => void> = [];
+  private disconnected = false;
+
+  constructor(private readonly autoRespond: boolean) {}
+
+  emit(message: BatchStreamPortMessage): void {
+    for (const listener of [...this.messageListeners]) listener(message);
+  }
+
+  complete(): void {
+    const request = this.request;
+    if (!request) throw new Error('Batch request not posted');
+    for (const chunk of request.chunks) {
+      this.emit({
+        type: 'chunk',
+        requestId: request.requestId,
+        chunk: {
+          chunkId: chunk.chunkId,
+          translatedParts: chunk.parts.map((part) => ({
+            partId: part.partId,
+            sliceIndex: part.sliceIndex,
+            text: `[批] ${part.text}`,
+          })),
+        },
+      });
+    }
+    this.emit({ type: 'done', requestId: request.requestId, missingChunkIds: [] });
+  }
+}
+
+function setupBatchBrowser(autoRespond = true) {
+  const translateMessage = vi.fn();
+  const sendMessage = vi.fn(async (msg: { type: string; payload?: { text: string } }) => {
+    if (msg.type === 'get-translation-capabilities') return { batchStream: true };
+    if (msg.type === 'translate' && msg.payload) {
+      translateMessage(msg);
+      return defaultTranslate(msg.payload.text);
+    }
+    return {};
+  });
+  const ports: FakeBatchPort[] = [];
+  const connect = vi.fn(() => {
+    const port = new FakeBatchPort(autoRespond);
+    ports.push(port);
+    return port;
+  });
+  vi.stubGlobal('browser', {
+    runtime: { sendMessage, connect },
+    storage: {
+      local: {
+        get: vi.fn(async (key: string) => ({
+          [key]: { activeProviderId: 'llm-source', defaultTargetLang: '简体中文' },
+        })),
+      },
+    },
+  });
+  return { sendMessage: translateMessage, runtimeSendMessage: sendMessage, connect, ports };
 }
 
 /** 排空微任务队列：让纯 Promise 链（getTargetLang / runPool / sendMessage mock）完整推进 */
@@ -860,7 +967,9 @@ describe('视口分组调度（IntersectionObserver）', () => {
             resolveGates.push(r);
           }),
       );
-      setupBrowser((text) => (text === 'in view text' ? gates[0] : gates[1]));
+      const { sendMessage } = setupBrowser(
+        (text) => (text === 'in view text' ? gates[0] : gates[1]),
+      );
 
       const startPromise = start('replace');
       await drainMicrotasks();
@@ -872,7 +981,7 @@ describe('视口分组调度（IntersectionObserver）', () => {
       // 进度反映全 2 段：1 翻译中 + 1 waiting
       expect(toolbarText()).toMatch(/全文翻译 0\/2|全文翻译 1\/2/);
       // 仅入池 1 个：视口内段
-      expect(vi.mocked(browser.runtime.sendMessage).mock.calls.length).toBe(1);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
 
       // 释放视口内段门控
       resolveGates[0]({ translatedText: '一' });
@@ -919,7 +1028,7 @@ describe('视口分组调度（IntersectionObserver）', () => {
       // 触发该段进入视口
       const io = MockIntersectionObserver.instances[0];
       io.triggerIntersect(outEl, true);
-      await drainMicrotasks();
+      await vi.advanceTimersByTimeAsync(25);
 
       // 视口外段现在应入池并翻译
       expect(sendMessage).toHaveBeenCalledTimes(2);
@@ -1194,7 +1303,7 @@ describe('视口优先调度', () => {
       await drainMicrotasks();
       // 释放 IO 回调 → 后 2 段入池
       trigger([ps[3], ps[4]]);
-      await drainMicrotasks();
+      await vi.advanceTimersByTimeAsync(25);
 
       expect(sendMessage).toHaveBeenCalledTimes(5);
       const calledTextsAfter = sendMessage.mock.calls.map(
@@ -1231,6 +1340,7 @@ describe('视口优先调度', () => {
       const { sendMessage } = setupBrowser();
       const startPromise = start('replace');
       await drainMicrotasks();
+      await vi.advanceTimersByTimeAsync(25);
 
       // jsdom 兑底：视口外段也同步入池（与视口内段一起被 runPool 调度）
       // 总 5 段：3 视口内同步 + 2 视口外通过 IO 兑底路径同步 → 全部发起
@@ -1284,5 +1394,212 @@ describe('视口优先调度', () => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+  });
+});
+
+describe('LLM semantic batch orchestration', () => {
+  it('selects semantic batch streaming and preserves inline markup across mode switches', async () => {
+    document.body.innerHTML = '<p>Hello <strong>world</strong></p>';
+    const { runtimeSendMessage, sendMessage, connect } = setupBatchBrowser();
+
+    await start('replace');
+
+    expect(runtimeSendMessage).toHaveBeenCalledWith({ type: 'get-translation-capabilities' });
+    expect(connect).toHaveBeenCalledWith({ name: 'fullpage-translate-batch-stream' });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(__getState().records).toHaveLength(1);
+    expect(document.querySelector('strong')).not.toBeNull();
+    expect(document.querySelector('p')?.textContent).toBe('[批] Hello [批] world');
+
+    getSwitchButton().click();
+    expect(document.querySelector('p')?.innerHTML).toBe('Hello <strong>world</strong>');
+    expect(document.querySelector('.llm-translator-block-host')?.shadowRoot?.textContent)
+      .toContain('[批] Hello [批] world');
+
+    getSwitchButton().click();
+    expect(document.querySelector('strong')).not.toBeNull();
+    expect(document.querySelector('p')?.textContent).toBe('[批] Hello [批] world');
+  });
+
+  it('keeps the legacy non-streaming path for a traditional source', async () => {
+    document.body.innerHTML = '<p>Hello world</p>';
+    const { runtimeSendMessage, sendMessage, connect } = setupBrowser();
+
+    await start('replace');
+
+    expect(runtimeSendMessage).toHaveBeenCalledWith({ type: 'get-translation-capabilities' });
+    expect(sendMessage).toHaveBeenCalledWith({
+      type: 'translate',
+      payload: { text: 'Hello world', targetLang: '简体中文' },
+    });
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('coalesces viewport entries observed within 25 ms into one batch port', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    document.body.innerHTML = '<p>outside one</p><p>outside two</p>';
+    const paragraphs = Array.from(document.querySelectorAll('p')) as HTMLElement[];
+    setClientRectsNonEmpty(paragraphs);
+    mockViewportLayout(new Set());
+    const { trigger } = installMockIO();
+    const { connect, sendMessage } = setupBatchBrowser();
+
+    await start('replace');
+    expect(connect).not.toHaveBeenCalled();
+
+    trigger(paragraphs);
+    await vi.advanceTimersByTimeAsync(24);
+    expect(connect).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('uses the same 25 ms queue for dynamic in-view segments', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<p>initial text</p>';
+    const { connect } = setupBatchBrowser();
+    await start('replace');
+    expect(connect).toHaveBeenCalledTimes(1);
+
+    const dynamic = document.createElement('p');
+    dynamic.textContent = 'dynamic text';
+    document.body.appendChild(dynamic);
+    await drainMicrotasks();
+
+    await vi.advanceTimersByTimeAsync(224);
+    expect(connect).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(dynamic.textContent).toBe('[批] dynamic text');
+  });
+
+  it('clears a pending viewport micro-batch when restoring the page', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    document.body.innerHTML = '<p>outside text</p>';
+    const paragraph = document.querySelector('p') as HTMLElement;
+    setClientRectsNonEmpty([paragraph]);
+    mockViewportLayout(new Set());
+    const { trigger } = installMockIO();
+    const { connect, sendMessage } = setupBatchBrowser();
+
+    await start('replace');
+    trigger([paragraph]);
+    expect(connect).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    clickToolbarButtonByText('恢复原文');
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(paragraph.textContent).toBe('outside text');
+    vi.restoreAllMocks();
+  });
+
+  it('reuses the versioned structured cache after restore without opening another port', async () => {
+    document.body.innerHTML = '<p>Hello <strong>world</strong></p>';
+    const { connect } = setupBatchBrowser();
+
+    await start('replace');
+    expect(connect).toHaveBeenCalledTimes(1);
+    clickToolbarButtonByText('恢复原文');
+
+    await start('bilingual');
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(__getState().records).toHaveLength(1);
+    expect(document.querySelector('p')?.innerHTML).toBe('Hello <strong>world</strong>');
+    expect(document.querySelector('.llm-translator-block-host')?.shadowRoot?.textContent)
+      .toContain('[批] Hello [批] world');
+  });
+
+  it('rejects late batch events after restore before mutating the page', async () => {
+    document.body.innerHTML = '<p>slow text</p>';
+    const { ports } = setupBatchBrowser(false);
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+    expect(ports).toHaveLength(1);
+
+    clickToolbarButtonByText('恢复原文');
+    ports[0].complete();
+    await startPromise;
+
+    expect(document.querySelector('p')?.textContent).toBe('slow text');
+    expect(document.querySelector('[data-llm-translator]')).toBeNull();
+  });
+
+  it('abandons a start whose capability lookup resolves after reset', async () => {
+    document.body.innerHTML = '<p>stale startup</p>';
+    let resolveCapabilities!: (value: { batchStream: boolean }) => void;
+    const capabilities = new Promise<{ batchStream: boolean }>((resolve) => {
+      resolveCapabilities = resolve;
+    });
+    const sendMessage = vi.fn((message: { type: string }) => {
+      if (message.type === 'get-translation-capabilities') return capabilities;
+      return Promise.resolve({});
+    });
+    const connect = vi.fn();
+    vi.stubGlobal('browser', {
+      runtime: { sendMessage, connect },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({
+            [key]: { activeProviderId: 'llm-source', defaultTargetLang: '简体中文' },
+          })),
+        },
+      },
+    });
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+    expect(sendMessage).toHaveBeenCalledWith({ type: 'get-translation-capabilities' });
+
+    __reset();
+    resolveCapabilities({ batchStream: true });
+    await startPromise;
+
+    expect(connect).not.toHaveBeenCalled();
+    expect(__getState().records).toHaveLength(0);
+    expect(__getState().active).toBe(false);
+    expect(__getState().targetLang).toBe('');
+    expect(document.querySelector('[data-llm-translator]')).toBeNull();
+  });
+
+  it('retries only failed semantic owners through the batch port', async () => {
+    document.body.innerHTML = '<p>retry text</p>';
+    const { ports, connect, sendMessage } = setupBatchBrowser(false);
+    const startPromise = start('replace');
+    await drainMicrotasks();
+    const firstRequest = ports[0].request!;
+    ports[0].emit({
+      type: 'error',
+      requestId: firstRequest.requestId,
+      result: {
+        missingChunkIds: firstRequest.chunks.map((chunk) => chunk.chunkId),
+        error: 'temporary failure',
+        errorType: 'network',
+      },
+    });
+    await startPromise;
+
+    getRetryButton().click();
+    await drainMicrotasks();
+    expect(ports).toHaveLength(2);
+    ports[1].complete();
+    await drainMicrotasks();
+
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(document.querySelector('p')?.textContent).toBe('[批] retry text');
+    expect(__getState().records[0].status).toBe('done');
   });
 });

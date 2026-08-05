@@ -8,7 +8,7 @@
 // segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是唯一状态持有者。
 // 样式隔离约定：所有注入 DOM 带 data-llm-translator（分段排除、观察器过滤、恢复清理均依赖）。
 
-import { collectSegments } from './segmenter';
+import { collectSegments, collectSemanticSegments } from './segmenter';
 import {
   runPool,
   retrySegments,
@@ -16,6 +16,7 @@ import {
   createViewportObserver,
   type ViewportObserver,
 } from './translate-pool';
+import { retryBatchSegments, runBatchPool } from './batch-pool';
 import {
   applyReplace,
   applyBilingual,
@@ -28,11 +29,13 @@ import {
 } from './renderer';
 import { createToolbar, type ToolbarApi } from './toolbar';
 import { getTargetLang } from '../target-lang';
-import type { BackgroundCommand, DisplayMode } from '../types';
-import type { SegmentRecord } from './types';
+import type { BackgroundCommand, DisplayMode, TranslationCapabilities } from '../types';
+import type { SegmentRecord, SemanticTranslation } from './types';
 
 /** 增量翻译防抖间隔（ms） */
 const OBSERVER_DEBOUNCE_MS = 200;
+/** 视口进入与动态分段共享的 micro-batch 聚合窗口（ms） */
+const BATCH_QUEUE_MS = 25;
 
 // ---- 模块级状态（编排器是唯一状态持有者） ----
 
@@ -44,6 +47,10 @@ let mode: DisplayMode = 'replace';
 let active = false;
 /** 会话级缓存：恢复原文后不清除，再次触发命中段秒级渲染（验收标准 10） */
 let cache: Map<string, string> = new Map();
+/** LLM 语义译文缓存；key 由 batch pool 添加结构版本前缀。 */
+let semanticCache: Map<string, SemanticTranslation> = new Map();
+/** 当前会话翻译路径，由 capability 查询确定并供 retry / dynamic nodes 复用。 */
+let batchStreamEnabled = false;
 /** 工具栏实例 */
 let toolbar: ToolbarApi | null = null;
 /** 增量翻译观察器（仅含初始分段的 active 会话连接） */
@@ -67,6 +74,12 @@ let pendingAddedNodes: Set<HTMLElement> = new Set();
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 /** flush 并发守卫：flush 期间新到达的节点入新 set，完成后重新调度 */
 let isFlushing = false;
+
+// ---- 视口 / 动态分段共享 micro-batch 队列 ----
+
+let queuedSegments: Set<SegmentRecord> = new Set();
+let batchQueueTimer: ReturnType<typeof setTimeout> | null = null;
+let batchQueueGeneration = 0;
 
 /**
  * 启动全文翻译。
@@ -100,13 +113,21 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
 /** 全新启动路径 */
 async function doStart(requestedMode: DisplayMode): Promise<void> {
   const generation = ++sessionGeneration;
+  clearBatchQueue();
   active = true;
   mode = requestedMode;
   // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
-  targetLang = await getTargetLang();
+  const resolvedTargetLang = await getTargetLang();
+  if (!isSessionActive(generation)) return;
+  const resolvedBatchStreamEnabled = await resolveBatchStreamCapability();
+  if (!isSessionActive(generation)) return;
+  targetLang = resolvedTargetLang;
+  batchStreamEnabled = resolvedBatchStreamEnabled;
 
   // v0.4 同步收集；大页面（上千段）首帧收集后续可用 requestIdleCallback 分片优化
-  records = collectSegments(document.body);
+  records = batchStreamEnabled
+    ? collectSemanticSegments(document.body)
+    : collectSegments(document.body);
   recordedEls = new Set(records.map((r) => r.el));
 
   // 防御：空分段页重复触发走全新路径时先销毁旧工具栏，避免重复挂载
@@ -164,13 +185,66 @@ async function enqueueSegments(
   if (segs.length === 0) return;
   markSegmentsLoading(segs);
   updateProgress();
-  await runPool(segs, {
-    targetLang,
-    concurrency: 3,
-    cache,
-    onSettled: (seg) => handleSettled(seg, generation),
-    isActive: () => isSessionActive(generation),
-  });
+  if (batchStreamEnabled) {
+    await runBatchPool(segs, {
+      targetLang,
+      concurrency: 3,
+      cache: semanticCache,
+      onSettled: (seg) => handleSettled(seg, generation),
+      isActive: () => isSessionActive(generation),
+    });
+  } else {
+    await runPool(segs, {
+      targetLang,
+      concurrency: 3,
+      cache,
+      onSettled: (seg) => handleSettled(seg, generation),
+      isActive: () => isSessionActive(generation),
+    });
+  }
+}
+
+async function resolveBatchStreamCapability(): Promise<boolean> {
+  try {
+    const capabilities = await browser.runtime.sendMessage({
+      type: 'get-translation-capabilities',
+    }) as TranslationCapabilities;
+    return capabilities?.batchStream === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */
+function queueSegments(segs: SegmentRecord[], generation: number): void {
+  if (segs.length === 0 || !isSessionActive(generation)) return;
+  if (batchQueueTimer !== null && batchQueueGeneration !== generation) {
+    clearBatchQueue();
+  }
+  batchQueueGeneration = generation;
+  for (const seg of segs) queuedSegments.add(seg);
+  markSegmentsLoading(segs);
+  updateProgress();
+  if (batchQueueTimer !== null) return;
+  batchQueueTimer = setTimeout(() => {
+    batchQueueTimer = null;
+    const queuedGeneration = batchQueueGeneration;
+    const segments = Array.from(queuedSegments);
+    queuedSegments = new Set();
+    if (!isSessionActive(queuedGeneration)) return;
+    void enqueueSegments(segments, queuedGeneration).catch((err) => {
+      console.warn('[fullpage] micro-batch enqueue failed', err);
+    });
+  }, BATCH_QUEUE_MS);
+}
+
+function clearBatchQueue(): void {
+  if (batchQueueTimer !== null) {
+    clearTimeout(batchQueueTimer);
+    batchQueueTimer = null;
+  }
+  queuedSegments = new Set();
+  batchQueueGeneration = 0;
 }
 
 /**
@@ -182,9 +256,7 @@ function createViewportEnterObserver(
   generation: number,
 ): ViewportObserver {
   return createViewportObserver((seg) => {
-    void enqueueSegments([seg], generation).catch((err) => {
-      console.warn('[fullpage] viewport onEnter enqueue failed', err);
-    });
+    queueSegments([seg], generation);
   });
 }
 
@@ -200,13 +272,13 @@ function isSessionActive(generation: number): boolean {
  */
 function handleSettled(seg: SegmentRecord, generation: number): void {
   if (!isSessionActive(generation)) return;
+  if (!seg.el.isConnected) return;
   if (seg.status === 'translating') {
     updateProgress();
     return;
   }
   clearLoadingMark(seg);
   updateProgress();
-  if (!seg.el.isConnected) return;
   if (seg.status === 'done') {
     if (mode === 'replace') {
       applyReplace(seg);
@@ -261,6 +333,7 @@ function handleSwitchMode(): void {
 function handleRestore(): void {
   restoreAll(records);
   stopObserver();
+  clearBatchQueue();
   viewportObserver?.disconnect();
   viewportObserver = null;
   toolbar?.destroy();
@@ -282,13 +355,23 @@ async function handleRetry(): Promise<void> {
   updateProgress();
   // retrySegments 重置段状态后复用池逻辑；onSettled 的 active 校验保证恢复后不误渲染，
   // 翻译仍完成并写入缓存（有利于再次触发时秒级渲染）
-  await retrySegments(failedSegs, {
-    targetLang,
-    concurrency: 3,
-    cache,
-    onSettled: (seg) => handleSettled(seg, generation),
-    isActive: () => isSessionActive(generation),
-  });
+  if (batchStreamEnabled) {
+    await retryBatchSegments(failedSegs, {
+      targetLang,
+      concurrency: 3,
+      cache: semanticCache,
+      onSettled: (seg) => handleSettled(seg, generation),
+      isActive: () => isSessionActive(generation),
+    });
+  } else {
+    await retrySegments(failedSegs, {
+      targetLang,
+      concurrency: 3,
+      cache,
+      onSettled: (seg) => handleSettled(seg, generation),
+      isActive: () => isSessionActive(generation),
+    });
+  }
   if (!isSessionActive(generation)) return;
   updateFailureCount();
   updateProgress();
@@ -364,7 +447,9 @@ async function flushAddedNodes(): Promise<void> {
       try {
         if (!node.isConnected) continue;
         if (node.hasAttribute('data-llm-translator')) continue;
-        const segs = collectSegments(node);
+        const segs = batchStreamEnabled
+          ? collectSemanticSegments(node)
+          : collectSegments(node);
         for (const seg of segs) {
           if (recordedEls.has(seg.el)) continue;
           recordedEls.add(seg.el);
@@ -381,7 +466,7 @@ async function flushAddedNodes(): Promise<void> {
       // 增量段同样按视口分组：视口内走 enqueueSegments；视口外挂同一 viewportObserver
       const inViewNew = newSegments.filter(isSegmentInViewport);
       const outOfViewNew = newSegments.filter((r) => !isSegmentInViewport(r));
-      await enqueueSegments(inViewNew, generation);
+      queueSegments(inViewNew, generation);
       if (outOfViewNew.length > 0) {
         markSegmentsLoading(outOfViewNew);
         updateProgress();
@@ -423,12 +508,22 @@ export interface OrchestratorStateSnapshot {
   mode: DisplayMode;
   active: boolean;
   cache: Map<string, string>;
+  semanticCache: Map<string, SemanticTranslation>;
+  batchStreamEnabled: boolean;
   targetLang: string;
 }
 
 /** 测试专用：读取内部状态（勿在生产代码使用） */
 export function __getState(): OrchestratorStateSnapshot {
-  return { records, mode, active, cache, targetLang };
+  return {
+    records,
+    mode,
+    active,
+    cache,
+    semanticCache,
+    batchStreamEnabled,
+    targetLang,
+  };
 }
 
 /** 测试专用：重置全部模块级状态（还原页面 DOM、断开观察器、销毁工具栏、清空缓存） */
@@ -437,6 +532,7 @@ export function __reset(): void {
     restoreAll(records);
   }
   stopObserver();
+  clearBatchQueue();
   viewportObserver?.disconnect();
   viewportObserver = null;
   toolbar?.destroy();
@@ -447,6 +543,8 @@ export function __reset(): void {
   active = false;
   sessionGeneration++;
   cache = new Map();
+  semanticCache = new Map();
+  batchStreamEnabled = false;
   targetLang = '';
   startInFlight = null;
   isFlushing = false;
