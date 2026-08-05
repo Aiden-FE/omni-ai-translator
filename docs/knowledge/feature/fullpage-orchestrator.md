@@ -3,7 +3,7 @@ id: feature:fullpage:orchestrator
 type: feature
 status: active
 owner: project
-updated: 2026-08-03
+updated: 2026-08-04
 confidence: 0.9
 sources:
   - shared/fullpage/orchestrator.ts
@@ -13,6 +13,9 @@ sources:
   - entrypoints/fullpage.content.ts
   - docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md
   - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/DESIGN.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/PLAN.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/CHANGELOG.md
 related:
   - feature:fullpage:segmenter-pool
   - feature:fullpage:command-channel
@@ -55,6 +58,7 @@ segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是
 | `toolbar` | `ToolbarApi \| null` | 工具栏实例 |
 | `observer` | `MutationObserver \| null` | 增量翻译观察器（仅 `active` 期间连接） |
 | `recordedEls` | `Set<HTMLElement>` | 已收段元素集合（增量翻译防重复收段） |
+| `viewportObserver` | `ViewportObserver \| null` | 视口外段观察器；`doStart` 与 `flushAddedNodes` 共享同一实例；`doStart` 入口先 `disconnect` 旧实例防跨会话残留段监听；`handleRestore` / `__reset` 末尾 `disconnect` 并置 `null` |
 | `targetLang` | `string` | start 时解析一次，传入池 |
 | `startInFlight` | `Promise<void> \| null` | 进行中的 start（并发触发守卫） |
 | `sessionGeneration` | `number` | 单调递增的会话身份；start 捕获，restore/reset 使旧回调失效 |
@@ -150,6 +154,34 @@ handleSettled(seg, generation):
 
 编排器组合的 t3 渲染器（`renderer.ts`）与 t4 工具栏所有注入 DOM（译文块、失败徽标、工具栏）均走 `attachShadow({ mode: 'open' })` + shadow 内 `<style>` 注入自足样式，显式重置继承属性规避宿主页面 CSS 穿透。详细实现与样式约定见 `feature:fullpage:segmenter-pool` 的「Shadow DOM 隔离与自足样式」节。审查（REVIEW.md §4.1）确认 Shadow DOM 边界有效（宿主 CSS 无法穿透），同时发现 2 处继承属性重置缺口（工具栏按钮 `font-weight` 未设、`letter-spacing`/`text-transform`/`white-space` 未重置），属低影响改进项。此模式是编排器组合的组件层设计范式之一，后续 content script 注入类功能均可复用。
 
+### 范式 6：按视口分组调度 + 共享 `enqueueSegments` 入池 + 共享 `viewportObserver` 句柄
+
+编排器在 `doStart` 与 `flushAddedNodes` 中对分段按 `isSegmentInViewport`（来自 t2 `translate-pool.ts`）做**快照式分组**：
+
+```
+records -> isSegmentInViewport 拆分
+  ├─ inView    -> enqueueSegments → runPool(同步)        [t2 runPool 缓存/并发/中止]
+  └─ outOfView -> markLoading + updateProgress (进度立即 N/total)
+                  + viewportObserver.observe(seg)         [IntersectionObserver]
+                  → onEnter(seg): enqueueSegments([seg], generation)
+```
+
+`enqueueSegments(segs, generation)` 是新提取的内部函数，统一封装「`markLoading` + `updateProgress` + `runPool`（含 `onSettled` 闭包 + `isActive: () => isSessionActive(generation)` 校验）」。**所有派发路径**——`doStart` 视口内段、IO `onEnter` 单段、`flushAddedNodes` 视口内段——都走同一函数，避免 4 处重复闭包，且视口外段入池仍是 `runPool([seg], ...)`（`concurrency=3` 下只有 1 段不浪费，仍走缓存与 settle 路径）。
+
+视口外段**立即** `markLoading` + `updateProgress`：拆分后立即调，使工具栏 `0/total` 立即反映**全部**段（含视口外段已处于 loading），而不是等滚动进入才更新。
+
+**共享 `viewportObserver` 句柄**：`doStart` 与 `flushAddedNodes` 用同一 `ViewportObserver` 实例；`doStart` 入口先 `viewportObserver?.disconnect(); viewportObserver = null;`（防止上一会话残留段监听——直接调 `__reset` 或外部跨会话触发等极端路径），同一会话内增量翻译无需重建观察器。`onEnter` 内将单段走 `enqueueSegments([seg], generation)`，异常由编排器侧 `void ... .catch(console.warn)` 隔离，不让 IO 回调异常破坏状态机（t2 的 IO 内部 map 出列逻辑先于回调，元素仍正确出列）。
+
+**IO 句柄终态清理**：
+
+| 入口 | 清理动作 |
+|---|---|
+| `handleRestore` 末尾 | `viewportObserver?.disconnect(); viewportObserver = null;` |
+| `__reset` 末尾 | `viewportObserver?.disconnect(); viewportObserver = null;`（句柄已为 null 时重复 `__reset` 幂等） |
+| `doStart` 入口 | 再次 `disconnect` + `null`（防跨会话路径未走 `handleRestore`） |
+
+**复用场景**：后续实现其他按需 lazy load 型 content script 功能（图片懒加载翻译、评论懒加载、模块懒挂载）时，可复用「`isSegmentInViewport` 快照式分组 + IO 进入即出列 + 共享 `enqueueSegments` 入池 + 共享 `viewportObserver` 句柄 + 入口 `disconnect` 旧实例」五件套模式；以及「派发路径共享一个内部函数（`enqueueSegments`）」与「onEnter 异常由编排器侧 try/catch 隔离」的两个横切关注点。
+
 ## 审查验证（REVIEW.md）
 
 v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心设计范式逐项确认：
@@ -159,6 +191,7 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 - **范式 2（并发重入守卫）**：§4.4 确认 `startInFlight` 守卫有效，连点不并发执行。
 - **范式 3（增量翻译防抖管线）**：§4.3 确认 200ms 防抖 + `isFlushing` 并发守卫 + `data-llm-translator` 过滤防回环 + `recordedEls` 去重 + 错误隔离均正确；MutationObserver 不重复创建（`if (observer) return` 守卫），`handleRestore` 调 `stopObserver`（disconnect + 清 timer + 清 pendingAddedNodes）。
 - **范式 4（防闪回双保险）**：§4.3/§4.4 确认池级 `isActive` 在派发新段前检查，`handleSettled` 中 `active` + `seg.el.isConnected` 双重校验；恢复后 `active = false` 阻止新段派发与已返回段渲染；`toolbar.destroy` 幂等（`destroyed` 标志位守卫），无闭包泄漏。
+- **范式 6（按视口分组调度 + 共享 enqueueSegments / viewportObserver 句柄）**：任务 83a350c8 补齐：9 个新增单测（jsdom 兜底路径 + mock `IntersectionObserver` 生产环境路径）覆盖视口外段立即 loading、IO 不相交不调 `sendMessage`、IO 相交后入池渲染、handleRestore / `__reset` 调 `disconnect`、增量视口外段共享句柄、doStart 二次触发 disconnect 旧句柄、跨会话清理。`isSegmentInViewport` 快照式分组 + `viewportObserver` 进入即出列 + 共享入池路径 + 入口 `disconnect` 旧实例 五件套模式跨会话不泄漏。
 - **验收标准 1-12**：1-10、12 完全达成；11 基本达成（强样式页面人工验证待执行）。
 
 ## start(mode) 状态流转
@@ -200,7 +233,7 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 
 ## 接口依赖
 
-- **消费 t2/t3/t4 接口**：`collectSegments` / `runPool` / `retrySegments`（t2）、`applyReplace` / `applyBilingual` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`（t3）、`createToolbar` / `ToolbarApi`（t4）、`getTargetLang`（`shared/target-lang.ts`）。
+- **消费 t2/t3/t4 接口**：`collectSegments` / `runPool` / `retrySegments` / `isSegmentInViewport` / `createViewportObserver` / `ViewportObserver`（t2）、`applyReplace` / `applyBilingual` / `markFailed` / `clearFailedMark` / `switchMode` / `restoreAll`（t3）、`createToolbar` / `ToolbarApi`（t4）、`getTargetLang`（`shared/target-lang.ts`）。
 - **消费类型**：`BackgroundCommand` / `DisplayMode`（`shared/types.ts`）、`SegmentRecord`（`shared/fullpage/types.ts`）。
 - **翻译通道**：复用 `Message` 的 `{ type: 'translate', payload }` 通道（非流式），经 `browser.runtime.sendMessage` 下发。详见 `feature:fullpage:segmenter-pool`。
 - **命令来源**：`feature:fullpage:command-channel` 定义的右键菜单与 `BackgroundCommand` 下发。
@@ -213,9 +246,12 @@ v0.4.0 全文翻译审查（REVIEW.md，2026-08-03）对编排器状态机核心
 
 ## 来源证据
 
-- `shared/fullpage/orchestrator.ts`：模块级状态声明、`start` / `doStart`（复用路径 + 全新路径 + startInFlight/sessionGeneration 守卫）、`handleSettled`（generation + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重）、`handleRestore`（保留 cache 并使 generation 失效）、`handleRetry`（复用 retrySegments 并传 isActive）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子。
-- `shared/fullpage/orchestrator.test.ts`：覆盖即时加载标记、派生进度、成功/失败终态、重试、增量分段、空页面不启动 observer、恢复中的晚到结果、旧 retry 会话隔离、restore 后停止排队派发、类型守卫和既有编排器状态机。
+- `shared/fullpage/orchestrator.ts`：模块级状态声明（含 `viewportObserver: ViewportObserver \| null` 共享句柄）、`start` / `doStart`（复用路径 + 全新路径 + 视口拆分 + enqueueSegments + startInFlight/sessionGeneration 守卫）、`enqueueSegments`（共享入池路径，markLoading + updateProgress + runPool 闭包）、`createViewportEnterObserver`（带 onEnter try/catch 的 IO 工厂）、`handleSettled`（generation + isConnected 双重校验）、`handleMutations` / `scheduleFlush` / `flushAddedNodes`（防抖管线 + isFlushing 守卫 + data-llm-translator 过滤 + recordedEls 去重 + 视口分组复用句柄）、`handleRestore`（保留 cache 并使 generation 失效 + disconnect viewportObserver）、`handleRetry`（复用 retrySegments 并传 isActive）、`isBackgroundCommand` 类型守卫、`__getState` / `__reset` 测试钩子（末尾 disconnect viewportObserver）。
+- `shared/fullpage/orchestrator.test.ts`：覆盖即时加载标记、派生进度、成功/失败终态、重试、增量分段、空页面不启动 observer、恢复中的晚到结果、旧 retry 会话隔离、restore 后停止排队派发、类型守卫和既有编排器状态机；视口分组 describe 块新增 9 个用例（jsdom 兜底路径 + mock `IntersectionObserver` 生产环境路径），覆盖 doStart 视口外段立即 loading、mock IO 不相交不调用 sendMessage、IO 相交后入池并渲染、handleRestore / `__reset` 调 `disconnect`、增量视口外段共享句柄、doStart 二次触发时 disconnect 旧句柄、跨会话清理。
 - `shared/fullpage/renderer.ts` / `shared/fullpage/toolbar.ts`：分别提供幂等 loading marker 清理和状态行呈现 API。
 - `entrypoints/fullpage.content.ts`：`defineContentScript({ matches: ['<all_urls>'] })` + `runtime.onMessage` + `isBackgroundCommand` 守卫 + `start(msg.mode)` 调用 + catch console.warn。
 - `docs/iterations/v0.4.0/tasks/17614208-4e99-455b-8dfb-5abbd6f7aede/DESIGN.md`：编排器状态机总体架构、模块级状态表、start 流程、onSettled 回调、工具栏回调接线表、增量翻译设计、isActive 中止、关键设计权衡（模块级状态 vs 工厂函数、retrySegments vs runPool、observer 启动时机、复用路径不重建 toolbar）、边界与风险。
 - `docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md`：§4.3 资源与生命周期（MutationObserver 不重复创建、isActive 中止、toolbar.destroy 幂等、防抖管线、无闭包泄漏）、§4.4 并发与错误路径（并发≤3、sendMessage 契约、失败收集/重试/计数一致、SW 回收容错）、S3 retrySegments isActive 设计权衡、验收标准 1-12 逐条确认。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/DESIGN.md`：视口工具总体架构（视口拆分、`enqueueSegments` 抽取、`viewportObserver` 共享句柄与清理约定）、数据契约（`viewportObserver` 句柄字段）、关键约定（5 条：markLoading 立即、isSessionActive 校验、共享观察器、onEnter try/catch、disconnect 终态）、实施步骤 7 步、关键设计权衡（`enqueueSegments` 提取 vs 内联、onEnter 同步触发、disconnect 顺序）、边界与风险、测试覆盖矩阵。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/PLAN.md`：TDD 红绿重构（s1 写 9 个失败测试；s2 引入视口工具、提取 `enqueueSegments`、改写 `doStart` 与 `flushAddedNodes`、补 `handleRestore` / `__reset` 末尾清理；s3 验证门禁）、关键设计权衡、验证门禁。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/CHANGELOG.md`：本次任务变更摘要、设计决策、关键约定、边界与风险、验证（381 单测全过、typecheck/lint/build 全绿）、沉淀映射。

@@ -3,7 +3,7 @@ id: feature:fullpage:segmenter-pool
 type: feature
 status: active
 owner: project
-updated: 2026-08-03
+updated: 2026-08-04
 confidence: 0.9
 sources:
   - shared/fullpage/types.ts
@@ -16,6 +16,9 @@ sources:
   - releases/v0.4/viewport-scheduler/PLAN.md
   - releases/v0.4/viewport-scheduler/CHANGELOG.md
   - docs/iterations/v0.4.0/tasks/c81b8f88-6cab-4720-90bb-b75378472d8d/REVIEW.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/DESIGN.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/PLAN.md
+  - docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/CHANGELOG.md
 related:
   - feature:fullpage:command-channel
   - feature:translator:unified-adapter
@@ -172,6 +175,17 @@ export interface ViewportObserver {
 3. **恢复原文时必须 `disconnect`**：`handleRestore` 需同时调 `observer.disconnect()`，并避免 disconnect 后又重新 `observe`（disconnect 是终态、需创建新实例）。
 4. **jsdom 下 IO 兜底路径安全**：`typeof IntersectionObserver === 'undefined'` 兜底后视口外段会**同步**全部 `onEnter`，编排器需准备应对“同步被驱动全部入池”的场景（验证现有入池逻辑不依赖 IO 异步回调）。
 
+#### v0.4.0 编排器落地补充（任务 83a350c8）
+
+任务 83a350c8 在 t5 编排器中以以下方式落实了上述约定，与 t2 语义完全一致：
+
+1. **共享 `enqueueSegments` 抽象**：编排器内部提取 `enqueueSegments(segs, generation)` 函数，封装「`markLoading` + `updateProgress` + `runPool`（含 `onSettled` 闭包 + `isActive: () => isSessionActive(generation)` 校验）」。**所有派发路径**——`doStart` 视口内段、IO `onEnter` 单段入池、`flushAddedNodes` 增量视口内段——都走同一函数。视口外段入池仍调 `runPool([seg], ...)`（`concurrency=3` 下只有 1 段不浪费，仍走缓存与 settle 路径）。
+2. **共享 `viewportObserver` 句柄 + 入口 disconnect 旧实例**：t5 在模块级持有 `viewportObserver: ViewportObserver | null`，`doStart` 与 `flushAddedNodes` 使用同一实例；`doStart` 入口先 `viewportObserver?.disconnect(); viewportObserver = null;`（防跨会话残留段监听；同一会话内增量翻译不需重建）。`handleRestore` 末尾、`__reset` 末尾均重复 disconnect + null 守卫（重复 `__reset` 幂等、句柄已为 null 时 no-op）。
+3. **onEnter 异常由编排器侧 try/catch 隔离**：`onEnter` 内 `void enqueueSegments([seg], generation).catch((err) => { console.warn('[fullpage] viewport onEnter enqueue failed', err); })`，状态机不被破坏。t2 侧的出列逻辑（`elToSeg.delete` + `io.unobserve`）先于 `onEnter` 调用执行，即使 `onEnter` 抛错元素仍正确出列。
+4. **`disconnect` 终态语义**：t5 遵守 t2 约定，`disconnect` 后 `observe` 是 no-op；恢复/重置后必须创建新实例才可继续观察——`doStart` 入口会重新调用 `createViewportObserver` 获取新实例。
+
+**复用场景**：后续其他内容脚本型功能（图片懒加载翻译、评论懒加载、模块懒挂载等）可复用「共享 `enqueueSegments` 抽象 + 共享 `viewportObserver` 句柄 + 入口 disconnect 旧实例 + onEnter 编排器侧 try/catch」五件套模式，与 t2 视口工具、t5 编排器形成跨模块统一约定。
+
 ### 边缘与风险
 
 - **`position: fixed` 元素**（工具栏、loading 标记）：其 `getBoundingClientRect` 报“在视口内”会被误判；但兜底路径 3（`closest('[data-llm-translator]')`）已使这些元素被视为“视口内”，与“拍入视口内组”语义一致（它们本就不入池）。
@@ -263,3 +277,7 @@ export interface ViewportObserver {
 - `releases/v0.4/viewport-scheduler/DESIGN.md`：视口工具总体架构、数据契约（短路优先级、`ViewportObserver` 接口、`disconnect` 语义）、关键约定、边缘与风险、不在本任务范围（编排器集成需后续任务）。
 - `releases/v0.4/viewport-scheduler/PLAN.md`：实施清单（设计 / TDD 红 / TDD 绿 / 验证）、关键设计权衡、测试覆盖矩阵。
 - `releases/v0.4/viewport-scheduler/CHANGELOG.md`：视口工具新增接口详情与设计决策说明。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/DESIGN.md`：编排器视口分组调度总体架构、`enqueueSegments` 抽取、共享 `viewportObserver` 句柄与清理约定、数据契约、关键约定 5 条、关键设计权衡、边界与风险、测试覆盖矩阵。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/PLAN.md`：TDD 红绿重构（s1 写 9 个失败测试；s2 引入视口工具、提取 `enqueueSegments`、改写 `doStart` 与 `flushAddedNodes`、补 `handleRestore` / `__reset` 末尾清理；s3 验证门禁）、关键设计权衡、验证门禁。
+- `docs/iterations/v0.4.0/tasks/83a350c8-48b5-4875-b7a2-8f97e90f13af/CHANGELOG.md`：本次任务变更摘要、设计决策、关键约定、边界与风险、验证（381 单测全过、typecheck/lint/build 全绿）、沉淀映射。
+- `shared/fullpage/orchestrator.ts`：作为本任务编排器集成落地的代码证据——`enqueueSegments` 内部函数、`viewportObserver` 模块级句柄、`createViewportEnterObserver` 工厂、`doStart` / `flushAddedNodes` 视口拆分与共享句柄、`handleRestore` / `__reset` 末尾 `disconnect` 守卫。

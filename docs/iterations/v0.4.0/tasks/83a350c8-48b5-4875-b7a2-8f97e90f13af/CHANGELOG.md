@@ -80,16 +80,34 @@
 
 | 知识 ID | 类型 | 复用场景 |
 |---|---|---|
-| `feature:fullpage:orchestrator` | feature | 编排器在 `doStart` / `flushAddedNodes` 按视口分组调度：视口内段走 `enqueueSegments`（runPool 共享入池路径）、视口外段挂同一 `viewportObserver` 句柄，IO 进入后单段入池；`handleRestore` / `__reset` 末尾 disconnect 句柄并置 null；同一会话复用句柄，`doStart` 入口 disconnect 旧句柄防跨会话泄漏。 |
-| `feature:fullpage:segmenter-pool` | feature | 编排器集成约定新增条款：派发路径共享 `enqueueSegments` 函数（markLoading + updateProgress + runPool）；onEnter 异常由编排器侧 try/catch 隔离；`disconnect` 是终态语义。 |
+| `feature:fullpage:orchestrator` | feature | 编排器在 `doStart` / `flushAddedNodes` 按视口分组调度：视口内段走共享 `enqueueSegments`（markLoading + updateProgress + runPool + generation 校验），视口外段挂同一 `viewportObserver` 句柄，IO 进入即出列并单段入池；`handleRestore` / `__reset` 末尾 disconnect 句柄并置 null；`doStart` 入口先 disconnect 旧句柄防跨会话泄漏；onEnter 异常由编排器侧 try/catch 隔离不破坏状态机。 |
+| `feature:fullpage:segmenter-pool` | feature | 视口判定与 IO 调度工具：`isSegmentInViewport` 快照式判定（jsdom/SSR 兜底、getClientRects 空兜底、注入元素兜底、几何判定），`createViewportObserver` 内部维护 `Map<Element,SegmentRecord>` + 单一 IO，进入即出列并自动 `unobserve`；jsdom 等无 IO 环境降级为同步 onEnter；`disconnect` 终态语义（`alive=false` + `elToSeg.clear`）。 |
 
-- 沉淀文件：`docs/knowledge/feature/fullpage-orchestrator.md`（在既有 v0.4.0 内容上新增「视口分组调度与 IO 清理」小节 + 接口依赖扩展 + 来源证据扩展）
-- 索引同步：可后续更新 `docs/knowledge/feature/index.md` 增加视口分组关键词。
+- 沉淀文件 1：`docs/knowledge/feature/fullpage-orchestrator.md`
+  - 更新 `updated: 2026-08-04` + `sources` 增加本次任务 DESIGN/PLAN/CHANGELOG。
+  - 模块级状态表增加 `viewportObserver: ViewportObserver | null` 行。
+  - 「可复用设计范式」新增 **范式 6：按视口分组调度 + 共享 `enqueueSegments` 入池 + 共享 `viewportObserver` 句柄**（含拆分、共享句柄 + 入口 disconnect、onEnter 编排器侧 try/catch、IO 句柄终态清理、复用场景）。
+  - 「接口依赖」补充 `isSegmentInViewport` / `createViewportObserver` / `ViewportObserver`。
+  - 「来源证据」补充本次任务 DESIGN/PLAN/CHANGELOG 与测试覆盖（视口分组 describe 块 9 个用例）。
+- 沉淀文件 2：`docs/knowledge/feature/fullpage-segmenter-pool.md`
+  - 更新 `updated: 2026-08-04` + `sources` 增加本次任务 DESIGN/PLAN/CHANGELOG。
+  - 「编排器集成约定」节新增 **v0.4.0 编排器落地补充**子节，记录实际兑现的共享 `enqueueSegments` 抽象、共享 `viewportObserver` 句柄 + 入口 disconnect 旧实例、onEnter 编排器侧 try/catch 隔离、`disconnect` 终态语义四项。
+  - 「来源证据」补充本次任务 DESIGN/PLAN/CHANGELOG 与 `shared/fullpage/orchestrator.ts` 作为集成落地的代码证据。
+- 索引同步：`docs/knowledge/feature/index.md` 更新 `updated: 2026-08-04` + 两个模块说明文本均追加「视口分组调度」「共享 enqueueSegments / 共享 viewportObserver 句柄 / 入口 disconnect / onEnter try/catch」关键词。
+
+### 候选映射与复用场景
+
+审查候选 → 本次实际更新的正文知识映射（`candidateIndex` 从 0 开始）：
+
+- `candidateIndex 0`（type=feature，suggestedTarget=`feature:fullpage:orchestrator`）→ `feature:fullpage:orchestrator`（在 `docs/knowledge/feature/fullpage-orchestrator.md` 中更新：新增范式 6「按视口分组调度 + 共享 `enqueueSegments` 入池 + 共享 `viewportObserver` 句柄」+ 模块级状态表 + 接口依赖 + 来源证据）。
+- `candidateIndex 1`（type=feature，suggestedTarget=`feature:fullpage:segmenter-pool`）→ `feature:fullpage:segmenter-pool`（在 `docs/knowledge/feature/fullpage-segmenter-pool.md` 中更新：「编排器集成约定」节新增 v0.4.0 编排器落地补充子节 + 来源证据 + `shared/fullpage/orchestrator.ts` 集成代码证据）。
 
 ### 复用场景
 
-1. **视口分组调度模式**：后续实现其他按需 lazy load 型 content script 功能（图片懒加载翻译、评论懒加载、模块懒挂载），可复用「`isSegmentInViewport` 快照式分组 + `IntersectionObserver` 进入即出列 + 共享 enqueue 路径」模式。
-2. **enqueueSegments 抽象**：任何「收集元素 → markLoading → runPool → render」管线可复用同一共享内部函数，避免 4 处重复闭包。
-3. **viewportObserver 共享句柄 + 入口 disconnect**：所有「跨多个函数（start / flush / retry）共享的 IO 类组件」可复用「共享句柄 + 入口先 disconnect 旧实例」模式，避免跨会话泄漏。
-4. **onEnter 错误隔离**：复用「try/catch 在编排器侧 + IO 内部出列逻辑先于回调」模式，IO 内部 map 保持一致 + 状态机不被破坏。
-5. **disconnect 是终态**：所有「需二次触发清理」的 IO 类组件可复用「`disconnect` 后 `observe` 是 no-op + 需继续观察创建新实例」语义（与 t2 约定一致）。
+1. **视口分组调度模式（跨 5 件套）**：后续实现其他按需 lazy load 型 content script 功能（图片懒加载翻译、评论懒加载、模块懒挂载）可复用「`isSegmentInViewport` 快照式分组 + IO 进入即出列 + 共享 `enqueueSegments` 入池 + 共享 `viewportObserver` 句柄 + 入口 `disconnect` 旧实例」五件套。
+2. **派发路径共享内部函数（`enqueueSegments`）**：任何「收集元素 → markLoading → runPool → render」管线可复用同一共享内部函数，避免 4 处重复闭包；视口外段仍以 `runPool([seg], ...)` 入池（`concurrency=3` 下只有 1 段不浪费）。
+3. **共享 `viewportObserver` 句柄 + 入口 `disconnect` 旧实例**：所有「跨多个函数（start / flush / retry）共享的 IO 类组件」可复用「共享句柄 + 入口先 `disconnect` 旧实例」模式，避免跨会话泄漏；`handleRestore` / `__reset` 末尾同步 `disconnect` 并置 `null`（重复 `__reset` 幂等）。
+4. **onEnter 异常由编排器侧 `try/catch` 隔离**：与 t2 「IO 内部出列逻辑先于回调」约定配套——元素仍正确出列，状态机不被破坏。后续任意「IO 回调中调用状态变更函数」场景可复用。
+5. **`disconnect` 终态语义**：与 t2 一致，`disconnect` 后 `observe` 是 no-op（`isAlive = false` 守卫）；需继续观察创建新实例，避免误以为可以“重启同一观察器”。
+6. **快照式视口判定 + 多重兜底**（t2 原生接口）：复用 `isSegmentInViewport` 的 jsdom / `innerHeight === 0` / 扩展注入 三重兜底 + 严格不等式几何判定；不必自己写“是否在视口内”逻辑。
+7. **外部跨会话清理路径防护**：`doStart` 入口、`handleRestore` 末尾、`__reset` 末尾三处均重复 `disconnect` + `null`——保证「直接调 `__reset`」与「不调 `handleRestore` 就再次 `start`」等极端路径不会跨会话泄漏。
