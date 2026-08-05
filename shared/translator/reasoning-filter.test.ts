@@ -11,6 +11,13 @@ describe('reasoning artifact filter', () => {
     )).toBe('关注我们');
   });
 
+  it.each([
+    '<think >secret reasoning</think >译文</s >',
+    '<analysis reason="translation">secret reasoning</analysis >译文</s >',
+  ])('removes reasoning tags with whitespace or attributes: %s', (text) => {
+    expect(sanitizeReasoningArtifacts(text)).toBe('译文');
+  });
+
   it('does not emit a think block split across network deltas', () => {
     const visible: string[] = [];
     const filter = createReasoningStreamFilter((text) => visible.push(text));
@@ -47,5 +54,30 @@ describe('reasoning artifact filter', () => {
 
     expect(filter.finish()).toBe('可见译文');
     expect(visible.join('')).toBe('可见译文');
+  });
+
+  it('suppresses whitespace and attribute tags split across arbitrary deltas', () => {
+    const visible: string[] = [];
+    const filter = createReasoningStreamFilter((text) => visible.push(text));
+
+    filter.push('<anal');
+    filter.push('ysis reason="translation">secret</anal');
+    filter.push('ysis >译文</s ');
+    expect(visible.join('')).toBe('译文');
+
+    filter.push('>');
+    expect(filter.finish()).toBe('译文');
+    expect(visible.join('')).toBe('译文');
+  });
+
+  it('drops unterminated potential reasoning and control tags at finish', () => {
+    const visible: string[] = [];
+    const filter = createReasoningStreamFilter((text) => visible.push(text));
+
+    filter.push('译文</s ');
+    expect(filter.finish()).toBe('译文');
+    expect(visible.join('')).toBe('译文');
+    expect(sanitizeReasoningArtifacts('<think reason="unfinished"')).toBe('');
+    expect(sanitizeReasoningArtifacts('<analysis>unfinished reasoning')).toBe('');
   });
 });

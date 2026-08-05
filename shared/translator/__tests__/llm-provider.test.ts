@@ -636,10 +636,10 @@ describe('LLM Provider reasoning artifact boundary', () => {
 
   it.each([
     ['OpenAI Chat Completions', 'openai-completions', {
-      choices: [{ message: { content: '<think>hidden</think>译文</s>' } }],
+      choices: [{ message: { content: '<think >hidden</think >译文</s >' } }],
     }],
     ['OpenAI Responses', 'openai-responses', {
-      output_text: '<analysis>hidden</analysis>译文</s>',
+      output_text: '<analysis reason="translation">hidden</analysis >译文</s >',
     }],
     ['Anthropic', 'anthropic', {
       content: [{ text: '<think>hidden</think>译文</s>' }],
@@ -663,8 +663,9 @@ describe('LLM Provider reasoning artifact boundary', () => {
   it.each([
     ['OpenAI Chat Completions', 'openai-completions', [
       'data: {"choices":[{"delta":{"content":"<thi"}}]}\n\n',
-      'data: {"choices":[{"delta":{"content":"nk>hidden</th"}}]}\n\n',
-      'data: {"choices":[{"delta":{"content":"ink>译文</s>"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"nk reason=\\"x\\">hidden</th"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"ink >译文</s "}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":">"}}]}\n\n',
       'data: [DONE]\n\n',
     ]],
     ['OpenAI Responses', 'openai-responses', [

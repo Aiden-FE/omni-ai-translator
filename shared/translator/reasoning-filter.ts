@@ -1,27 +1,40 @@
 type ReasoningTagName = 'think' | 'analysis';
 
 interface ReasoningTag {
-  readonly text: string;
+  readonly prefix: string;
   readonly kind: 'open' | 'close' | 'control';
   readonly name?: ReasoningTagName;
 }
 
 const REASONING_TAGS: readonly ReasoningTag[] = [
-  { text: '<think>', kind: 'open', name: 'think' },
-  { text: '</think>', kind: 'close', name: 'think' },
-  { text: '<analysis>', kind: 'open', name: 'analysis' },
-  { text: '</analysis>', kind: 'close', name: 'analysis' },
-  { text: '</s>', kind: 'control' },
+  { prefix: '<think', kind: 'open', name: 'think' },
+  { prefix: '</think', kind: 'close', name: 'think' },
+  { prefix: '<analysis', kind: 'open', name: 'analysis' },
+  { prefix: '</analysis', kind: 'close', name: 'analysis' },
+  { prefix: '</s', kind: 'control' },
 ];
 
-function findTag(value: string): ReasoningTag | undefined {
+type TagInspection = ReasoningTag | 'potential' | undefined;
+
+function inspectTagPrefix(value: string, tag: ReasoningTag): TagInspection {
   const normalized = value.toLowerCase();
-  return REASONING_TAGS.find((tag) => tag.text === normalized);
+  if (tag.prefix.startsWith(normalized)) return 'potential';
+  if (!normalized.startsWith(tag.prefix)) return undefined;
+
+  const suffix = normalized.slice(tag.prefix.length);
+  if (!suffix) return 'potential';
+  if (suffix[0] !== '>' && !/\s/u.test(suffix[0])) return undefined;
+  return suffix.includes('>') ? tag : 'potential';
 }
 
-function isTagPrefix(value: string): boolean {
-  const normalized = value.toLowerCase();
-  return REASONING_TAGS.some((tag) => tag.text.startsWith(normalized));
+function inspectTag(value: string): TagInspection {
+  let hasPotentialMatch = false;
+  for (const tag of REASONING_TAGS) {
+    const match = inspectTagPrefix(value, tag);
+    if (match && match !== 'potential') return match;
+    hasPotentialMatch ||= match === 'potential';
+  }
+  return hasPotentialMatch ? 'potential' : undefined;
 }
 
 /**
@@ -75,15 +88,14 @@ export function createReasoningStreamFilter(onText: (text: string) => void): {
   };
 
   const consumeTagBuffer = () => {
-    if (!isTagPrefix(tagBuffer)) {
+    const tag = inspectTag(tagBuffer);
+    if (!tag) {
       const text = tagBuffer;
       tagBuffer = '';
       if (hiddenTags.length === 0) emitVisible(text);
       return;
     }
-
-    const tag = findTag(tagBuffer);
-    if (!tag) return;
+    if (tag === 'potential') return;
 
     tagBuffer = '';
     if (tag.kind === 'open' && tag.name) {
@@ -118,7 +130,6 @@ export function createReasoningStreamFilter(onText: (text: string) => void): {
     finish() {
       if (finished) return visibleText;
 
-      if (tagBuffer && hiddenTags.length === 0) emitVisible(tagBuffer);
       tagBuffer = '';
       flushEmission();
       pendingWhitespace = '';
