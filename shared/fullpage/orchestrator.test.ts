@@ -660,3 +660,388 @@ describe('增量翻译（MutationObserver + 200ms 防抖）', () => {
     expect(p.textContent).toBe('after restore');
   });
 });
+
+describe('视口分组调度（IntersectionObserver）', () => {
+  /**
+   * 可控 mock IntersectionObserver：记录 observe/unobserve/disconnect 调用，
+   * 触发相交时调用 callback。完全替代 jsdom 缺失的 IO。
+   */
+  class MockIntersectionObserver {
+    static instances: MockIntersectionObserver[] = [];
+    readonly rootMargin: string;
+    readonly thresholds: ReadonlyArray<number>;
+    private callback: IntersectionObserverCallback;
+    private observed: Set<Element> = new Set();
+    public disconnectCalls = 0;
+    public unobserveCalls: Element[] = [];
+
+    constructor(
+      callback: IntersectionObserverCallback,
+      opts: { rootMargin?: string; threshold?: number | number[] } = {},
+    ) {
+      this.callback = callback;
+      this.rootMargin = opts.rootMargin ?? '0px';
+      this.thresholds = Array.isArray(opts.threshold)
+        ? opts.threshold
+        : [opts.threshold ?? 0];
+      MockIntersectionObserver.instances.push(this);
+    }
+
+    observe(el: Element): void {
+      this.observed.add(el);
+    }
+    unobserve(el: Element): void {
+      this.observed.delete(el);
+      this.unobserveCalls.push(el);
+    }
+    disconnect(): void {
+      this.observed.clear();
+      this.disconnectCalls++;
+    }
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+    /** 测试用：触发一次相交（isIntersecting=true） */
+    triggerIntersect(el: Element, isIntersecting: boolean): void {
+      this.callback(
+        [
+          {
+            isIntersecting,
+            target: el,
+            intersectionRatio: isIntersecting ? 1 : 0,
+            boundingClientRect: {} as DOMRectReadOnly,
+            intersectionRect: {} as DOMRectReadOnly,
+            rootBounds: null,
+            time: 0,
+          } as IntersectionObserverEntry,
+        ],
+        this as unknown as IntersectionObserver,
+      );
+    }
+  }
+
+  beforeEach(() => {
+    MockIntersectionObserver.instances = [];
+    vi.useFakeTimers();
+  });
+
+  it('doStart：jsdom 兜底路径下视口外段立即入池（onEnter 同步触发）', async () => {
+    // jsdom 默认无 IO：视口外段走同步降级路径，立即入池
+    document.body.innerHTML = '<p>in view text</p><p>out of view text</p>';
+    const { sendMessage } = setupBrowser();
+    await start('replace');
+
+    const state = __getState();
+    expect(state.records).toHaveLength(2);
+    expect(state.records.every((r) => r.status === 'done')).toBe(true);
+    // jsdom 下两条段都入池（视口内/外均走同步入池）
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('doStart：mock IO 不触发相交时视口外段仍 markLoading 且不调用 sendMessage', async () => {
+    // 提供 IO mock 但不触发相交：验证生产路径 — 视口外段只 markLoading、不入池
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>in view text</p><p>out of view text</p>';
+      // jsdom 默认 getClientRects 为空 → isSegmentInViewport 走兑底视为视口内。
+      // 这里覆盖两个 <p> 的 getClientRects + getBoundingClientRect 使其进入几何判定。
+      const ps = document.querySelectorAll('p');
+      Object.defineProperty(ps[0], 'getClientRects', {
+        value: () => [{} as DOMRect],
+        configurable: true,
+      });
+      Object.defineProperty(ps[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      // 视口外：在视口下方 (top=2000) 且 innerHeight=768
+      Object.defineProperty(ps[1], 'getClientRects', {
+        value: () => [{} as DOMRect],
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      const resolveGates: Array<(v: TranslateResponse) => void> = [];
+      const gates = ['in view text', 'out of view text'].map(
+        () =>
+          new Promise<TranslateResponse>((r) => {
+            resolveGates.push(r);
+          }),
+      );
+      setupBrowser((text) => (text === 'in view text' ? gates[0] : gates[1]));
+
+      const startPromise = start('replace');
+      await drainMicrotasks();
+
+      // 视口外段已 markLoading 但未派发（未触发相交）
+      // 视口内段已派发，sendMessage 被调用 1 次
+      const loadingHosts = document.querySelectorAll('.llm-translator-loading-host');
+      expect(loadingHosts.length).toBe(2);
+      // 进度反映全 2 段：1 翻译中 + 1 waiting
+      expect(toolbarText()).toMatch(/全文翻译 0\/2|全文翻译 1\/2/);
+      // 仅入池 1 个：视口内段
+      expect(vi.mocked(browser.runtime.sendMessage).mock.calls.length).toBe(1);
+
+      // 释放视口内段门控
+      resolveGates[0]({ translatedText: '一' });
+      await drainMicrotasks();
+      // 释放视口外段门控（即使入池也不会发生；仅保证清理）
+      resolveGates[1]({ translatedText: '二' });
+      await startPromise;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('IO 触发相交后视口外段入池并渲染', async () => {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>in view text</p><p>out of view text</p>';
+      // 覆盖 getClientRects + getBoundingClientRect 使其进入几何判定
+      const ps = document.querySelectorAll('p');
+      Object.defineProperty(ps[0], 'getClientRects', {
+        value: () => [{} as DOMRect],
+        configurable: true,
+      });
+      Object.defineProperty(ps[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getClientRects', {
+        value: () => [{} as DOMRect],
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      const { sendMessage } = setupBrowser();
+      const startPromise = start('replace');
+      await drainMicrotasks();
+
+      // 初始：视口内段已派发（1 次），视口外段仅 markLoading
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+
+      // 找到视口外段对应的 <p> 元素
+      const outEl = ps[1];
+      // 触发该段进入视口
+      const io = MockIntersectionObserver.instances[0];
+      io.triggerIntersect(outEl, true);
+      await drainMicrotasks();
+
+      // 视口外段现在应入池并翻译
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(outEl.textContent).toBe('[译] out of view text');
+      await startPromise;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('doStart：视口外段立即显示 loading 并计入总进度（jsdom 兜底路径）', async () => {
+    // jsdom 下视口外段同步入池：loading 标记短暂出现后被渲染清除，
+    // 通过延迟 sendMessage 验证拆分后 markLoading 立即被调用
+    document.body.innerHTML = '<p>in view text</p><p>out of view text</p>';
+    let resolveFirst!: (value: TranslateResponse) => void;
+    let resolveSecond!: (value: TranslateResponse) => void;
+    const firstGate = new Promise<TranslateResponse>((r) => {
+      resolveFirst = r;
+    });
+    const secondGate = new Promise<TranslateResponse>((r) => {
+      resolveSecond = r;
+    });
+    setupBrowser((text) => (text === 'in view text' ? firstGate : secondGate));
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+
+    // jsdom 下视口外段同步走 IO 降级 onEnter 立即入池（与视口内段并发竞争 1 槽位）
+    // 但已派发的两段都立即 markLoading：loading 标记应出现
+    const loadingHosts = document.querySelectorAll('.llm-translator-loading-host');
+    expect(loadingHosts.length).toBeGreaterThanOrEqual(1);
+    // 进度反映全部段（含视口外）
+    expect(toolbarText()).toMatch(/全文翻译 0\/2|全文翻译 1\/2/);
+
+    resolveFirst({ translatedText: '一' });
+    resolveSecond({ translatedText: '二' });
+    await startPromise;
+  });
+
+  it('handleRestore 调用 viewportObserver.disconnect', async () => {
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      // 制造一个视口外段，让 viewportObserver 被创建
+      document.body.innerHTML = '<p>in view</p><p>out of view</p>';
+      const ps = document.querySelectorAll('p');
+      Object.defineProperty(ps[0], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      setupBrowser();
+      await start('replace');
+
+      // 验证 viewportObserver 存在
+      expect(MockIntersectionObserver.instances).toHaveLength(1);
+      const io = MockIntersectionObserver.instances[0];
+      expect(io.disconnectCalls).toBe(0);
+
+      clickToolbarButtonByText('恢复原文');
+
+      // disconnect 被调用 1 次
+      expect(io.disconnectCalls).toBe(1);
+      const state = __getState();
+      expect(state.active).toBe(false);
+      expect(document.querySelector('[data-llm-translator]')).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('__reset 调用 viewportObserver.disconnect', async () => {
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>in view</p><p>out of view</p>';
+      const ps = document.querySelectorAll('p');
+      Object.defineProperty(ps[0], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      setupBrowser();
+      await start('replace');
+
+      expect(MockIntersectionObserver.instances).toHaveLength(1);
+      const io = MockIntersectionObserver.instances[0];
+
+      __reset();
+      // disconnect 被调用 1 次
+      expect(io.disconnectCalls).toBe(1);
+      // reset 幂等：重复 reset 不应抛错
+      expect(() => __reset()).not.toThrow();
+      // 重复 reset 不再调用 disconnect（句柄已为 null）
+      expect(io.disconnectCalls).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('增量翻译视口外段加入同一 viewportObserver（jsdom 兜底）', async () => {
+    document.body.innerHTML = '<p>initial text</p>';
+    const { sendMessage } = setupBrowser();
+    await start('replace');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    const p = document.createElement('p');
+    p.textContent = 'dynamic text';
+    document.body.appendChild(p);
+    await flushObserver();
+
+    // jsdom 下视口外段同步入池，sendMessage 增加一次
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(p.textContent).toBe('[译] dynamic text');
+    expect(__getState().records).toHaveLength(2);
+  });
+
+  it('doStart 二次触发时 disconnect 旧 viewportObserver', async () => {
+    // 覆盖 getClientRects + getBoundingClientRect 使部分段位于视口外
+    // 以确保 viewportObserver 被创建
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>first in view</p><p>first out of view</p>';
+      const ps1 = document.querySelectorAll('p');
+      Object.defineProperty(ps1[0], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps1[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps1[1], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps1[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      setupBrowser();
+      await start('replace');
+      // 第一轮创建了 1 个 viewportObserver
+      expect(MockIntersectionObserver.instances).toHaveLength(1);
+      const firstIO = MockIntersectionObserver.instances[0];
+      expect(firstIO.disconnectCalls).toBe(0);
+
+      // 恢复原文
+      clickToolbarButtonByText('恢复原文');
+      expect(firstIO.disconnectCalls).toBe(1);
+
+      // 第二次 start：重设 DOM + 视口外段 → 重新创建 viewportObserver
+      document.body.innerHTML = '<p>second in view</p><p>second out of view</p>';
+      const ps2 = document.querySelectorAll('p');
+      Object.defineProperty(ps2[0], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps2[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps2[1], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps2[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      await start('replace');
+
+      // handleRestore 已 disconnect 句柄并置 null，doStart 入口不需重复 disconnect。
+      // 但应创建一个新 viewportObserver（doStart 入口 disconnect 旧句柄 = no-op 后创建新）
+      expect(firstIO.disconnectCalls).toBe(1);
+      expect(MockIntersectionObserver.instances.length).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('doStart 二次触发时清理上一会话 viewportObserver（兼底路径）', async () => {
+    // 极端路径：起动后不走 handleRestore，直接调 __reset 模拟跨会话状态。
+    // 验证 __reset 会 disconnect 句柄。
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>in view</p><p>out of view</p>';
+      const ps = document.querySelectorAll('p');
+      Object.defineProperty(ps[0], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[0], 'getBoundingClientRect', {
+        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      Object.defineProperty(ps[1], 'getClientRects', { value: () => [{} as DOMRect], configurable: true });
+      Object.defineProperty(ps[1], 'getBoundingClientRect', {
+        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
+        configurable: true,
+      });
+      setupBrowser();
+      await start('replace');
+      const firstIO = MockIntersectionObserver.instances[0];
+      expect(firstIO.disconnectCalls).toBe(0);
+
+      // 模拟跨会话调起：__reset 清理全部状态（含 viewportObserver）
+      __reset();
+      expect(firstIO.disconnectCalls).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

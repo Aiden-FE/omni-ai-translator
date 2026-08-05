@@ -9,7 +9,13 @@
 // 样式隔离约定：所有注入 DOM 带 data-llm-translator（分段排除、观察器过滤、恢复清理均依赖）。
 
 import { collectSegments } from './segmenter';
-import { runPool, retrySegments } from './translate-pool';
+import {
+  runPool,
+  retrySegments,
+  isSegmentInViewport,
+  createViewportObserver,
+  type ViewportObserver,
+} from './translate-pool';
 import {
   applyReplace,
   applyBilingual,
@@ -44,6 +50,8 @@ let toolbar: ToolbarApi | null = null;
 let observer: MutationObserver | null = null;
 /** 已收段元素集合（增量翻译防重复收段） */
 let recordedEls: Set<HTMLElement> = new Set();
+/** 视口外段观察器（多 doStart 复用；doStart 入口 disconnect 旧句柄） */
+let viewportObserver: ViewportObserver | null = null;
 /** 目标语言：start 时解析一次，传入池 */
 let targetLang = '';
 /** 进行中的 start（并发触发守卫：第二次等待首次完成后按最新状态决策） */
@@ -113,22 +121,71 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     onRecall: handleRecall,
   });
   toolbar.setMode(mode);
-  markSegmentsLoading(records);
-  updateProgress();
 
-  await runPool(records, {
-    targetLang,
-    concurrency: 3,
-    cache,
-    onSettled: (seg) => handleSettled(seg, generation),
-    // 会话失效后不再派发新段（已返回段由 handleSettled 的 generation 校验拦截渲染）
-    isActive: () => isSessionActive(generation),
-  });
+  // 入口先 disconnect 旧 viewportObserver，避免跨会话残留段监听
+  viewportObserver?.disconnect();
+  viewportObserver = null;
+
+  // 视口分组：视口内段走 runPool；视口外段挂 IO 等待进入后入池
+  const inView = records.filter(isSegmentInViewport);
+  const outOfView = records.filter((r) => !isSegmentInViewport(r));
+
+  // 视口外段也立即 markLoading 计入总进度
+  if (outOfView.length > 0) {
+    markSegmentsLoading(outOfView);
+  }
+
+  // 统一调度进度：空页面也需 updateProgress 让工具栏呈现“未发现可翻译文本”
+  updateProgress();
+  await enqueueSegments(inView, generation);
+
+  if (outOfView.length > 0) {
+    updateProgress();
+    viewportObserver = createViewportEnterObserver(generation);
+    for (const seg of outOfView) {
+      viewportObserver.observe(seg);
+    }
+  }
 
   // 会话失效或初始页面无分段时不启动观察器
   if (isSessionActive(generation) && records.length > 0) {
     startObserver();
   }
+}
+
+/**
+ * 入队一组段为 loading + 派发入池。
+ * 供 doStart 视口内、IO onEnter 单段、增量翻译视口内/外段全部走同一路径。
+ */
+async function enqueueSegments(
+  segs: SegmentRecord[],
+  generation: number,
+): Promise<void> {
+  if (segs.length === 0) return;
+  markSegmentsLoading(segs);
+  updateProgress();
+  await runPool(segs, {
+    targetLang,
+    concurrency: 3,
+    cache,
+    onSettled: (seg) => handleSettled(seg, generation),
+    isActive: () => isSessionActive(generation),
+  });
+}
+
+/**
+ * 创建视口外段 IO 观察器。onEnter 内部将单段走 enqueueSegments
+ * 复用同一入池路径；错误由编排器侧 try/catch 隔离，不让 IO 回调异常
+ * 破坏状态机（t2 的 IO 内部出列逻辑先于 onEnter）。
+ */
+function createViewportEnterObserver(
+  generation: number,
+): ViewportObserver {
+  return createViewportObserver((seg) => {
+    void enqueueSegments([seg], generation).catch((err) => {
+      console.warn('[fullpage] viewport onEnter enqueue failed', err);
+    });
+  });
 }
 
 function isSessionActive(generation: number): boolean {
@@ -204,6 +261,8 @@ function handleSwitchMode(): void {
 function handleRestore(): void {
   restoreAll(records);
   stopObserver();
+  viewportObserver?.disconnect();
+  viewportObserver = null;
   toolbar?.destroy();
   toolbar = null;
   active = false;
@@ -319,15 +378,21 @@ async function flushAddedNodes(): Promise<void> {
     if (active && newSegments.length > 0) {
       const generation = sessionGeneration;
       records.push(...newSegments);
-      markSegmentsLoading(newSegments);
-      updateProgress();
-      await runPool(newSegments, {
-        targetLang,
-        concurrency: 3,
-        cache,
-        onSettled: (seg) => handleSettled(seg, generation),
-        isActive: () => isSessionActive(generation),
-      });
+      // 增量段同样按视口分组：视口内走 enqueueSegments；视口外挂同一 viewportObserver
+      const inViewNew = newSegments.filter(isSegmentInViewport);
+      const outOfViewNew = newSegments.filter((r) => !isSegmentInViewport(r));
+      await enqueueSegments(inViewNew, generation);
+      if (outOfViewNew.length > 0) {
+        markSegmentsLoading(outOfViewNew);
+        updateProgress();
+        // 同一会话复用 viewportObserver 句柄（doStart 与 flushAddedNodes 共享）
+        if (!viewportObserver) {
+          viewportObserver = createViewportEnterObserver(generation);
+        }
+        for (const seg of outOfViewNew) {
+          viewportObserver.observe(seg);
+        }
+      }
     }
   } finally {
     isFlushing = false;
@@ -372,6 +437,8 @@ export function __reset(): void {
     restoreAll(records);
   }
   stopObserver();
+  viewportObserver?.disconnect();
+  viewportObserver = null;
   toolbar?.destroy();
   toolbar = null;
   records = [];
