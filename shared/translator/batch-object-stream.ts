@@ -1,4 +1,5 @@
 import type { BatchTranslateChunk, BatchTranslatedChunk } from '@/shared/types';
+import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reasoning-filter';
 
 interface ScannerState {
   depth: number;
@@ -51,7 +52,7 @@ function validateChunk(
     translatedParts.push({
       partId: translatedPart.partId,
       sliceIndex: translatedPart.sliceIndex,
-      text: translatedPart.text,
+      text: sanitizeReasoningArtifacts(translatedPart.text),
     });
   }
 
@@ -92,56 +93,71 @@ export function createBatchObjectStream(
   }
 
   function settleObject(objectText: string): void {
+    let chunk: BatchTranslatedChunk | null;
     try {
-      const chunk = validateChunk(JSON.parse(objectText), expectedById);
-      if (!chunk || settledIds.has(chunk.chunkId)) return;
-
-      settledIds.add(chunk.chunkId);
-      onChunk(chunk);
+      chunk = validateChunk(JSON.parse(objectText), expectedById);
     } catch {
       // A balanced candidate can still be malformed JSON; it is not a chunk.
+      return;
+    }
+
+    if (!chunk || settledIds.has(chunk.chunkId)) return;
+    onChunk(chunk);
+    settledIds.add(chunk.chunkId);
+  }
+
+  function scanVisibleText(delta: string): void {
+    for (const char of delta) {
+      if (scanner.depth === 0) {
+        if (char !== '{') continue;
+        scanner.depth = 1;
+        scanner.objectStart = 0;
+        scanner.buffer = char;
+        continue;
+      }
+
+      scanner.buffer += char;
+
+      if (scanner.inString) {
+        if (scanner.escaped) {
+          scanner.escaped = false;
+        } else if (char === '\\') {
+          scanner.escaped = true;
+        } else if (char === '"') {
+          scanner.inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        scanner.inString = true;
+      } else if (char === '{') {
+        scanner.depth += 1;
+      } else if (char === '}') {
+        scanner.depth -= 1;
+        if (scanner.depth === 0) {
+          const objectText = scanner.buffer.slice(scanner.objectStart);
+          resetScanner();
+          settleObject(objectText);
+        }
+      }
     }
   }
+
+  const reasoningFilter = createReasoningStreamFilter(scanVisibleText);
 
   return {
     push(delta: string): void {
       for (const char of delta) {
-        if (scanner.depth === 0) {
-          if (char !== '{') continue;
-          scanner.depth = 1;
-          scanner.objectStart = 0;
-          scanner.buffer = char;
-          continue;
-        }
-
-        scanner.buffer += char;
-
-        if (scanner.inString) {
-          if (scanner.escaped) {
-            scanner.escaped = false;
-          } else if (char === '\\') {
-            scanner.escaped = true;
-          } else if (char === '"') {
-            scanner.inString = false;
-          }
-          continue;
-        }
-
-        if (char === '"') {
-          scanner.inString = true;
-        } else if (char === '{') {
-          scanner.depth += 1;
-        } else if (char === '}') {
-          scanner.depth -= 1;
-          if (scanner.depth === 0) {
-            const objectText = scanner.buffer.slice(scanner.objectStart);
-            resetScanner();
-            settleObject(objectText);
-          }
+        if (scanner.depth > 0) {
+          scanVisibleText(char);
+        } else {
+          reasoningFilter.push(char);
         }
       }
     },
     finish(): string[] {
+      reasoningFilter.finish();
       return expected
         .map((chunk) => chunk.chunkId)
         .filter((chunkId) => !settledIds.has(chunkId));

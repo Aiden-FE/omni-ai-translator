@@ -57,6 +57,38 @@ describe('batch object stream', () => {
     expect(parser.finish()).toEqual(['c2']);
   });
 
+  it('does not settle JSON objects contained in split reasoning blocks', () => {
+    const results: BatchTranslatedChunk[] = [];
+    const parser = createBatchObjectStream(expectedChunks, (chunk) => results.push(chunk));
+    const reasoningChunk = translatedChunk('c1', [{ partId: 0, sliceIndex: 0, text: '推理中的错误译文' }]);
+    const finalChunk = translatedChunk('c1', [{ partId: 0, sliceIndex: 0, text: '最终译文' }]);
+
+    parser.push('<thi');
+    parser.push(`nk>${reasoningChunk}</th`);
+    parser.push(`ink>${finalChunk}`);
+
+    expect(results).toEqual([
+      { chunkId: 'c1', translatedParts: [{ partId: 0, sliceIndex: 0, text: '最终译文' }] },
+    ]);
+    expect(parser.finish()).toEqual(['c2']);
+  });
+
+  it('filters reasoning and control artifacts from validated translation text', () => {
+    const results: BatchTranslatedChunk[] = [];
+    const parser = createBatchObjectStream(expectedChunks, (chunk) => results.push(chunk));
+    const payload = translatedChunk('c1', [
+      { partId: 0, sliceIndex: 0, text: '<think>private</think>可见<analysis>hidden</analysis></s>' },
+    ]);
+
+    for (let index = 0; index < payload.length; index += 1) {
+      parser.push(payload.slice(index, index + 1));
+    }
+
+    expect(results).toEqual([
+      { chunkId: 'c1', translatedParts: [{ partId: 0, sliceIndex: 0, text: '可见' }] },
+    ]);
+  });
+
   it('ignores duplicate, unknown, malformed, and mismatched part objects', () => {
     const results: BatchTranslatedChunk[] = [];
     const parser = createBatchObjectStream(expectedChunks, (chunk) => results.push(chunk));
@@ -88,6 +120,17 @@ describe('batch object stream', () => {
     }));
 
     expect(results).toEqual([]);
+    expect(parser.finish()).toEqual(['c1', 'c2']);
+  });
+
+  it('propagates callback failures without settling the chunk', () => {
+    const callbackError = new Error('consumer failed');
+    const parser = createBatchObjectStream(expectedChunks, () => {
+      throw callbackError;
+    });
+    const payload = translatedChunk('c1', [{ partId: 0, sliceIndex: 0, text: '译文' }]);
+
+    expect(() => parser.push(payload)).toThrow(callbackError);
     expect(parser.finish()).toEqual(['c1', 'c2']);
   });
 });
