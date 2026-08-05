@@ -294,7 +294,7 @@ export async function runBatchPool(
     );
     for (const owner of batchOwners) markTranslating(owner);
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let port: BatchPort | null = null;
       let finished = false;
 
@@ -313,16 +313,23 @@ export async function runBatchPool(
         if (finished) return;
         finished = true;
 
-        if (kind === 'done') {
-          for (const chunk of batch) {
-            const owner = chunkOwners.get(chunk.chunkId);
-            if (owner && !owner.received.has(chunk.chunkId)) settleFailed(owner, errorType);
+        let settlementError: { value: unknown } | null = null;
+        try {
+          if (kind === 'done') {
+            for (const chunk of batch) {
+              const owner = chunkOwners.get(chunk.chunkId);
+              if (owner && !owner.received.has(chunk.chunkId)) settleFailed(owner, errorType);
+            }
+          } else {
+            for (const owner of batchOwners) settleFailed(owner, errorType);
           }
-        } else {
-          for (const owner of batchOwners) settleFailed(owner, errorType);
+        } catch (error) {
+          settlementError = { value: error };
+        } finally {
+          closePort();
+          if (settlementError) reject(settlementError.value);
+          else resolve();
         }
-        closePort();
-        resolve();
       };
 
       try {
@@ -371,11 +378,8 @@ export async function runBatchPool(
       nextBatchIndex += 1;
       const acquired = requestGate.acquire();
       const release = typeof acquired === 'function' ? acquired : await acquired;
-      if (shouldStop()) {
-        release();
-        return;
-      }
       try {
+        if (shouldStop()) return;
         await runBatch(batches[index]);
       } finally {
         release();

@@ -5,7 +5,11 @@ import type {
   BatchStreamPortMessage,
   BatchTranslatedChunk,
 } from '@/shared/types';
-import { runBatchPool, retryBatchSegments } from './batch-pool';
+import {
+  createBatchRequestGate,
+  runBatchPool,
+  retryBatchSegments,
+} from './batch-pool';
 import type { SegmentRecord } from './types';
 
 type MessageListener = (message: BatchStreamPortMessage) => void;
@@ -143,6 +147,24 @@ async function drainMicrotasks(rounds = 10): Promise<void> {
   for (let index = 0; index < rounds; index += 1) await Promise.resolve();
 }
 
+function observePromise(promise: Promise<unknown>) {
+  let state: 'pending' | 'fulfilled' | 'rejected' = 'pending';
+  let reason: unknown;
+  void promise.then(
+    () => {
+      state = 'fulfilled';
+    },
+    (error: unknown) => {
+      state = 'rejected';
+      reason = error;
+    },
+  );
+  return {
+    state: () => state,
+    reason: () => reason,
+  };
+}
+
 function options(cache = new Map()) {
   return {
     targetLang: '简体中文',
@@ -211,6 +233,123 @@ describe('runBatchPool', () => {
       port.emitDone();
     }
     await poolPromise;
+  });
+
+  it('rejects terminal settlement errors without leaking shared gate permits', async () => {
+    const requestGate = createBatchRequestGate();
+    const settlementError = new Error('settlement callback failed');
+    const failingPools = Array.from({ length: 3 }, (_, index) => {
+      const poolPromise = runBatchPool(
+        [semanticSegment(`failing-${index}`, ['x'.repeat(6000)])],
+        {
+          ...options(),
+          requestGate,
+          onSettled: vi.fn((segment: SegmentRecord) => {
+            if (segment.status === 'failed') throw settlementError;
+          }),
+        },
+      );
+      return {
+        poolPromise,
+        observed: observePromise(poolPromise),
+      };
+    });
+    expect(runtime.ports).toHaveLength(3);
+
+    const queuedSegment = semanticSegment('queued', ['x'.repeat(6000)]);
+    const queuedPromise = runBatchPool([queuedSegment], {
+      ...options(),
+      requestGate,
+    });
+    expect(runtime.ports).toHaveLength(3);
+
+    const terminalThrows: unknown[] = [];
+    for (const port of runtime.ports.slice(0, 3)) {
+      try {
+        port.emitDone([port.request.chunks[0].chunkId]);
+        terminalThrows.push(undefined);
+      } catch (error) {
+        terminalThrows.push(error);
+      }
+    }
+    await drainMicrotasks();
+
+    expect(runtime.ports).toHaveLength(4);
+    expect(failingPools.map(({ observed }) => observed.state())).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    expect(failingPools.map(({ observed }) => observed.reason())).toEqual([
+      settlementError,
+      settlementError,
+      settlementError,
+    ]);
+    expect(terminalThrows).toEqual([undefined, undefined, undefined]);
+    for (const port of runtime.ports.slice(0, 3)) {
+      expect(port.disconnect).toHaveBeenCalledTimes(1);
+    }
+
+    const queuedPort = runtime.ports[3];
+    queuedPort.emitChunk(translatedChunk(queuedPort, 0));
+    queuedPort.emitDone();
+    await queuedPromise;
+    expect(runtime.activePortCount()).toBe(0);
+
+    const laterSegments = Array.from(
+      { length: 3 },
+      (_, index) => semanticSegment(`later-${index}`, ['x'.repeat(6000)]),
+    );
+    const laterPromise = runBatchPool(laterSegments, {
+      ...options(),
+      requestGate,
+    });
+
+    expect(runtime.ports).toHaveLength(7);
+    expect(runtime.activePortCount()).toBe(3);
+    for (const port of runtime.ports.slice(4)) {
+      port.emitChunk(translatedChunk(port, 0));
+      port.emitDone();
+    }
+    await laterPromise;
+  });
+
+  it('releases the shared permit when isActive throws after acquisition', async () => {
+    const requestGate = createBatchRequestGate();
+    const activeCheckError = new Error('active check failed');
+    let activeChecks = 0;
+    const failingPromise = runBatchPool(
+      [semanticSegment('active-check', ['x'.repeat(6000)])],
+      {
+        ...options(),
+        requestGate,
+        isActive: () => {
+          activeChecks += 1;
+          if (activeChecks === 3) throw activeCheckError;
+          return true;
+        },
+      },
+    );
+
+    await expect(failingPromise).rejects.toBe(activeCheckError);
+    expect(runtime.ports).toHaveLength(0);
+
+    const laterSegments = Array.from(
+      { length: 3 },
+      (_, index) => semanticSegment(`after-active-error-${index}`, ['x'.repeat(6000)]),
+    );
+    const laterPromise = runBatchPool(laterSegments, {
+      ...options(),
+      requestGate,
+    });
+
+    expect(runtime.ports).toHaveLength(3);
+    expect(runtime.activePortCount()).toBe(3);
+    for (const port of runtime.ports) {
+      port.emitChunk(translatedChunk(port, 0));
+      port.emitDone();
+    }
+    await laterPromise;
   });
 
   it('keeps valid siblings and fails only owners with missing chunks', async () => {
