@@ -30,7 +30,12 @@ const BATCH_PROMPT_PREFIX = 'Translate every chunk into ';
 const BATCH_REASONING_INSTRUCTION =
   'Do not reason or output analysis, <think>, <analysis>, or control tokens.';
 const BATCH_OUTPUT_INSTRUCTION =
-  'Output one compact JSON object per completed chunk and no other text.';
+  'Output one compact JSON object per input chunk and no other text.';
+const BATCH_RESPONSE_SCHEMA =
+  'Response object schema: {"chunkId": string, "translatedParts": [{"partId": number, "sliceIndex": number, "text": string}]}.';
+const BATCH_ID_INSTRUCTION =
+  'Use each input chunkId, partId, and sliceIndex unchanged. Return every input chunk and every input part exactly once; do not add, remove, or duplicate them.';
+const BATCH_TEXT_INSTRUCTION = 'Put the translation only in translatedParts[].text.';
 const MOCK_TRANSLATION = '你好,世界';
 
 interface MockBatchPart {
@@ -51,6 +56,7 @@ interface CapturedBatchRequest {
 
 interface PendingBatchChunk {
   chunkId: string;
+  generation: number;
   release: () => void;
 }
 
@@ -84,9 +90,9 @@ export function getRequestCount(route?: string): number {
 
 /** 清空请求计数(用例间隔离,workers=1 单进程内模块状态跨 spec 文件共享) */
 export function resetRequestCount(): void {
-  releaseAllBatchChunks();
   batchChunkGateEnabled = false;
   batchObservationGeneration += 1;
+  releaseAllBatchChunks();
   requestCounts.clear();
   capturedBatchRequests.length = 0;
   emittedBatchChunkIds.length = 0;
@@ -116,7 +122,9 @@ export function getActiveBatchRequests(): number {
 }
 
 export function getPendingBatchChunkCount(): number {
-  return pendingBatchChunks.length;
+  return pendingBatchChunks.filter(
+    (pending) => pending.generation === batchObservationGeneration,
+  ).length;
 }
 
 export function getEmittedBatchChunkIds(): string[] {
@@ -129,15 +137,17 @@ export function setBatchChunkGate(enabled: boolean): void {
 }
 
 export function releaseNextBatchChunk(): boolean {
-  const pending = pendingBatchChunks.shift();
-  if (!pending) return false;
-  pending.release();
-  return true;
+  while (pendingBatchChunks.length > 0) {
+    const pending = pendingBatchChunks.shift()!;
+    pending.release();
+    if (pending.generation === batchObservationGeneration) return true;
+  }
+  return false;
 }
 
 export function releaseAllBatchChunks(): void {
-  while (releaseNextBatchChunk()) {
-    // Drain every waiter so a failed test cannot strand an HTTP response.
+  while (pendingBatchChunks.length > 0) {
+    pendingBatchChunks.shift()!.release();
   }
 }
 
@@ -178,7 +188,7 @@ function isMockBatchChunk(value: unknown): value is MockBatchChunk {
     && value.parts.every(isMockBatchPart);
 }
 
-/** 仅识别 buildBatchPrompt 的完整四行协议；普通划词文本无法伪造 batch route。 */
+/** 仅识别 buildBatchPrompt 的完整严格协议；普通划词文本无法伪造 batch route。 */
 function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
   if (!isRecord(requestBody) || !Array.isArray(requestBody.messages)) return null;
   const userMessage = requestBody.messages.find(
@@ -188,17 +198,20 @@ function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
 
   const prompt = userMessage.content;
   const lines = prompt.split('\n');
-  if (lines.length !== 4
+  if (lines.length !== 7
     || !lines[0].startsWith(BATCH_PROMPT_PREFIX)
     || !lines[0].endsWith('.')
     || lines[0].slice(BATCH_PROMPT_PREFIX.length, -1).length === 0
     || lines[1] !== BATCH_REASONING_INSTRUCTION
-    || lines[2] !== BATCH_OUTPUT_INSTRUCTION) {
+    || lines[2] !== BATCH_OUTPUT_INSTRUCTION
+    || lines[3] !== BATCH_RESPONSE_SCHEMA
+    || lines[4] !== BATCH_ID_INSTRUCTION
+    || lines[5] !== BATCH_TEXT_INSTRUCTION) {
     return null;
   }
 
   try {
-    const chunks: unknown = JSON.parse(lines[3]);
+    const chunks: unknown = JSON.parse(lines[6]);
     return Array.isArray(chunks) && chunks.length > 0 && chunks.every(isMockBatchChunk)
       ? chunks
       : null;
@@ -207,10 +220,13 @@ function extractBatchChunks(requestBody: unknown): MockBatchChunk[] | null {
   }
 }
 
-async function waitForBatchChunkRelease(chunkId: string): Promise<void> {
-  if (!batchChunkGateEnabled) return;
+async function waitForBatchChunkRelease(
+  chunkId: string,
+  observationGeneration: number,
+): Promise<void> {
+  if (!batchChunkGateEnabled || observationGeneration !== batchObservationGeneration) return;
   await new Promise<void>((release) => {
-    pendingBatchChunks.push({ chunkId, release });
+    pendingBatchChunks.push({ chunkId, generation: observationGeneration, release });
   });
 }
 
@@ -232,7 +248,7 @@ async function sendOpenAIBatchStream(
 
   for (let index = 0; index < completedChunks.length; index += 1) {
     const chunk = completedChunks[index];
-    await waitForBatchChunkRelease(chunk.chunkId);
+    await waitForBatchChunkRelease(chunk.chunkId, observationGeneration);
     const objectText = JSON.stringify({
       chunkId: chunk.chunkId,
       translatedParts: chunk.parts.map((part) => ({

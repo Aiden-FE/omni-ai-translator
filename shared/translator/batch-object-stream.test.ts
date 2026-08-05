@@ -136,7 +136,7 @@ describe('batch object stream', () => {
 });
 
 describe('batch prompt', () => {
-  it('uses the protocol requirements and serializes the exact chunk data as JSON', () => {
+  it('defines the exact response schema and preserves every input identifier once', () => {
     const chunks: BatchTranslateChunk[] = [
       {
         chunkId: 'input-id-{1}',
@@ -149,7 +149,14 @@ describe('batch prompt', () => {
     const jsonData = prompt.slice(prompt.lastIndexOf('\n') + 1);
 
     expect(prompt).toContain('Do not reason or output analysis, <think>, <analysis>, or control tokens.');
-    expect(prompt).toContain('Output one compact JSON object per completed chunk and no other text.');
+    expect(prompt).toContain(
+      'Response object schema: {"chunkId": string, "translatedParts": [{"partId": number, "sliceIndex": number, "text": string}]}.',
+    );
+    expect(prompt).toContain(
+      'Use each input chunkId, partId, and sliceIndex unchanged. Return every input chunk and every input part exactly once; do not add, remove, or duplicate them.',
+    );
+    expect(prompt).toContain('Put the translation only in translatedParts[].text.');
+    expect(prompt).toContain('Output one compact JSON object per input chunk and no other text.');
     expect(JSON.parse(jsonData)).toEqual(chunks);
   });
 });

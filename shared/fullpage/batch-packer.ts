@@ -8,6 +8,55 @@ export const MAX_BATCH_SOURCE_CHARS = 6000;
 
 export const countCodePoints = (text: string) => Array.from(text).length;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isDenseNonEmptyArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(value, index)) return false;
+  }
+  return true;
+}
+
+/** Revalidates an untrusted Port payload before it reaches a provider. */
+export function isValidBatchTranslateChunks(value: unknown): value is BatchTranslateChunk[] {
+  if (!isDenseNonEmptyArray(value) || value.length > MAX_BATCH_CHUNKS) return false;
+
+  const chunkIds = new Set<string>();
+  let sourceChars = 0;
+  for (const chunk of value) {
+    if (!isRecord(chunk)
+      || typeof chunk.chunkId !== 'string'
+      || typeof chunk.segmentId !== 'string'
+      || chunkIds.has(chunk.chunkId)
+      || !isDenseNonEmptyArray(chunk.parts)) {
+      return false;
+    }
+    chunkIds.add(chunk.chunkId);
+
+    const partPairs = new Set<string>();
+    let chunkChars = 0;
+    for (const part of chunk.parts) {
+      if (!isRecord(part)
+        || !Number.isInteger(part.partId)
+        || !Number.isInteger(part.sliceIndex)
+        || typeof part.text !== 'string') {
+        return false;
+      }
+      const pair = `${part.partId}:${part.sliceIndex}`;
+      if (partPairs.has(pair)) return false;
+      partPairs.add(pair);
+      chunkChars += countCodePoints(part.text);
+    }
+    if (chunkChars === 0 || chunkChars > MAX_BATCH_SOURCE_CHARS) return false;
+    sourceChars += chunkChars;
+    if (sourceChars > MAX_BATCH_SOURCE_CHARS) return false;
+  }
+  return true;
+}
+
 function isSentencePunctuation(char: string): boolean {
   return /[.!?。！？]/u.test(char);
 }
@@ -72,7 +121,9 @@ export function createTransportChunks(segment: SegmentRecord): BatchTranslateChu
     sliceIndex += 1;
     return current;
   };
-  const parts = segment.parts.flatMap((part) => splitPart(part.id, part.sourceText, nextSliceIndex));
+  const parts = segment.parts
+    .filter((part) => part.sourceText.trim().length > 0)
+    .flatMap((part) => splitPart(part.id, part.sourceText, nextSliceIndex));
   const chunks: BatchTranslateChunk[] = [];
   let currentParts: BatchTranslatePart[] = [];
   let currentChars = 0;
@@ -101,9 +152,6 @@ export function createTransportChunks(segment: SegmentRecord): BatchTranslateChu
     });
   }
 
-  if (chunks.length === 0) {
-    throw new Error(`Segment ${segment.id} has no transportable text`);
-  }
   return chunks;
 }
 

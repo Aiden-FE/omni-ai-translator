@@ -129,10 +129,13 @@ class FakeBatchPort {
   }
 }
 
-function setupBatchBrowser(autoRespond = true) {
+function setupBatchBrowser(
+  autoRespond = true,
+  resolveCapabilities: () => unknown | Promise<unknown> = () => ({ batchStream: true }),
+) {
   const translateMessage = vi.fn();
   const sendMessage = vi.fn(async (msg: { type: string; payload?: { text: string } }) => {
-    if (msg.type === 'get-translation-capabilities') return { batchStream: true };
+    if (msg.type === 'get-translation-capabilities') return resolveCapabilities();
     if (msg.type === 'translate' && msg.payload) {
       translateMessage(msg);
       return defaultTranslate(msg.payload.text);
@@ -1450,6 +1453,71 @@ describe('LLM semantic batch orchestration', () => {
       payload: { text: 'Hello world', targetLang: '简体中文' },
     });
     expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('aborts and fully cleans up when the capability transport rejects, then permits restart', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<p>Hello world</p>';
+    let capabilityAttempt = 0;
+    const { runtimeSendMessage, sendMessage, connect } = setupBatchBrowser(true, () => {
+      capabilityAttempt += 1;
+      if (capabilityAttempt === 1) throw new Error('capability transport unavailable');
+      return { batchStream: true };
+    });
+
+    await expect(start('replace')).rejects.toThrow('capability transport unavailable');
+
+    expect(runtimeSendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(__getState()).toMatchObject({
+      active: false,
+      records: [],
+      batchStreamEnabled: false,
+      targetLang: '',
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(document.querySelector('[data-llm-translator]')).toBeNull();
+
+    vi.useRealTimers();
+    await start('replace');
+
+    expect(runtimeSendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('p')?.textContent).toBe('[批] Hello world');
+  });
+
+  it('rejects a malformed capability response without dispatch, then permits restart', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<p>Hello world</p>';
+    let capabilityAttempt = 0;
+    const { runtimeSendMessage, sendMessage, connect } = setupBatchBrowser(true, () => {
+      capabilityAttempt += 1;
+      return capabilityAttempt === 1 ? { batchStream: 'yes' } : { batchStream: true };
+    });
+
+    await expect(start('replace')).rejects.toThrow('Invalid translation capabilities response');
+
+    expect(runtimeSendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+    expect(__getState()).toMatchObject({
+      active: false,
+      records: [],
+      batchStreamEnabled: false,
+      targetLang: '',
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(document.querySelector('[data-llm-translator]')).toBeNull();
+
+    vi.useRealTimers();
+    await start('replace');
+
+    expect(runtimeSendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('p')?.textContent).toBe('[批] Hello world');
   });
 
   it('coalesces viewport entries observed within 25 ms into one batch port', async () => {

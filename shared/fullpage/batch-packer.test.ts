@@ -8,6 +8,7 @@ import {
   MAX_BATCH_SOURCE_CHARS,
   countCodePoints,
   createTransportChunks,
+  isValidBatchTranslateChunks,
   packTransportBatches,
 } from './batch-packer';
 import type { SegmentRecord } from './types';
@@ -47,6 +48,22 @@ function segmentWithText(text: string): SegmentRecord {
   };
 }
 
+function segmentWithParts(sourceParts: string[]): SegmentRecord {
+  const parts = sourceParts.map((sourceText, id) => ({
+    id,
+    node: document.createTextNode(sourceText),
+    sourceText,
+  }));
+  return {
+    id: 'multipart-segment',
+    el: document.createElement('p'),
+    textNodes: parts.map((part) => part.node),
+    originalText: sourceParts.join('').trim(),
+    parts,
+    status: 'pending',
+  };
+}
+
 describe('transport batch packing', () => {
   it('uses the streaming response wire shape without request-only fields', () => {
     expect(translatedWireFixture).toEqual({
@@ -76,6 +93,19 @@ describe('transport batch packing', () => {
     expect(chunks.map(sourceCodePointCount)).toEqual([6000, 1]);
   });
 
+  it('omits whitespace-only semantic parts from the transport wire', () => {
+    const chunks = createTransportChunks(segmentWithParts(['Hello', ' \t\n', 'world']));
+
+    expect(chunks).toEqual([{
+      chunkId: 'multipart-segment:0',
+      segmentId: 'multipart-segment',
+      parts: [
+        { partId: 0, sliceIndex: 0, text: 'Hello' },
+        { partId: 2, sliceIndex: 1, text: 'world' },
+      ],
+    }]);
+  });
+
   it('rejects empty and over-budget chunks instead of emitting invalid requests', () => {
     expect(() => packTransportBatches([wireChunk('empty', '')])).toThrow();
     expect(() => packTransportBatches([wireChunk('oversized', 'x'.repeat(MAX_BATCH_SOURCE_CHARS + 1))])).toThrow();
@@ -84,5 +114,35 @@ describe('transport batch packing', () => {
   it('exports the literal transport limits', () => {
     expect(MAX_BATCH_CHUNKS).toBe(20);
     expect(MAX_BATCH_SOURCE_CHARS).toBe(6000);
+  });
+
+  it('validates runtime batch limits and identifier uniqueness at the background boundary', () => {
+    const boundaryBatch = Array.from({ length: 20 }, (_, index) => ({
+      chunkId: `chunk-${index}`,
+      segmentId: `segment-${index}`,
+      parts: [{ partId: 0, sliceIndex: 0, text: 'x'.repeat(300) }],
+    }));
+
+    expect(isValidBatchTranslateChunks(boundaryBatch)).toBe(true);
+    expect(isValidBatchTranslateChunks([
+      ...boundaryBatch,
+      wireChunk('chunk-20', 'x'),
+    ])).toBe(false);
+    expect(isValidBatchTranslateChunks([
+      wireChunk('large-a', 'x'.repeat(6000)),
+      wireChunk('large-b', 'x'),
+    ])).toBe(false);
+    expect(isValidBatchTranslateChunks([
+      wireChunk('duplicate', 'a'),
+      wireChunk('duplicate', 'b'),
+    ])).toBe(false);
+    expect(isValidBatchTranslateChunks([{
+      chunkId: 'duplicate-parts',
+      segmentId: 'segment',
+      parts: [
+        { partId: 1, sliceIndex: 2, text: 'a' },
+        { partId: 1, sliceIndex: 2, text: 'b' },
+      ],
+    }])).toBe(false);
   });
 });

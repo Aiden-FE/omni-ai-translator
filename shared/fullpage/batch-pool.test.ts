@@ -314,6 +314,61 @@ describe('runBatchPool', () => {
     await laterPromise;
   });
 
+  it('rejects progressive settlement errors, closes every port, and releases shared gate permits', async () => {
+    const requestGate = createBatchRequestGate();
+    const settlementError = new Error('progressive settlement callback failed');
+    const failingPools = Array.from({ length: 3 }, (_, index) => {
+      const poolPromise = runBatchPool(
+        [semanticSegment(`progressive-failing-${index}`, ['x'.repeat(6000)])],
+        {
+          ...options(),
+          requestGate,
+          onSettled: vi.fn((segment: SegmentRecord) => {
+            if (segment.status === 'done') throw settlementError;
+          }),
+        },
+      );
+      return {
+        poolPromise,
+        observed: observePromise(poolPromise),
+      };
+    });
+    expect(runtime.ports).toHaveLength(3);
+
+    const queuedSegment = semanticSegment('queued-after-progressive-error', ['x'.repeat(6000)]);
+    const queuedPromise = runBatchPool([queuedSegment], {
+      ...options(),
+      requestGate,
+    });
+    expect(runtime.ports).toHaveLength(3);
+
+    for (const port of runtime.ports.slice(0, 3)) {
+      expect(() => port.emitChunk(translatedChunk(port, 0))).not.toThrow();
+    }
+    await drainMicrotasks();
+
+    expect(runtime.ports).toHaveLength(4);
+    expect(failingPools.map(({ observed }) => observed.state())).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    expect(failingPools.map(({ observed }) => observed.reason())).toEqual([
+      settlementError,
+      settlementError,
+      settlementError,
+    ]);
+    for (const port of runtime.ports.slice(0, 3)) {
+      expect(port.disconnect).toHaveBeenCalledTimes(1);
+    }
+
+    const queuedPort = runtime.ports[3];
+    queuedPort.emitChunk(translatedChunk(queuedPort, 0));
+    queuedPort.emitDone();
+    await queuedPromise;
+    expect(runtime.activePortCount()).toBe(0);
+  });
+
   it('fails every unresolved owner before rejecting the first settlement error', async () => {
     const requestGate = createBatchRequestGate();
     const segments = [
@@ -516,6 +571,54 @@ describe('runBatchPool', () => {
     expect(second.translatedParts).toEqual(['[译]Hello ', '[译]world']);
     expect(second.translatedText).toBe('[译]Hello [译]world');
     expect(second.status).toBe('done');
+  });
+
+  it('keeps whitespace-only parts off the wire and restores their exact source bytes through cache', async () => {
+    const cache = new Map();
+    const sourceParts = ['Hello', ' \t\n', 'world'];
+    const first = semanticSegment('whitespace-first', sourceParts);
+    const firstPromise = runBatchPool([first], options(cache));
+    const port = runtime.ports[0];
+
+    expect(port.request.chunks.flatMap((chunk) => chunk.parts).map((part) => ({
+      partId: part.partId,
+      text: part.text,
+    }))).toEqual([
+      { partId: 0, text: 'Hello' },
+      { partId: 2, text: 'world' },
+    ]);
+
+    port.emitChunk(translatedChunk(port, 0));
+    port.emitDone();
+    await firstPromise;
+
+    expect(first.translatedParts).toEqual(['[译]Hello', ' \t\n', '[译]world']);
+    expect(first.translatedParts).toHaveLength(first.parts?.length ?? 0);
+    expect(first.translatedText).toBe('[译]Hello \t\n[译]world');
+
+    const second = semanticSegment('whitespace-second', sourceParts);
+    await runBatchPool([second], options(cache));
+
+    expect(runtime.ports).toHaveLength(1);
+    expect(second.translatedParts).toEqual(['[译]Hello', ' \t\n', '[译]world']);
+    expect(second.translatedText).toBe('[译]Hello \t\n[译]world');
+  });
+
+  it('settles an all-whitespace owner locally without opening a port', async () => {
+    const segment = semanticSegment('all-whitespace', [' ', '\t\n']);
+    const poolPromise = runBatchPool([segment], options());
+    const openedPortCount = runtime.ports.length;
+
+    for (const port of runtime.ports) {
+      port.emitChunk(translatedChunk(port, 0));
+      port.emitDone();
+    }
+    const result = await poolPromise;
+
+    expect(openedPortCount).toBe(0);
+    expect(result.succeeded).toEqual([segment]);
+    expect(segment.translatedParts).toEqual([' ', '\t\n']);
+    expect(segment.translatedText).toBe(' \t\n');
   });
 
   it('distinguishes equal joined text with different ordered source-part boundaries', async () => {

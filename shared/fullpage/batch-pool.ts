@@ -224,6 +224,7 @@ export async function runBatchPool(
     }
 
     const translatedParts = parts.map((part) => {
+      if (part.sourceText.trim().length === 0) return part.sourceText;
       const slices = translatedSlices.get(part.id) ?? [];
       slices.sort((left, right) => left.sliceIndex - right.sliceIndex);
       return slices.map((slice) => slice.text).join('');
@@ -274,6 +275,15 @@ export async function runBatchPool(
       started: false,
       settled: false,
     };
+    if (chunks.length === 0) {
+      markTranslating(owner);
+      const translatedParts = segment.parts?.map((part) => part.sourceText) ?? [];
+      settleSucceeded(owner, {
+        translatedParts,
+        translatedText: translatedParts.join(''),
+      });
+      continue;
+    }
     for (const chunk of chunks) {
       chunkOwners.set(chunk.chunkId, owner);
       transportChunks.push(chunk);
@@ -309,11 +319,12 @@ export async function runBatchPool(
       const finish = (
         kind: 'done' | 'error' | 'disconnect',
         errorType: ErrorType = 'network',
+        initialError: { value: unknown } | null = null,
       ) => {
         if (finished) return;
         finished = true;
 
-        let settlementError: { value: unknown } | null = null;
+        let settlementError = initialError;
         const failOwner = (owner: OwnerState) => {
           try {
             settleFailed(owner, errorType);
@@ -351,7 +362,11 @@ export async function runBatchPool(
             const translated = validateTranslatedChunk(message.chunk, expected);
             if (!translated) return;
             owner.received.set(expected.chunkId, translated);
-            trySettleOwner(owner);
+            try {
+              trySettleOwner(owner);
+            } catch (error) {
+              finish('error', 'network', { value: error });
+            }
             return;
           }
           if (message.type === 'done') {

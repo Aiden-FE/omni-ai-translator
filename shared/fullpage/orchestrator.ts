@@ -122,11 +122,18 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   clearBatchQueue();
   active = true;
   mode = requestedMode;
-  // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
-  const resolvedTargetLang = await getTargetLang();
-  if (!isSessionActive(generation)) return;
-  const resolvedBatchStreamEnabled = await resolveBatchStreamCapability();
-  if (!isSessionActive(generation)) return;
+  let resolvedTargetLang: string;
+  let resolvedBatchStreamEnabled: boolean;
+  try {
+    // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
+    resolvedTargetLang = await getTargetLang();
+    if (!isSessionActive(generation)) return;
+    resolvedBatchStreamEnabled = await resolveBatchStreamCapability();
+    if (!isSessionActive(generation)) return;
+  } catch (error) {
+    cleanupFailedStart(generation);
+    throw error;
+  }
   targetLang = resolvedTargetLang;
   batchStreamEnabled = resolvedBatchStreamEnabled;
 
@@ -212,14 +219,33 @@ async function enqueueSegments(
 }
 
 async function resolveBatchStreamCapability(): Promise<boolean> {
-  try {
-    const capabilities = await browser.runtime.sendMessage({
-      type: 'get-translation-capabilities',
-    }) as TranslationCapabilities;
-    return capabilities?.batchStream === true;
-  } catch {
-    return false;
+  const capabilities: unknown = await browser.runtime.sendMessage({
+    type: 'get-translation-capabilities',
+  });
+  if (typeof capabilities !== 'object'
+    || capabilities === null
+    || typeof (capabilities as Partial<TranslationCapabilities>).batchStream !== 'boolean') {
+    throw new Error('Invalid translation capabilities response');
   }
+  return (capabilities as TranslationCapabilities).batchStream;
+}
+
+/** 清理未完成的启动，不保留任何可被误认为 active session 的 DOM 或调度状态。 */
+function cleanupFailedStart(generation: number): void {
+  if (!isSessionActive(generation)) return;
+  if (records.length > 0) restoreAll(records);
+  stopObserver();
+  clearBatchQueue();
+  viewportObserver?.disconnect();
+  viewportObserver = null;
+  toolbar?.destroy();
+  toolbar = null;
+  records = [];
+  recordedEls = new Set();
+  active = false;
+  batchStreamEnabled = false;
+  targetLang = '';
+  sessionGeneration += 1;
 }
 
 /** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */

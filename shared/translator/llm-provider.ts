@@ -10,10 +10,17 @@ import type {
   TranslateResult,
 } from '@/shared/types';
 import type { TranslationProvider } from './types';
-import { buildBatchPrompt, createBatchObjectStream } from './batch-object-stream';
+import {
+  buildBatchInstructions,
+  buildBatchPrompt,
+  createBatchObjectStream,
+} from './batch-object-stream';
 import { classifyError } from './error';
 import { normalizeLlmProtocol, resolveLlmEndpoint } from './llm-protocol';
 import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reasoning-filter';
+
+const ANTHROPIC_SCALAR_MAX_TOKENS = 1024;
+const ANTHROPIC_BATCH_MAX_TOKENS = 8192;
 
 function buildPrompt(text: string, targetLang: string, sourceLang?: string): string {
   const source = sourceLang ? `from ${sourceLang} ` : '';
@@ -153,7 +160,7 @@ async function callAnthropic(
     },
     body: JSON.stringify({
       model: provider.model,
-      max_tokens: 1024,
+      max_tokens: ANTHROPIC_SCALAR_MAX_TOKENS,
       system: buildPrompt(req.text, req.targetLang, req.sourceLang),
       messages: [{ role: 'user', content: req.text }],
       temperature: 0.3,
@@ -385,9 +392,10 @@ async function callOpenAIResponsesPromptStream(
  */
 async function callAnthropicPromptStream(
   provider: ProviderConfig,
-  prompt: string,
+  systemPrompt: string,
   onDelta: DeltaHandler,
-  userContent: string = prompt,
+  userContent: string = systemPrompt,
+  maxTokens: number = ANTHROPIC_SCALAR_MAX_TOKENS,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
   const resp = await fetch(url, {
@@ -399,8 +407,8 @@ async function callAnthropicPromptStream(
     },
     body: JSON.stringify({
       model: provider.model,
-      max_tokens: 1024,
-      system: prompt,
+      max_tokens: maxTokens,
+      system: systemPrompt,
       messages: [{ role: 'user', content: userContent }],
       temperature: 0.3,
       stream: true,
@@ -577,7 +585,13 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
         } else if (protocol === 'ollama') {
           streamResult = await callOllamaPromptStream(config, prompt, parser.push);
         } else if (protocol === 'anthropic') {
-          streamResult = await callAnthropicPromptStream(config, prompt, parser.push);
+          streamResult = await callAnthropicPromptStream(
+            config,
+            buildBatchInstructions(req.targetLang),
+            parser.push,
+            JSON.stringify(req.chunks),
+            ANTHROPIC_BATCH_MAX_TOKENS,
+          );
         } else {
           streamResult = await callOpenAICompletionsPromptStream(config, prompt, parser.push);
         }

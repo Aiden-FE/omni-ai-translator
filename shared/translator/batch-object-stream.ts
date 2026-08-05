@@ -59,14 +59,21 @@ function validateChunk(
   return { chunkId: value.chunkId, translatedParts };
 }
 
-/** Builds the batch protocol prompt while keeping all untrusted input structured as JSON. */
-export function buildBatchPrompt(targetLang: string, chunks: BatchTranslateChunk[]): string {
+/** Builds the provider instructions separately so Anthropic can keep structured input in user content. */
+export function buildBatchInstructions(targetLang: string): string {
   return [
     `Translate every chunk into ${targetLang}.`,
     'Do not reason or output analysis, <think>, <analysis>, or control tokens.',
-    'Output one compact JSON object per completed chunk and no other text.',
-    JSON.stringify(chunks),
+    'Output one compact JSON object per input chunk and no other text.',
+    'Response object schema: {"chunkId": string, "translatedParts": [{"partId": number, "sliceIndex": number, "text": string}]}.',
+    'Use each input chunkId, partId, and sliceIndex unchanged. Return every input chunk and every input part exactly once; do not add, remove, or duplicate them.',
+    'Put the translation only in translatedParts[].text.',
   ].join('\n');
+}
+
+/** Builds the batch protocol prompt while keeping all untrusted input structured as JSON. */
+export function buildBatchPrompt(targetLang: string, chunks: BatchTranslateChunk[]): string {
+  return `${buildBatchInstructions(targetLang)}\n${JSON.stringify(chunks)}`;
 }
 
 /** Parses independently completed JSON translation objects from an arbitrary text stream. */

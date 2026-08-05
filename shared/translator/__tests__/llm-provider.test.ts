@@ -722,6 +722,15 @@ const batchRequest: BatchTranslateRequest = {
   ],
 };
 
+const maxSizeBatchRequest: BatchTranslateRequest = {
+  targetLang: '中文',
+  chunks: Array.from({ length: 20 }, (_, index) => ({
+    chunkId: `large-${index}`,
+    segmentId: `large-segment-${index}`,
+    parts: [{ partId: index, sliceIndex: 0, text: 'x'.repeat(300) }],
+  })),
+};
+
 function batchChunkText(chunkId: string, partId: number, text: string): string {
   return JSON.stringify({
     chunkId,
@@ -827,7 +836,35 @@ describe('LLM Provider batch streaming', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.stream).toBe(true);
     expect(body.temperature).toBe(0.3);
-    expect(body.system).toContain('"chunkId":"c1"');
+    expect(body.max_tokens).toBe(8192);
+    expect(body.system).toContain('Response object schema:');
+    expect(body.messages[0].content).toContain('"chunkId":"c1"');
+    expect(body.thinking).toBeUndefined();
+  });
+
+  it('gives a 20-chunk 6000-codepoint Anthropic batch a dedicated output budget without duplicating the prompt', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        'event: message_stop\n',
+        'data: {"type":"message_stop"}\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'anthropic' }));
+
+    const result = await provider.translateBatchStream!(maxSizeBatchRequest, vi.fn());
+
+    expect(result.missingChunkIds).toHaveLength(20);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.max_tokens).toBe(8192);
+    expect(body.system).toContain('Response object schema:');
+    expect(body.system).not.toContain('"chunkId":"large-0"');
+    expect(body.messages).toEqual([{
+      role: 'user',
+      content: JSON.stringify(maxSizeBatchRequest.chunks),
+    }]);
     expect(body.thinking).toBeUndefined();
   });
 
