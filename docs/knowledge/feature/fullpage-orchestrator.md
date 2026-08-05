@@ -70,7 +70,7 @@ segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是
 
 | 分段状态或操作 | 编排器动作 | 页面反馈 |
 |---|---|---|
-| `pending` / `translating` | 保持 loading marker | 段尾显示「正在翻译此段」状态 |
+| `pending` / `translating` | 保持 loading marker | 段尾显示 spinner 加载标记 |
 | `done` | `clearLoadingMark` 后按当前模式渲染 | 替换译文或双语译文块 |
 | `failed` | `clearLoadingMark` 后 `markFailed` | 失败徽标，并更新重试计数 |
 | 重试开始 | 清失败徽标、重新 `markLoading` | 重试段回到加载状态 |
