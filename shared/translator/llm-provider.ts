@@ -1,7 +1,16 @@
 // LLM Provider — OpenAI 兼容 / Ollama 适配实现（迁移自 shared/llm.ts）
 // content-script 不应直接 fetch 第三方接口，统一由 background 调用本模块。
-import type { ProviderConfig, TranslateChunk, TranslateRequest, TranslateResult } from '@/shared/types';
+import type {
+  BatchTranslateRequest,
+  BatchTranslateResult,
+  BatchTranslatedChunk,
+  ProviderConfig,
+  TranslateChunk,
+  TranslateRequest,
+  TranslateResult,
+} from '@/shared/types';
 import type { TranslationProvider } from './types';
+import { buildBatchPrompt, createBatchObjectStream } from './batch-object-stream';
 import { classifyError } from './error';
 import { normalizeLlmProtocol, resolveLlmEndpoint } from './llm-protocol';
 import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reasoning-filter';
@@ -189,6 +198,8 @@ async function callOllama(
 
 // ─── 流式实现 ───
 
+type DeltaHandler = (delta: string) => void;
+
 /**
  * 从 ReadableStream 读取全部内容并按行分割（支持跨 chunk 行拼接）。
  * 返回逐行 yield 的异步生成器。
@@ -218,10 +229,10 @@ async function* readLines(reader: ReadableStreamDefaultReader<Uint8Array>): Asyn
  * body 加 stream: true，SSE 按 data: 行解析 choices[0].delta.content，遇 data: [DONE] 结束。
  * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
  */
-async function callOpenAICompletionsStream(
+async function callOpenAICompletionsPromptStream(
   provider: ProviderConfig,
-  req: TranslateRequest,
-  onChunk: (chunk: TranslateChunk) => void,
+  prompt: string,
+  onDelta: DeltaHandler,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
   const resp = await fetch(url, {
@@ -232,7 +243,7 @@ async function callOpenAICompletionsStream(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
+      messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
       stream: true,
     }),
@@ -242,7 +253,7 @@ async function callOpenAICompletionsStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
+  const filter = createReasoningStreamFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -271,10 +282,10 @@ async function callOpenAICompletionsStream(
   return { translatedText: filter.finish() };
 }
 
-async function callOpenAIResponsesStream(
+async function callOpenAIResponsesPromptStream(
   provider: ProviderConfig,
-  req: TranslateRequest,
-  onChunk: (chunk: TranslateChunk) => void,
+  prompt: string,
+  onDelta: DeltaHandler,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
   const resp = await fetch(url, {
@@ -285,7 +296,7 @@ async function callOpenAIResponsesStream(
     },
     body: JSON.stringify({
       model: provider.model,
-      input: buildPrompt(req.text, req.targetLang, req.sourceLang),
+      input: prompt,
       stream: true,
     }),
   });
@@ -295,7 +306,7 @@ async function callOpenAIResponsesStream(
   }
 
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
+  const filter = createReasoningStreamFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -340,10 +351,11 @@ async function callOpenAIResponsesStream(
  * body 加 stream: true，SSE 解析 content_block_delta 事件取 delta.text，message_stop 结束。
  * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
  */
-async function callAnthropicStream(
+async function callAnthropicPromptStream(
   provider: ProviderConfig,
-  req: TranslateRequest,
-  onChunk: (chunk: TranslateChunk) => void,
+  prompt: string,
+  onDelta: DeltaHandler,
+  userContent: string = prompt,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
   const resp = await fetch(url, {
@@ -356,8 +368,8 @@ async function callAnthropicStream(
     body: JSON.stringify({
       model: provider.model,
       max_tokens: 1024,
-      system: buildPrompt(req.text, req.targetLang, req.sourceLang),
-      messages: [{ role: 'user', content: req.text }],
+      system: prompt,
+      messages: [{ role: 'user', content: userContent }],
       temperature: 0.3,
       stream: true,
     }),
@@ -367,7 +379,7 @@ async function callAnthropicStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
+  const filter = createReasoningStreamFilter(onDelta);
   let currentEvent = '';
   try {
     for await (const line of readLines(reader)) {
@@ -414,10 +426,10 @@ async function callAnthropicStream(
  * body 改 stream: true，NDJSON 按行取 message.content，流结束。
  * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
  */
-async function callOllamaStream(
+async function callOllamaPromptStream(
   provider: ProviderConfig,
-  req: TranslateRequest,
-  onChunk: (chunk: TranslateChunk) => void,
+  prompt: string,
+  onDelta: DeltaHandler,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
   const resp = await fetch(url, {
@@ -427,7 +439,7 @@ async function callOllamaStream(
       model: provider.model,
       stream: true,
       think: false,
-      messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
+      messages: [{ role: 'user', content: prompt }],
       options: { temperature: 0.3 },
     }),
   });
@@ -436,7 +448,7 @@ async function callOllamaStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
+  const filter = createReasoningStreamFilter(onDelta);
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -494,16 +506,53 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     async translateStream(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult> {
       try {
         const protocol = normalizeLlmProtocol(config.responseStyle);
-        if (protocol === 'openai-responses') return await callOpenAIResponsesStream(config, req, onChunk);
-        if (protocol === 'ollama') return await callOllamaStream(config, req, onChunk);
-        if (protocol === 'anthropic') return await callAnthropicStream(config, req, onChunk);
-        return await callOpenAICompletionsStream(config, req, onChunk);
+        const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
+        const onDelta = (deltaText: string) => onChunk({ deltaText });
+        if (protocol === 'openai-responses') {
+          return await callOpenAIResponsesPromptStream(config, prompt, onDelta);
+        }
+        if (protocol === 'ollama') return await callOllamaPromptStream(config, prompt, onDelta);
+        if (protocol === 'anthropic') {
+          return await callAnthropicPromptStream(config, prompt, onDelta, req.text);
+        }
+        return await callOpenAICompletionsPromptStream(config, prompt, onDelta);
       } catch (err) {
         const errorType = classifyError(err);
         return {
           translatedText: '',
           error: err instanceof Error ? err.message : String(err),
           errorType,
+        };
+      }
+    },
+    async translateBatchStream(
+      req: BatchTranslateRequest,
+      onChunk: (chunk: BatchTranslatedChunk) => void,
+    ): Promise<BatchTranslateResult> {
+      const parser = createBatchObjectStream(req.chunks, onChunk);
+      try {
+        const protocol = normalizeLlmProtocol(config.responseStyle);
+        const prompt = buildBatchPrompt(req.targetLang, req.chunks);
+        let streamResult: TranslateResult;
+        if (protocol === 'openai-responses') {
+          streamResult = await callOpenAIResponsesPromptStream(config, prompt, parser.push);
+        } else if (protocol === 'ollama') {
+          streamResult = await callOllamaPromptStream(config, prompt, parser.push);
+        } else if (protocol === 'anthropic') {
+          streamResult = await callAnthropicPromptStream(config, prompt, parser.push);
+        } else {
+          streamResult = await callOpenAICompletionsPromptStream(config, prompt, parser.push);
+        }
+
+        const result: BatchTranslateResult = { missingChunkIds: parser.finish() };
+        if (streamResult.error) result.error = streamResult.error;
+        if (streamResult.errorType) result.errorType = streamResult.errorType;
+        return result;
+      } catch (err) {
+        return {
+          missingChunkIds: parser.finish(),
+          error: err instanceof Error ? err.message : String(err),
+          errorType: classifyError(err),
         };
       }
     },

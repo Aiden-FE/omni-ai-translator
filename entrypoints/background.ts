@@ -7,11 +7,20 @@ import { getProviders, getSettings } from '@/shared/storage';
 import {
   translateWithAdapter,
   translateWithAdapterStream,
+  translateBatchWithAdapterStream,
   testWithAdapter,
   getActiveSources,
+  getTranslationCapabilities,
   setActiveSource,
 } from '@/shared/translator';
-import type { Message, StreamPortMessage, BackgroundCommand, DisplayMode } from '@/shared/types';
+import type {
+  BackgroundCommand,
+  BatchStreamPortMessage,
+  BatchTranslateResult,
+  DisplayMode,
+  Message,
+  StreamPortMessage,
+} from '@/shared/types';
 
 export default defineBackground(() => {
   // 右键菜单「全文翻译」点击事件（v0.4.0 入口）。
@@ -74,6 +83,9 @@ export default defineBackground(() => {
         case 'get-providers': {
           return await getProviders();
         }
+        case 'get-translation-capabilities': {
+          return await getTranslationCapabilities();
+        }
         case 'get-active-sources': {
           return await getActiveSources();
         }
@@ -91,6 +103,42 @@ export default defineBackground(() => {
 
   // 流式翻译 port 长连接：content-script 经 browser.runtime.connect({name:'translate-stream'}) 建连
   browser.runtime.onConnect.addListener((port) => {
+    if (port.name === 'fullpage-translate-batch-stream') {
+      let requestAccepted = false;
+
+      port.onMessage.addListener((msg: BatchStreamPortMessage) => {
+        if (msg.type !== 'request' || requestAccepted) return;
+        requestAccepted = true;
+        const { requestId, targetLang, chunks } = msg;
+
+        translateBatchWithAdapterStream(
+          { targetLang, chunks },
+          (chunk) => {
+            const message: BatchStreamPortMessage = { type: 'chunk', requestId, chunk };
+            port.postMessage(message);
+          },
+        )
+          .then((result) => {
+            const message: BatchStreamPortMessage = result.error
+              ? { type: 'error', requestId, result }
+              : { type: 'done', requestId, missingChunkIds: result.missingChunkIds };
+            port.postMessage(message);
+            port.disconnect();
+          })
+          .catch((err) => {
+            const result: BatchTranslateResult = {
+              missingChunkIds: chunks.map((chunk) => chunk.chunkId),
+              error: err instanceof Error ? err.message : String(err),
+              errorType: 'network',
+            };
+            const message: BatchStreamPortMessage = { type: 'error', requestId, result };
+            port.postMessage(message);
+            port.disconnect();
+          });
+      });
+      return;
+    }
+
     if (port.name !== 'translate-stream') return;
 
     port.onMessage.addListener((msg: StreamPortMessage) => {

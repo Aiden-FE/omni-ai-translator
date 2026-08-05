@@ -1,7 +1,11 @@
 // 适配层统一入口 — 上层（background）经此模块调用翻译，不感知具体源类型
 import type {
   ActiveSourcesResult,
+  BatchTranslateRequest,
+  BatchTranslateResult,
+  BatchTranslatedChunk,
   ProviderConfig,
+  TranslationCapabilities,
   TranslateChunk,
   TranslateRequest,
   TranslateResult,
@@ -15,6 +19,15 @@ import {
   getBuiltinSourceById,
 } from './builtin-sources';
 
+/** Resolves the active user or builtin provider consistently for every translation entry point. */
+async function resolveActiveProviderConfig(): Promise<ProviderConfig | null> {
+  const [settings, providers] = await Promise.all([getSettings(), getProviders()]);
+  const activeId = settings.activeProviderId ?? DEFAULT_ACTIVE_SOURCE_ID;
+  return providers.find((provider) => provider.id === activeId)
+    ?? getBuiltinSourceById(activeId)
+    ?? null;
+}
+
 /**
  * 翻译：经适配层路由到当前生效源
  * 读取 settings.activeProviderId + providers + 内置免费源，从注册表创建 provider 并调用 translate。
@@ -23,13 +36,7 @@ import {
  * - 均未命中才返回 no-config 错误。
  */
 export async function translateWithAdapter(req: TranslateRequest): Promise<TranslateResult> {
-  const settings = await getSettings();
-  const providers = await getProviders();
-  const activeId = settings.activeProviderId ?? DEFAULT_ACTIVE_SOURCE_ID;
-
-  // 先查用户已配置源，再查内置免 Key 免费源
-  const config =
-    providers.find((p) => p.id === activeId) ?? getBuiltinSourceById(activeId);
+  const config = await resolveActiveProviderConfig();
 
   if (!config) {
     return {
@@ -54,12 +61,7 @@ export async function translateWithAdapterStream(
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
 ): Promise<TranslateResult> {
-  const settings = await getSettings();
-  const providers = await getProviders();
-  const activeId = settings.activeProviderId ?? DEFAULT_ACTIVE_SOURCE_ID;
-
-  const config =
-    providers.find((p) => p.id === activeId) ?? getBuiltinSourceById(activeId);
+  const config = await resolveActiveProviderConfig();
 
   if (!config) {
     return {
@@ -82,6 +84,45 @@ export async function translateWithAdapterStream(
     onChunk({ deltaText: result.translatedText });
   }
   return result;
+}
+
+/** Reports only the active source capability required by the full-page orchestrator. */
+export async function getTranslationCapabilities(): Promise<TranslationCapabilities> {
+  const config = await resolveActiveProviderConfig();
+  if (!config) return { batchStream: false };
+
+  return { batchStream: Boolean(createProvider(config).translateBatchStream) };
+}
+
+/**
+ * Routes a full-page batch stream to the active LLM provider.
+ * Traditional providers are rejected explicitly; scalar fallback would defeat batching semantics.
+ */
+export async function translateBatchWithAdapterStream(
+  req: BatchTranslateRequest,
+  onChunk: (chunk: BatchTranslatedChunk) => void,
+): Promise<BatchTranslateResult> {
+  const missingChunkIds = req.chunks.map((chunk) => chunk.chunkId);
+  const config = await resolveActiveProviderConfig();
+
+  if (!config) {
+    return {
+      missingChunkIds,
+      error: errorTypeMessage('no-config'),
+      errorType: 'no-config',
+    };
+  }
+
+  const provider = createProvider(config);
+  if (!provider.translateBatchStream) {
+    return {
+      missingChunkIds,
+      error: '当前翻译源不支持批量流式翻译',
+      errorType: 'unreachable',
+    };
+  }
+
+  return provider.translateBatchStream(req, onChunk);
 }
 
 /**

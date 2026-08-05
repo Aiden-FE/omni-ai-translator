@@ -1,5 +1,12 @@
 // 适配层接口定义 — 所有翻译源实现同一契约
-import type { TranslateChunk, TranslateRequest, TranslateResult } from '@/shared/types';
+import type {
+  BatchTranslateRequest,
+  BatchTranslateResult,
+  BatchTranslatedChunk,
+  TranslateChunk,
+  TranslateRequest,
+  TranslateResult,
+} from '@/shared/types';
 
 /**
  * 统一翻译源接口
@@ -21,4 +28,9 @@ export interface TranslationProvider {
    * 传统源不实现（undefined），适配层回退到 translate() 一次性返回。
    */
   translateStream?(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult>;
+  /** LLM 批量流式翻译；传统翻译源不实现，也不得由适配层逐段回退。 */
+  translateBatchStream?(
+    req: BatchTranslateRequest,
+    onChunk: (chunk: BatchTranslatedChunk) => void,
+  ): Promise<BatchTranslateResult>;
 }

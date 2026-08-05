@@ -1,7 +1,7 @@
 // LLM Provider 错误路径单元测试 — 覆盖 network / rate-limit / unreachable 三类（no-config 在 adapter 层测试）
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createLLMProvider } from '../llm-provider';
-import type { ProviderConfig } from '@/shared/types';
+import type { BatchTranslateRequest, ProviderConfig } from '@/shared/types';
 
 function makeOpenAIConfig(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
   return {
@@ -703,5 +703,200 @@ describe('LLM Provider reasoning artifact boundary', () => {
 
     expect(visible.join('')).toBe('译文');
     expect(result).toEqual({ translatedText: '译文' });
+  });
+});
+
+const batchRequest: BatchTranslateRequest = {
+  targetLang: '中文',
+  chunks: [
+    {
+      chunkId: 'c1',
+      segmentId: 'segment-1',
+      parts: [{ partId: 0, sliceIndex: 0, text: 'Hello' }],
+    },
+    {
+      chunkId: 'c2',
+      segmentId: 'segment-2',
+      parts: [{ partId: 1, sliceIndex: 0, text: 'World' }],
+    },
+  ],
+};
+
+function batchChunkText(chunkId: string, partId: number, text: string): string {
+  return JSON.stringify({
+    chunkId,
+    translatedParts: [{ partId, sliceIndex: 0, text }],
+  });
+}
+
+describe('LLM Provider batch streaming', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('streams validated OpenAI Chat Completions batch chunks progressively', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: batchChunkText('c1', 0, '你好') } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: batchChunkText('c2', 1, '世界') } }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({
+      responseStyle: 'openai-completions',
+      apiKey: 'chat-key',
+    }));
+    const seen: string[] = [];
+
+    const result = await provider.translateBatchStream!(batchRequest, (chunk) => {
+      seen.push(chunk.chunkId);
+    });
+
+    expect(seen).toEqual(['c1', 'c2']);
+    expect(result.missingChunkIds).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/chat/completions');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer chat-key');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.temperature).toBe(0.3);
+    expect(body.messages[0].content).toContain('"chunkId":"c1"');
+  });
+
+  it('streams validated OpenAI Responses batch chunks progressively', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: batchChunkText('c1', 0, '你好') })}\n\n`,
+        `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: batchChunkText('c2', 1, '世界') })}\n\n`,
+        'data: [DONE]\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({
+      responseStyle: 'openai-responses',
+      apiKey: 'responses-key',
+    }));
+    const seen: string[] = [];
+
+    const result = await provider.translateBatchStream!(batchRequest, (chunk) => {
+      seen.push(chunk.chunkId);
+    });
+
+    expect(seen).toEqual(['c1', 'c2']);
+    expect(result.missingChunkIds).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/responses');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer responses-key');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.input).toContain('"chunkId":"c2"');
+  });
+
+  it('streams validated Anthropic batch chunks without enabling thinking', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        'event: content_block_delta\n',
+        `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: batchChunkText('c1', 0, '你好') } })}\n\n`,
+        'event: content_block_delta\n',
+        `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: batchChunkText('c2', 1, '世界') } })}\n\n`,
+        'event: message_stop\n',
+        'data: {"type":"message_stop"}\n\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({
+      responseStyle: 'anthropic',
+      apiKey: 'anthropic-key',
+    }));
+    const seen: string[] = [];
+
+    const result = await provider.translateBatchStream!(batchRequest, (chunk) => {
+      seen.push(chunk.chunkId);
+    });
+
+    expect(seen).toEqual(['c1', 'c2']);
+    expect(result.missingChunkIds).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/messages');
+    expect(fetchMock.mock.calls[0][1].headers['x-api-key']).toBe('anthropic-key');
+    expect(fetchMock.mock.calls[0][1].headers['anthropic-version']).toBe('2023-06-01');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.temperature).toBe(0.3);
+    expect(body.system).toContain('"chunkId":"c1"');
+    expect(body.thinking).toBeUndefined();
+  });
+
+  it('streams validated Ollama batch chunks and sends think false', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        `${JSON.stringify({ message: { content: batchChunkText('c1', 0, '你好') }, done: false })}\n`,
+        `${JSON.stringify({ message: { content: batchChunkText('c2', 1, '世界') }, done: false })}\n`,
+        '{"message":{"content":""},"done":true}\n',
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle: 'ollama' }));
+    const seen: string[] = [];
+
+    const result = await provider.translateBatchStream!(batchRequest, (chunk) => {
+      seen.push(chunk.chunkId);
+    });
+
+    expect(seen).toEqual(['c1', 'c2']);
+    expect(result.missingChunkIds).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/api/chat');
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBeUndefined();
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.stream).toBe(true);
+    expect(body.think).toBe(false);
+    expect(body.options.temperature).toBe(0.3);
+    expect(body.messages[0].content).toContain('"chunkId":"c2"');
+  });
+
+  it('classifies batch HTTP errors and reports every chunk as missing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => 'Too Many Requests',
+    }));
+    const provider = createLLMProvider(makeOpenAIConfig());
+
+    const result = await provider.translateBatchStream!(batchRequest, vi.fn());
+
+    expect(result.missingChunkIds).toEqual(['c1', 'c2']);
+    expect(result.errorType).toBe('rate-limit');
+    expect(result.error).toContain('429');
+  });
+
+  it('redacts API keys from OpenAI Responses batch stream failures', async () => {
+    const apiKey = 'sk-batch-secret';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        `data: ${JSON.stringify({
+          type: 'response.failed',
+          response: { error: { message: `request rejected: ${apiKey}` } },
+        })}\n\n`,
+      ]),
+    }));
+    const provider = createLLMProvider(makeOpenAIConfig({
+      responseStyle: 'openai-responses',
+      apiKey,
+    }));
+
+    const result = await provider.translateBatchStream!(batchRequest, vi.fn());
+
+    expect(result.missingChunkIds).toEqual(['c1', 'c2']);
+    expect(result.errorType).toBe('unreachable');
+    expect(result.error).toContain('[REDACTED]');
+    expect(result.error).not.toContain(apiKey);
   });
 });

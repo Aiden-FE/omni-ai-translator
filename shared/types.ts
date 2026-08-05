@@ -75,6 +75,24 @@ export interface BatchTranslatedChunk {
   translatedParts: BatchTranslatedPart[];
 }
 
+/** 当前翻译源对上层公开的能力，不暴露 provider 配置或凭据。 */
+export interface TranslationCapabilities {
+  batchStream: boolean;
+}
+
+/** 一次 LLM 批量流式翻译请求。 */
+export interface BatchTranslateRequest {
+  targetLang: string;
+  chunks: BatchTranslateChunk[];
+}
+
+/** 批量流结束状态；未校验通过的 chunk 由调用方按 ID 重试。 */
+export interface BatchTranslateResult {
+  missingChunkIds: string[];
+  error?: string;
+  errorType?: ErrorType;
+}
+
 /** 插件设置 */
 export interface Settings {
   activeProviderId: string | null;
@@ -96,6 +114,7 @@ export type Message =
   | { type: 'test-provider'; payload: ProviderConfig }
   | { type: 'get-settings' }
   | { type: 'get-providers' }
+  | { type: 'get-translation-capabilities' }
   | { type: 'get-active-sources' }
   | { type: 'set-active-source'; payload: { id: string } };
 
@@ -123,3 +142,10 @@ export type StreamPortMessage =
   | { type: 'chunk'; deltaText: string }
   | { type: 'done'; result: TranslateResult }
   | { type: 'error'; result: TranslateResult };
+
+/** 全文 LLM 批量流式翻译的专用 Port 契约。 */
+export type BatchStreamPortMessage =
+  | { type: 'request'; requestId: string; targetLang: string; chunks: BatchTranslateChunk[] }
+  | { type: 'chunk'; requestId: string; chunk: BatchTranslatedChunk }
+  | { type: 'done'; requestId: string; missingChunkIds: string[] }
+  | { type: 'error'; requestId: string; result: BatchTranslateResult };

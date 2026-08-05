@@ -3,11 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   translateWithAdapter,
   translateWithAdapterStream,
+  translateBatchWithAdapterStream,
   testWithAdapter,
   getActiveSources,
+  getTranslationCapabilities,
   setActiveSource,
 } from '../index';
-import type { ProviderConfig } from '@/shared/types';
+import type {
+  BatchStreamPortMessage,
+  BatchTranslateRequest,
+  BatchTranslateResult,
+  ProviderConfig,
+} from '@/shared/types';
 
 // Mock browser.storage.local — 模拟 storage 模块
 vi.mock('@/shared/storage', () => ({
@@ -301,5 +308,218 @@ describe('translateWithAdapterStream', () => {
     expect(result.translatedText).toBe('');
     expect(result.errorType).toBe('no-config');
     expect(onChunk).not.toHaveBeenCalled();
+  });
+});
+
+const batchRequest: BatchTranslateRequest = {
+  targetLang: '中文',
+  chunks: [
+    {
+      chunkId: 'c1',
+      segmentId: 'segment-1',
+      parts: [{ partId: 0, sliceIndex: 0, text: 'Hello' }],
+    },
+  ],
+};
+
+describe('batch translation capability and routing', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('reports batchStream only for the active LLM source', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'llm-1', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([
+      {
+        id: 'llm-1',
+        name: 'test-llm',
+        type: 'llm',
+        baseUrl: 'http://localhost:9999/v1',
+        model: 'm',
+      },
+    ]);
+
+    expect(await getTranslationCapabilities()).toEqual({ batchStream: true });
+
+    vi.mocked(getSettings).mockResolvedValue({
+      activeProviderId: 'builtin:microsoft',
+      defaultTargetLang: '',
+    });
+    vi.mocked(getProviders).mockResolvedValue([]);
+
+    expect(await getTranslationCapabilities()).toEqual({ batchStream: false });
+  });
+
+  it('reports no batch stream capability when the active source is missing', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'missing', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([]);
+
+    expect(await getTranslationCapabilities()).toEqual({ batchStream: false });
+  });
+
+  it('routes a batch stream to the active LLM provider', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'llm-1', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([
+      {
+        id: 'llm-1',
+        name: 'test-llm',
+        type: 'llm',
+        baseUrl: 'http://localhost:9999/v1',
+        model: 'm',
+      },
+    ]);
+    const payload = JSON.stringify({
+      chunkId: 'c1',
+      translatedParts: [{ partId: 0, sliceIndex: 0, text: '你好' }],
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: payload } }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ]),
+    }));
+    const seen: string[] = [];
+
+    const result = await translateBatchWithAdapterStream(batchRequest, (chunk) => {
+      seen.push(chunk.chunkId);
+    });
+
+    expect(seen).toEqual(['c1']);
+    expect(result).toEqual({ missingChunkIds: [] });
+  });
+
+  it('returns a typed error for a traditional source without scalar fallback', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      activeProviderId: 'builtin:microsoft',
+      defaultTargetLang: '',
+    });
+    vi.mocked(getProviders).mockResolvedValue([]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await translateBatchWithAdapterStream(batchRequest, vi.fn());
+
+    expect(result.missingChunkIds).toEqual(['c1']);
+    expect(result.errorType).toBe('unreachable');
+    expect(result.error).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('returns no-config for a batch call when the active source is missing', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'missing', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([]);
+    const onChunk = vi.fn();
+
+    const result = await translateBatchWithAdapterStream(batchRequest, onChunk);
+
+    expect(result.missingChunkIds).toEqual(['c1']);
+    expect(result.errorType).toBe('no-config');
+    expect(onChunk).not.toHaveBeenCalled();
+  });
+});
+
+describe('background batch stream port', () => {
+  it('ignores wrong and duplicate messages while preserving requestId through chunk and done', async () => {
+    type PortMessageListener = (message: BatchStreamPortMessage) => void;
+    interface TestPort {
+      name: string;
+      onMessage: { addListener: (listener: PortMessageListener) => void };
+      postMessage: ReturnType<typeof vi.fn>;
+      disconnect: ReturnType<typeof vi.fn>;
+    }
+
+    let connectListener: ((port: TestPort) => void) | undefined;
+    const runtimeMessageListeners: Array<(message: unknown) => unknown> = [];
+    vi.stubGlobal('browser', {
+      contextMenus: {
+        onClicked: { addListener: vi.fn() },
+        create: vi.fn(),
+      },
+      runtime: {
+        onInstalled: { addListener: vi.fn() },
+        onMessage: {
+          addListener: (listener: (message: unknown) => unknown) => {
+            runtimeMessageListeners.push(listener);
+          },
+        },
+        onConnect: {
+          addListener: (listener: (port: TestPort) => void) => {
+            connectListener = listener;
+          },
+        },
+      },
+      tabs: { sendMessage: vi.fn() },
+    });
+    vi.stubGlobal('defineBackground', (setup: () => void) => {
+      setup();
+      return setup;
+    });
+
+    const translator = await import('../index');
+    let finishBatch: ((result: BatchTranslateResult) => void) | undefined;
+    const batchResult = new Promise<BatchTranslateResult>((resolve) => {
+      finishBatch = resolve;
+    });
+    const translateBatchSpy = vi
+      .spyOn(translator, 'translateBatchWithAdapterStream')
+      .mockImplementation(async (_request, onChunk) => {
+        onChunk({
+          chunkId: 'c1',
+          translatedParts: [{ partId: 0, sliceIndex: 0, text: '你好' }],
+        });
+        return batchResult;
+      });
+
+    await import('@/entrypoints/background');
+
+    expect(connectListener).toBeTypeOf('function');
+    const portMessageListeners: PortMessageListener[] = [];
+    const port: TestPort = {
+      name: 'fullpage-translate-batch-stream',
+      onMessage: {
+        addListener: (listener) => portMessageListeners.push(listener),
+      },
+      postMessage: vi.fn(),
+      disconnect: vi.fn(),
+    };
+    connectListener!(port);
+    expect(portMessageListeners).toHaveLength(1);
+
+    const request: BatchStreamPortMessage = {
+      type: 'request',
+      requestId: 'request-7',
+      targetLang: batchRequest.targetLang,
+      chunks: batchRequest.chunks,
+    };
+    portMessageListeners[0]({
+      type: 'done',
+      requestId: 'wrong-type',
+      missingChunkIds: [],
+    });
+    portMessageListeners[0](request);
+    portMessageListeners[0](request);
+
+    expect(translateBatchSpy).toHaveBeenCalledTimes(1);
+    expect(port.postMessage).toHaveBeenCalledWith({
+      type: 'chunk',
+      requestId: 'request-7',
+      chunk: {
+        chunkId: 'c1',
+        translatedParts: [{ partId: 0, sliceIndex: 0, text: '你好' }],
+      },
+    });
+
+    finishBatch!({ missingChunkIds: [] });
+    await vi.waitFor(() => {
+      expect(port.postMessage).toHaveBeenCalledWith({
+        type: 'done',
+        requestId: 'request-7',
+        missingChunkIds: [],
+      });
+      expect(port.disconnect).toHaveBeenCalledTimes(1);
+    });
   });
 });
