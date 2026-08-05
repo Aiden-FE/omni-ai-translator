@@ -2,7 +2,7 @@
 // 传输批次打包器单元测试
 
 import { describe, expect, it } from 'vitest';
-import type { BatchTranslateChunk } from '@/shared/types';
+import type { BatchTranslatedChunk, BatchTranslateChunk } from '@/shared/types';
 import {
   MAX_BATCH_CHUNKS,
   MAX_BATCH_SOURCE_CHARS,
@@ -19,6 +19,11 @@ function wireChunk(chunkId: string, text: string): BatchTranslateChunk {
     parts: [{ partId: 0, sliceIndex: 0, text }],
   };
 }
+
+const translatedWireFixture: BatchTranslatedChunk = {
+  chunkId: 'segment:0',
+  translatedParts: [{ partId: 7, sliceIndex: 0, text: 'translated text' }],
+};
 
 function sourceCodePointCount(chunkOrBatch: BatchTranslateChunk | BatchTranslateChunk[]): number {
   const batch = Array.isArray(chunkOrBatch) ? chunkOrBatch : [chunkOrBatch];
@@ -43,6 +48,13 @@ function segmentWithText(text: string): SegmentRecord {
 }
 
 describe('transport batch packing', () => {
+  it('uses the streaming response wire shape without request-only fields', () => {
+    expect(translatedWireFixture).toEqual({
+      chunkId: 'segment:0',
+      translatedParts: [{ partId: 7, sliceIndex: 0, text: 'translated text' }],
+    });
+  });
+
   it('puts 20 one-character chunks in one request and the 21st in another', () => {
     const chunks = Array.from({ length: 21 }, (_, i) => wireChunk(`c${i}`, 'x'));
 

@@ -66,14 +66,13 @@ export interface BatchTranslateChunk {
 export interface BatchTranslatedPart {
   partId: number;
   sliceIndex: number;
-  translatedText: string;
+  text: string;
 }
 
 /** 全文翻译批量响应中的一个已翻译 transport chunk。 */
 export interface BatchTranslatedChunk {
   chunkId: string;
-  segmentId: string;
-  parts: BatchTranslatedPart[];
+  translatedParts: BatchTranslatedPart[];
 }
 
 /** 插件设置 */
