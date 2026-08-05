@@ -108,6 +108,7 @@ describe('LLM Provider 错误归一化', () => {
     await provider.translate(baseReq);
     const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(callBody.stream).toBe(false);
+    expect(callBody.think).toBe(false);
     // Ollama 路径无 Authorization 头
     const callHeaders = fetchMock.mock.calls[0][1].headers;
     expect(callHeaders['Authorization']).toBeUndefined();
@@ -553,6 +554,7 @@ describe('LLM Provider 流式翻译', () => {
     // 验证请求体含 stream: true
     const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(callBody.stream).toBe(true);
+    expect(callBody.think).toBe(false);
   });
 
   it('流式 429 → rate-limit 错误,不调 onChunk', async () => {
@@ -624,5 +626,81 @@ describe('LLM Provider 流式翻译', () => {
     expect(result.translatedText).toBe('部分');
     expect(result.errorType).toBe('network');
     expect(result.error).toContain('Network error');
+  });
+});
+
+describe('LLM Provider reasoning artifact boundary', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ['OpenAI Chat Completions', 'openai-completions', {
+      choices: [{ message: { content: '<think>hidden</think>译文</s>' } }],
+    }],
+    ['OpenAI Responses', 'openai-responses', {
+      output_text: '<analysis>hidden</analysis>译文</s>',
+    }],
+    ['Anthropic', 'anthropic', {
+      content: [{ text: '<think>hidden</think>译文</s>' }],
+    }],
+    ['Ollama', 'ollama', {
+      message: { content: '<analysis>hidden</analysis>译文</s>' },
+    }],
+  ] as const)('%s non-streaming output omits reasoning artifacts', async (_name, responseStyle, body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => body,
+    }));
+
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle }));
+    const result = await provider.translate(baseReq);
+
+    expect(result).toEqual({ translatedText: '译文' });
+  });
+
+  it.each([
+    ['OpenAI Chat Completions', 'openai-completions', [
+      'data: {"choices":[{"delta":{"content":"<thi"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"nk>hidden</th"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"ink>译文</s>"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ]],
+    ['OpenAI Responses', 'openai-responses', [
+      'data: {"type":"response.output_text.delta","delta":"<thi"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"nk>hidden</th"}\n\n',
+      'data: {"type":"response.output_text.delta","delta":"ink>译文</s>"}\n\n',
+      'data: [DONE]\n\n',
+    ]],
+    ['Anthropic', 'anthropic', [
+      'event: content_block_delta\n',
+      'data: {"delta":{"text":"<thi"}}\n\n',
+      'event: content_block_delta\n',
+      'data: {"delta":{"text":"nk>hidden</th"}}\n\n',
+      'event: content_block_delta\n',
+      'data: {"delta":{"text":"ink>译文</s>"}}\n\n',
+      'event: message_stop\n',
+      'data: {"type":"message_stop"}\n\n',
+    ]],
+    ['Ollama', 'ollama', [
+      '{"message":{"content":"<thi"},"done":false}\n',
+      '{"message":{"content":"nk>hidden</th"},"done":false}\n',
+      '{"message":{"content":"ink>译文</s>"},"done":false}\n',
+      '{"message":{"content":""},"done":true}\n',
+    ]],
+  ] as const)('%s streaming output never emits reasoning artifacts', async (_name, responseStyle, streamChunks) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeReadableStream(streamChunks),
+    }));
+
+    const provider = createLLMProvider(makeOpenAIConfig({ responseStyle }));
+    const visible: string[] = [];
+    const result = await provider.translateStream!(baseReq, (chunk) => visible.push(chunk.deltaText));
+
+    expect(visible.join('')).toBe('译文');
+    expect(result).toEqual({ translatedText: '译文' });
   });
 });

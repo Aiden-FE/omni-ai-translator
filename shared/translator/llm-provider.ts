@@ -4,6 +4,7 @@ import type { ProviderConfig, TranslateChunk, TranslateRequest, TranslateResult 
 import type { TranslationProvider } from './types';
 import { classifyError } from './error';
 import { normalizeLlmProtocol, resolveLlmEndpoint } from './llm-protocol';
+import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reasoning-filter';
 
 function buildPrompt(text: string, targetLang: string, sourceLang?: string): string {
   const source = sourceLang ? `from ${sourceLang} ` : '';
@@ -36,7 +37,7 @@ async function callOpenAICompletions(
   }
   const data = await resp.json();
   const translatedText = data?.choices?.[0]?.message?.content?.trim() ?? '';
-  return { translatedText };
+  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,7 +123,7 @@ async function callOpenAIResponses(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const data: unknown = await resp.json();
-  return { translatedText: extractResponsesText(data) };
+  return { translatedText: sanitizeReasoningArtifacts(extractResponsesText(data)) };
 }
 
 /**
@@ -155,7 +156,7 @@ async function callAnthropic(
   }
   const data = await resp.json();
   const translatedText = data?.content?.[0]?.text?.trim() ?? '';
-  return { translatedText };
+  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
 }
 
 /**
@@ -172,6 +173,7 @@ async function callOllama(
     body: JSON.stringify({
       model: provider.model,
       stream: false,
+      think: false,
       messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
       options: { temperature: 0.3 },
     }),
@@ -182,7 +184,7 @@ async function callOllama(
   }
   const data = await resp.json();
   const translatedText = data?.message?.content?.trim() ?? '';
-  return { translatedText };
+  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
 }
 
 // ─── 流式实现 ───
@@ -240,7 +242,7 @@ async function callOpenAICompletionsStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  let translatedText = '';
+  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -251,8 +253,7 @@ async function callOpenAICompletionsStream(
         const parsed = JSON.parse(data);
         const delta = parsed?.choices?.[0]?.delta?.content;
         if (delta) {
-          translatedText += delta;
-          onChunk({ deltaText: delta });
+          filter.push(delta);
         }
       } catch {
         // 跳过无法解析的行（可能是 SSE 注释行或不完整 JSON）
@@ -262,12 +263,12 @@ async function callOpenAICompletionsStream(
     // 流读取中断：返回已收到的部分译文 + network 错误
     const errorType = classifyError(err);
     return {
-      translatedText,
+      translatedText: filter.finish(),
       error: err instanceof Error ? err.message : String(err),
       errorType,
     };
   }
-  return { translatedText: translatedText.trim() };
+  return { translatedText: filter.finish() };
 }
 
 async function callOpenAIResponsesStream(
@@ -294,7 +295,7 @@ async function callOpenAIResponsesStream(
   }
 
   const reader = resp.body!.getReader();
-  let translatedText = '';
+  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -307,7 +308,7 @@ async function callOpenAIResponsesStream(
         const failure = extractResponsesStreamFailure(parsed, provider.apiKey);
         if (failure) {
           return {
-            translatedText: translatedText.trim(),
+            translatedText: filter.finish(),
             error: failure,
             errorType: 'unreachable',
           };
@@ -317,8 +318,7 @@ async function callOpenAIResponsesStream(
           parsed.type === 'response.output_text.delta'
           && typeof parsed.delta === 'string'
         ) {
-          translatedText += parsed.delta;
-          onChunk({ deltaText: parsed.delta });
+          filter.push(parsed.delta);
         }
       } catch {
         // 兼容网关可能混入注释或无法解析的数据事件。
@@ -327,12 +327,12 @@ async function callOpenAIResponsesStream(
   } catch (err) {
     const errorType = classifyError(err);
     return {
-      translatedText,
+      translatedText: filter.finish(),
       error: err instanceof Error ? err.message : String(err),
       errorType,
     };
   }
-  return { translatedText: translatedText.trim() };
+  return { translatedText: filter.finish() };
 }
 
 /**
@@ -367,7 +367,7 @@ async function callAnthropicStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  let translatedText = '';
+  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
   let currentEvent = '';
   try {
     for await (const line of readLines(reader)) {
@@ -390,8 +390,7 @@ async function callAnthropicStream(
             const parsed = JSON.parse(data);
             const delta = parsed?.delta?.text;
             if (delta) {
-              translatedText += delta;
-              onChunk({ deltaText: delta });
+              filter.push(delta);
             }
           } catch {
             // 跳过无法解析的行
@@ -402,12 +401,12 @@ async function callAnthropicStream(
   } catch (err) {
     const errorType = classifyError(err);
     return {
-      translatedText,
+      translatedText: filter.finish(),
       error: err instanceof Error ? err.message : String(err),
       errorType,
     };
   }
-  return { translatedText: translatedText.trim() };
+  return { translatedText: filter.finish() };
 }
 
 /**
@@ -427,6 +426,7 @@ async function callOllamaStream(
     body: JSON.stringify({
       model: provider.model,
       stream: true,
+      think: false,
       messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
       options: { temperature: 0.3 },
     }),
@@ -436,7 +436,7 @@ async function callOllamaStream(
     return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
   }
   const reader = resp.body!.getReader();
-  let translatedText = '';
+  const filter = createReasoningStreamFilter((deltaText) => onChunk({ deltaText }));
   try {
     for await (const line of readLines(reader)) {
       const trimmed = line.trim();
@@ -445,8 +445,7 @@ async function callOllamaStream(
         const parsed = JSON.parse(trimmed);
         const delta = parsed?.message?.content;
         if (delta) {
-          translatedText += delta;
-          onChunk({ deltaText: delta });
+          filter.push(delta);
         }
         // Ollama 流结束信号：done=true 或 response 为空
         if (parsed?.done) break;
@@ -457,12 +456,12 @@ async function callOllamaStream(
   } catch (err) {
     const errorType = classifyError(err);
     return {
-      translatedText,
+      translatedText: filter.finish(),
       error: err instanceof Error ? err.message : String(err),
       errorType,
     };
   }
-  return { translatedText: translatedText.trim() };
+  return { translatedText: filter.finish() };
 }
 
 /**
