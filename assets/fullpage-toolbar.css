@@ -67,6 +67,35 @@
   }
 }
 
+/* 不定态脉冲（chunker 流式收集阶段: total 未知）
+ * 使用 background-position 走马灯 + 进度条全宽, CSS 动画。
+ * shadow 边界隔离, prefers-reduced-motion 在底部 @media 中关闭。 */
+:host([data-indeterminate]) .llm-translator-toolbar-progress {
+  position: relative;
+  overflow: hidden;
+}
+:host([data-indeterminate]) .llm-translator-toolbar-progress::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    hsl(var(--translator-toolbar-fg) / 0.25) 50%,
+    transparent 100%
+  );
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: llm-translator-toolbar-stripe 1.2s linear infinite;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+@keyframes llm-translator-toolbar-stripe {
+  from { background-position: -50% 0; }
+  to   { background-position: 150% 0; }
+}
+
 /* ---- 迷你把手（默认隐藏，收起状态显示） ---- */
 .llm-translator-mini-handle {
   display: none;
@@ -181,7 +210,8 @@
 @media (prefers-reduced-motion: reduce) {
   .llm-translator-toolbar-btn,
   .llm-translator-mini-handle,
-  .llm-translator-toolbar-progress-spinner {
+  .llm-translator-toolbar-progress-spinner,
+  .llm-translator-toolbar-progress::before {
     transition: none;
     animation: none;
   }

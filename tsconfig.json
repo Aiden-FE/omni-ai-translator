@@ -1,8 +1,10 @@
 {
+  // WXT 0.19 在 .wxt/tsconfig.json 输出三斜线引用 + SFC vite builder env,
+  // 这是 vue-tsc 看到 browser / defineBackground / defineContentScript 等
+  // 全局声明的入口。手写 tsconfig 不继承的话 vue-tsc 报 25+ TS2304
+  // (e2e/options/popup/background 等全部 .vue/.ts 文件命中)。
+  "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -11,6 +13,7 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "jsx": "preserve",
+    "noEmit": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "types": ["chrome", "wxt/client"],
     "baseUrl": ".",
@@ -20,6 +23,8 @@
   },
   "include": [
     "env.d.ts",
+    "shims-vue.d.ts",
+    ".wxt/wxt.d.ts",
     ".wxt/types/**/*.d.ts",
     "entrypoints/**/*",
     "shared/**/*",

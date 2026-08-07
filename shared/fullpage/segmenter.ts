@@ -1,4 +1,10 @@
 // 页面分段收集器 - 从 DOM 递归遍历提取可翻译文本段
+//
+// 本模块对外提供两类 API:
+// 1. 同步收集 (collectSegments / collectSemanticSegments): 返回完整数组,供一次性调用。
+// 2. 回调式遍历 (walkSegments / walkSemanticSegments): 供需要逐段处理的简单场景。
+// 3. 异步迭代器 (walkSegmentsGen / walkSemanticSegmentsGen): 供 chunker 等需要在
+//    遍历过程中让出主线程的场景;generator 在每个段之间暂停,调用方可插入 idle 调度。
 
 import type { SegmentRecord, SegmenterOptions, SegmentTextPart } from './types';
 
@@ -189,86 +195,6 @@ function generateSegmentId(el: HTMLElement, text: string): string {
   return `${buildDomPath(el)}:${hashText(text)}`;
 }
 
-/**
- * 从 root 递归遍历，收集可翻译文本段。
- *
- * 「段」= 自身直接子文本节点拼接（trim 后）非空且含字母的块级/行内元素。
- * 嵌套允许：父段只含自己的直接文本节点（不含子元素内文本），并对子元素继续递归，
- * 因此即便父元素直接文本无字母/为空/非块行内，仍会向下递归收集子元素中的段。
- *
- * @param root - 遍历根节点（可为 Document / DocumentFragment / Element）
- * @param options - 分段选项
- * @returns 分段记录数组
- */
-export function collectSegments(
-  root: ParentNode,
-  options: SegmenterOptions = {},
-): SegmentRecord[] {
-  const segments: SegmentRecord[] = [];
-
-  function traverse(node: Node): void {
-    // 文本节点由其父元素处理
-    if (node.nodeType === Node.TEXT_NODE) {
-      return;
-    }
-
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as Element;
-
-      // 剪枝：扩展注入子树（自身或祖先带 data-llm-translator）——整棵子树不递归
-      if (shouldSkipElement(el) || hasTranslatorAncestor(el)) {
-        return;
-      }
-      // 剪枝：跳过标签（SCRIPT/STYLE/...）——内部不递归
-      if (SKIP_TAGS.has(el.tagName)) {
-        return;
-      }
-      // 剪枝：display:none 不可见子树
-      if (!options.skipVisibilityCheck && el instanceof HTMLElement && isHiddenByDisplay(el)) {
-        return;
-      }
-
-      // 尝试从直接子文本节点构造段。
-      // 注意：此处不 return——即便不构成段（无字母/为空/非块行内），也继续向下递归，
-      // 以满足「嵌套允许」：父元素自身不成段时，子元素仍可独立成段。
-      const textNodes = getDirectTextNodes(el);
-      if (textNodes.length > 0) {
-        const rawText = textNodes.map((tn) => tn.textContent ?? '').join('');
-        const trimmedText = rawText.trim();
-
-        if (
-          trimmedText.length > 0 &&
-          hasLetterChar(trimmedText) &&
-          (isBlockElement(el) || isInlineElement(el))
-        ) {
-          segments.push({
-            id: generateSegmentId(el as HTMLElement, trimmedText),
-            el: el as HTMLElement,
-            textNodes,
-            originalText: trimmedText,
-            status: 'pending',
-          });
-        }
-      }
-    }
-
-    // 递归遍历子节点：元素 / 文档 / 文档片段均递归
-    // （跳过标签与注入子树已在上方剪枝处 return，不会进入此分支）
-    if (
-      node.nodeType === Node.ELEMENT_NODE ||
-      node.nodeType === Node.DOCUMENT_NODE ||
-      node.nodeType === Node.DOCUMENT_FRAGMENT_NODE
-    ) {
-      for (const child of node.childNodes) {
-        traverse(child);
-      }
-    }
-  }
-
-  traverse(root);
-  return segments;
-}
-
 /** 判断语义收集时是否应剪枝当前元素及其全部子树。 */
 function shouldPruneSemanticElement(el: Element, options: SegmenterOptions): boolean {
   return (
@@ -308,38 +234,95 @@ function getSemanticTextNodes(owner: Element, options: SegmenterOptions): Text[]
   return textNodes;
 }
 
+/** flat 段构造工具: 直接子文本节点拼接,有字母且 (块级|行内)。 */
+function buildFlatSegment(el: HTMLElement, textNodes: Text[]): SegmentRecord | null {
+  if (textNodes.length === 0) return null;
+  const rawText = textNodes.map((tn) => tn.textContent ?? '').join('');
+  const trimmedText = rawText.trim();
+  if (
+    trimmedText.length === 0
+    || !hasLetterChar(trimmedText)
+    || (!isBlockElement(el) && !isInlineElement(el))
+  ) {
+    return null;
+  }
+  return {
+    id: generateSegmentId(el, trimmedText),
+    el,
+    textNodes,
+    originalText: trimmedText,
+    status: 'pending',
+  };
+}
+
+/** semantic 段构造工具: 收集 owner 的所有穿透文本,有字母且 trim 非空。 */
+function buildSemanticSegment(el: HTMLElement, options: SegmenterOptions): SegmentRecord | null {
+  const textNodes = getSemanticTextNodes(el, options);
+  const rawText = textNodes.map((node) => node.data).join('');
+  const originalText = rawText.trim();
+  if (originalText.length === 0 || !hasLetterChar(originalText)) return null;
+  const parts: SegmentTextPart[] = textNodes.map((node, id) => ({
+    id,
+    node,
+    sourceText: node.data,
+  }));
+  return {
+    id: generateSegmentId(el, originalText),
+    el,
+    textNodes,
+    originalText,
+    parts,
+    status: 'pending',
+  };
+}
+
 /**
- * 收集语义段：一个可翻译块拥有其所有行内后代文本，但不跨越嵌套块级边界。
- * 未被块级元素拥有的独立行内/控件元素仍作为单独段，供页面孤立交互元素翻译。
+ * 异步迭代器: 深度优先遍历 DOM, 逐段 yield SegmentRecord。
+ * 供 chunker 在 walk 过程中让出主线程使用; 普通调用方请用 collectSegments 或 walkSegments。
  */
-export function collectSemanticSegments(
+export function* walkSegmentsGen(
   root: ParentNode,
   options: SegmenterOptions = {},
-): SegmentRecord[] {
-  const segments: SegmentRecord[] = [];
+): Generator<SegmentRecord> {
+  function* traverse(node: Node): Generator<SegmentRecord> {
+    if (node.nodeType === Node.TEXT_NODE) return;
 
-  function addSegment(el: HTMLElement): void {
-    const textNodes = getSemanticTextNodes(el, options);
-    const rawText = textNodes.map((node) => node.data).join('');
-    const originalText = rawText.trim();
-    if (originalText.length === 0 || !hasLetterChar(originalText)) return;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as Element;
+      if (shouldSkipElement(el) || hasTranslatorAncestor(el)) return;
+      if (SKIP_TAGS.has(el.tagName)) return;
+      if (!options.skipVisibilityCheck && el instanceof HTMLElement && isHiddenByDisplay(el)) {
+        return;
+      }
+      const textNodes = getDirectTextNodes(el);
+      if (textNodes.length > 0) {
+        const seg = buildFlatSegment(el as HTMLElement, textNodes);
+        if (seg) yield seg;
+      }
+    }
 
-    const parts: SegmentTextPart[] = textNodes.map((node, id) => ({
-      id,
-      node,
-      sourceText: node.data,
-    }));
-    segments.push({
-      id: generateSegmentId(el, originalText),
-      el,
-      textNodes,
-      originalText,
-      parts,
-      status: 'pending',
-    });
+    if (
+      node.nodeType === Node.ELEMENT_NODE
+      || node.nodeType === Node.DOCUMENT_NODE
+      || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE
+    ) {
+      for (const child of node.childNodes) {
+        yield* traverse(child);
+      }
+    }
   }
+  yield* traverse(root);
+}
 
-  function traverse(node: Node, ownedBySemanticOwner: boolean): void {
+/**
+ * 异步迭代器: 语义段深度优先遍历。
+ * 一个可翻译块拥有其所有行内后代文本,但不跨越嵌套块级边界。
+ */
+export function* walkSemanticSegmentsGen(
+  root: ParentNode,
+  options: SegmenterOptions = {},
+): Generator<SegmentRecord> {
+  function* traverse(node: Node, ownedBySemanticOwner: boolean): Generator<SegmentRecord> {
     if (node.nodeType === Node.TEXT_NODE) return;
 
     if (node.nodeType === Node.ELEMENT_NODE) {
@@ -350,28 +333,63 @@ export function collectSemanticSegments(
       const isStandaloneInlineOwner = !ownedBySemanticOwner && isInlineElement(el);
       const isSemanticOwner = isBlockOwner || isStandaloneInlineOwner;
       if (isSemanticOwner) {
-        addSegment(el as HTMLElement);
+        const seg = buildSemanticSegment(el as HTMLElement, options);
+        if (seg) yield seg;
       }
 
       for (const child of el.childNodes) {
-        // Nested blocks start a new ownership boundary even inside inline markup.
         const startsNestedBlock =
           child.nodeType === Node.ELEMENT_NODE && isSemanticBlockElement(child as Element);
-        traverse(child, startsNestedBlock ? false : ownedBySemanticOwner || isSemanticOwner);
+        yield* traverse(child, startsNestedBlock ? false : ownedBySemanticOwner || isSemanticOwner);
       }
       return;
     }
 
-    if (
-      node.nodeType === Node.DOCUMENT_NODE ||
-      node.nodeType === Node.DOCUMENT_FRAGMENT_NODE
-    ) {
+    if (node.nodeType === Node.DOCUMENT_NODE || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
       for (const child of node.childNodes) {
-        traverse(child, false);
+        yield* traverse(child, false);
       }
     }
   }
+  yield* traverse(root, false);
+}
 
-  traverse(root, false);
-  return segments;
+/**
+ * 从 root 递归遍历,同步收集所有可翻译文本段并返回数组。
+ * @param root - 遍历根节点 (可为 Document / DocumentFragment / Element)
+ * @param options - 分段选项
+ */
+export function collectSegments(
+  root: ParentNode,
+  options: SegmenterOptions = {},
+): SegmentRecord[] {
+  return Array.from(walkSegmentsGen(root, options));
+}
+
+export function collectSemanticSegments(
+  root: ParentNode,
+  options: SegmenterOptions = {},
+): SegmentRecord[] {
+  return Array.from(walkSemanticSegmentsGen(root, options));
+}
+
+/** 回调式遍历: 同步逐段回调(无让出,供不需要分片的简单场景)。 */
+export function walkSegments(
+  root: ParentNode,
+  callback: (seg: SegmentRecord) => void,
+  options: SegmenterOptions = {},
+): void {
+  for (const seg of walkSegmentsGen(root, options)) {
+    callback(seg);
+  }
+}
+
+export function walkSemanticSegments(
+  root: ParentNode,
+  callback: (seg: SegmentRecord) => void,
+  options: SegmenterOptions = {},
+): void {
+  for (const seg of walkSemanticSegmentsGen(root, options)) {
+    callback(seg);
+  }
 }

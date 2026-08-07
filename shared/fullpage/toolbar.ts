@@ -38,6 +38,12 @@ export interface ToolbarApi {
   setProgress(progress: TranslationProgress): void;
   /** 设置失败段落数：n>0 显示重试按钮并带计数徽标，n=0 隐藏 */
   setFailureCount(n: number): void;
+  /**
+   * 切换进度不定态脉冲(用于 chunker 流式收集阶段, total 未知)。
+   * true: 进度行脱去 M/N 文案, 进入"全文翻译中…" + 走马灯动画。
+   * false: 恢复 M/N 文案 + 真实进度。
+   */
+  setIndeterminate(on: boolean): void;
   /** 隐藏工具栏，显示迷你把手 */
   collapse(): void;
   /** 隐藏迷你把手，显示工具栏 */
@@ -196,6 +202,14 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
     }
   }
 
+  function setIndeterminate(on: boolean): void {
+    host.toggleAttribute('data-indeterminate', on);
+    if (on) {
+      progressText.textContent = '全文翻译中…';
+    }
+    // 关闭时: 不重置文案, 留给下一次 setProgress 调用(M/N 已知)
+  }
+
   function collapse(): void {
     host.setAttribute('data-collapsed', '');
   }
@@ -214,6 +228,7 @@ export function createToolbar(callbacks: ToolbarCallbacks): ToolbarApi {
     setMode,
     setProgress,
     setFailureCount,
+    setIndeterminate,
     collapse,
     expand,
     destroy,
