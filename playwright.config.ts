@@ -10,6 +10,7 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
+  // 三通道顺序跑 (firefox / edge / chromium),避免持久化上下文竞争
   workers: 1,
   retries: 0,
   use: {
@@ -23,6 +24,18 @@ export default defineConfig({
         // 扩展加载参数在 fixture 中通过 launchPersistentContext 注入
         channel: 'chromium',
       },
+    },
+    {
+      // Firefox 通道冒烟(Q26=C): 仅验证 MV2 manifest 转换 + 扩展加载。
+      // 实际跑需在 CI 装 firefox: pnpm exec playwright install firefox
+      name: 'firefox',
+      use: { browserName: 'firefox' },
+    },
+    {
+      // Edge 通道: 与 chromium 共二进制。CI 跑需装 msedge 通道:
+      // pnpm exec playwright install msedge
+      name: 'edge',
+      use: { channel: 'msedge' },
     },
   ],
   // 不用默认 browserType.launch,扩展需持久化上下文
