@@ -262,12 +262,14 @@ jobs:
           CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
           EXTENSION_ID: ${{ secrets.CHROME_ITEM_ID }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
         run: |
           MISSING=""
           [ -z "$CLIENT_ID" ] && MISSING="$MISSING CHROME_CLIENT_ID"
           [ -z "$CLIENT_SECRET" ] && MISSING="$MISSING CHROME_CLIENT_SECRET"
           [ -z "$REFRESH_TOKEN" ] && MISSING="$MISSING CHROME_REFRESH_TOKEN"
           [ -z "$EXTENSION_ID" ] && MISSING="$MISSING CHROME_ITEM_ID"
+          [ -z "$PUBLISHER_ID" ] && MISSING="$MISSING CHROME_PUBLISHER_ID"
           if [ -n "$MISSING" ]; then
             echo "::error::Missing required GitHub Secrets:$MISSING"
             echo ""
@@ -278,6 +280,7 @@ jobs:
             echo "  CHROME_CLIENT_SECRET  - Google OAuth2 client secret"
             echo "  CHROME_REFRESH_TOKEN  - OAuth2 refresh token"
             echo "  CHROME_ITEM_ID        - Chrome Web Store extension ID"
+            echo "  CHROME_PUBLISHER_ID   - Chrome Web Store publisher ID (cli v4 / CWS API v2 必填)"
             echo ""
             echo "Guide: https://github.com/fregante/chrome-webstore-upload-keys"
             exit 1
@@ -287,6 +290,7 @@ jobs:
       # ----------------------------------------------------------------
       # Upload and publish extension to Chrome Web Store.
       # Uses chrome-webstore-upload-cli v4 (Chrome Web Store API v2).
+      # v4 必填 publisherId（CLI 从 PUBLISHER_ID 环境变量读取）。
       # Credentials are passed via environment variables only.
       # ----------------------------------------------------------------
       - name: Upload and publish to Chrome Web Store
@@ -296,6 +300,7 @@ jobs:
           CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
           CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
           REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
         run: |
           npx --yes chrome-webstore-upload-cli@4 --source "${{ steps.zip.outputs.path }}"
           echo "✓ Extension uploaded and published to Chrome Web Store"
