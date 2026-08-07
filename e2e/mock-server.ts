@@ -63,6 +63,14 @@ interface PendingBatchChunk {
 /** 非流式成功响应的可观测延迟(ms):使全文翻译「先译完的段落先渲染」可被 e2e 相对时序断言 */
 export const NONSTREAM_DELAY_MS = 300;
 
+/** 可变模拟延迟，供 e2e perf 测点调为 0 隔离段收集/调度成本。 */
+let mockLatencyMs = NONSTREAM_DELAY_MS;
+
+/** e2e 调入：覆盖当前会话的 mock 响应延迟；调 0 隔离首段收集时延。 */
+export function setMockLatencyMs(ms: number): void {
+  mockLatencyMs = Math.max(0, ms);
+}
+
 /** 按路由(pathname,不含 query)累计的请求计数,供缓存复用/免重译断言 */
 const requestCounts = new Map<string, number>();
 const capturedBatchRequests: CapturedBatchRequest[] = [];
@@ -407,7 +415,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendOpenAIStream(res, parsedBody, failMode);
           } else {
-            await sleep(NONSTREAM_DELAY_MS);
+            await sleep(mockLatencyMs);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -429,7 +437,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendOpenAIResponsesStream(res);
           } else {
-            await sleep(NONSTREAM_DELAY_MS);
+            await sleep(mockLatencyMs);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ output_text: '你好,世界', output: [] }));
           }
@@ -441,7 +449,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendAnthropicStream(res);
           } else {
-            await sleep(NONSTREAM_DELAY_MS);
+            await sleep(mockLatencyMs);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -462,7 +470,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           if (isStream) {
             await sendOllamaStream(res);
           } else {
-            await sleep(NONSTREAM_DELAY_MS);
+            await sleep(mockLatencyMs);
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(
               JSON.stringify({
@@ -478,7 +486,7 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
         // 微软官方 translate 端点（有 Key 场景）：POST /translate?api-version=3.0&to=...
         // 返回微软响应格式,供有 Key e2e 验证官方端点落点与鉴权 header
         if (req.method === 'POST' && req.url?.includes('/translate')) {
-          await sleep(NONSTREAM_DELAY_MS);
+          await sleep(mockLatencyMs);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(
             JSON.stringify([{ translations: [{ text: '你好,世界', to: 'zh' }] }]),
