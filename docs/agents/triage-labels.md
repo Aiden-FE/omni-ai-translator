@@ -1,15 +1,39 @@
 # Triage Labels（分流标签）
 
-各技能按五个规范的分流角色来表达工单状态。本文件把这五个角色映射到本仓库工单系统中实际使用的标签字符串。
+本仓库同时使用两套标签，互不替代。
 
-| mattpocock/skills 中的角色 | 本仓库实际使用的标签 | 含义                     |
-| -------------------------- | -------------------- | ------------------------ |
-| `needs-triage`             | `needs-triage`       | 维护者还需要评估该工单   |
-| `needs-info`               | `needs-info`         | 等待报告人补充信息       |
-| `ready-for-agent`          | `ready-for-agent`    | 需求已明确，可交给 Agent |
-| `ready-for-human`          | `ready-for-human`    | 需要人工实现             |
-| `wontfix`                  | `wontfix`            | 不予处理                 |
+## 角色标签（主分流信号，与 mattpocock/skills 默认对齐）
 
-当某个技能提到一个角色（例如"打上 AFK-ready 分流标签"），就使用本表对应行的实际标签字符串。
+| 角色 | 本仓库实际标签 | 含义 |
+| --- | --- | --- |
+| `needs-triage` | `needs-triage` | 维护者还需评估 |
+| `needs-info` | `needs-info` | 等待报告人补充信息 |
+| `ready-for-agent` | `ready-for-agent` | 需求明确，可交给 Agent |
+| `ready-for-human` | `ready-for-human` | 需人工实现 |
+| `wontfix` | `wontfix` | 不予处理 |
 
-可以随时编辑右列的标签，使其与本仓库实际使用的词汇保持一致。
+主标签**必须**出现在每个工单上，作为「是否有人接、走哪条路径」的判定依据。`/triage` 技能按主标签决策流转。
+
+## 项目标签（领域元数据，辅助分流）
+
+主标签是分流轴，项目标签是过滤轴。**项目标签不替代主标签。**
+
+| 标签 | 含义 | 与主标签组合 |
+| --- | --- | --- |
+| `AI` | AI 处理的 Issue（v0.2+ 流程） | 配合 `ready-for-agent` |
+| `PRD` | 需求规格前置 | 配合 `ready-for-agent` 或 `ready-for-human` |
+| `bug` | 缺陷 | 配合 `needs-triage`（入口）或 `ready-for-agent`（已诊断） |
+| `enhancement` | 改进 | 配合 `ready-for-agent` |
+| `前端` | 前端研发任务 | 跨主标签 |
+| `后端` | 后端研发任务 | 跨主标签 |
+| `全栈` | 前后端联动 | 跨主标签 |
+
+## 使用规则
+
+- 新建工单**至少**打 1 个主标签；项目标签按需附加。
+- 主标签变更触发 `/triage` 重新分诊；项目标签变更不影响分诊。
+- 历史工单（v0.2 之前）已带项目标签，可补主标签；不可只保留项目标签。
+
+## 修改
+
+主标签与 mattpocock/skills 默认一致，**不要修改**。项目标签由本表维护，扩展时追加一行即可。
