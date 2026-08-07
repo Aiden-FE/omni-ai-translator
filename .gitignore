@@ -12,6 +12,7 @@ dist/
 /playwright-report/
 /blob-report/
 /playwright/.cache
+!.codegraph/.gitignore
 .codegraph/
 .pnpm-store
 .worktrees
