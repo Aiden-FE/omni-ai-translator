@@ -451,6 +451,7 @@ describe('loading 标记与聚合进度', () => {
 
     const startPromise = start('replace');
     await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); }); // chunker 走完 + pool 开始派发
 
     expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(2);
     expect(toolbarText()).toContain('全文翻译 0/2');
@@ -462,6 +463,7 @@ describe('loading 标记与聚合进度', () => {
     expect(toolbarText()).toContain('全文翻译 1/2');
 
     resolveSecond({ translatedText: '第二段' });
+    await drainMicrotasks();
     await startPromise;
 
     expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(0);
@@ -620,6 +622,7 @@ describe('工具栏回调', () => {
       return { translatedText: `[重试] ${text}` };
     });
     await start('replace');
+    await new Promise((r) => { setTimeout(r, 0); }); // chunker 走完 + 5 段全入池
     expect(sendMessage).toHaveBeenCalledTimes(5);
 
     retrying = true;
@@ -648,6 +651,7 @@ describe('onSettled 守卫', () => {
 
     const startPromise = start('replace');
     await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
 
     expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
     expect(toolbarText()).toContain('全文翻译 0/1');
@@ -658,6 +662,8 @@ describe('onSettled 守卫', () => {
     expect(document.querySelectorAll('[data-llm-translator]')).toHaveLength(0);
 
     resolveGate({ translatedText: '[译] slow text' });
+    await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
     await startPromise;
 
     // 段状态仍推进为 done（缓存已写入），但 DOM 不渲染译文
@@ -676,10 +682,13 @@ describe('onSettled 守卫', () => {
 
     const startPromise = start('replace');
     await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
 
     const p = document.querySelector('p')!;
     p.remove();
     resolveGate({ translatedText: '[译] removable text' });
+    await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
     await startPromise;
 
     expect(__getState().records[0].status).toBe('done');
@@ -706,13 +715,16 @@ describe('onSettled 守卫', () => {
     });
 
     await start('replace');
+    await new Promise((r) => { setTimeout(r, 0); }); // chunker 走完 + 1 段入池失败
     const oldRecord = __getState().records[0];
     getRetryButton().click();
     await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
 
     clickToolbarButtonByText('恢复原文');
     const restartPromise = start('bilingual');
     await drainMicrotasks();
+    await new Promise((r) => { setTimeout(r, 0); });
     expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(__getState().records[0]).not.toBe(oldRecord);
 
@@ -724,6 +736,7 @@ describe('onSettled 守卫', () => {
     expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(1);
 
     resolveRestart({ translatedText: '新会话译文' });
+    await drainMicrotasks();
     await restartPromise;
     const blocks = document.querySelectorAll('.llm-translator-block-host');
     expect(blocks).toHaveLength(1);

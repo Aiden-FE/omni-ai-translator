@@ -8,7 +8,7 @@
 // segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是唯一状态持有者。
 // 样式隔离约定：所有注入 DOM 带 data-llm-translator（分段排除、观察器过滤、恢复清理均依赖）。
 
-import { collectSegments, collectSemanticSegments } from './segmenter';
+import { collectSegments, collectSemanticSegments, walkSegments, walkSemanticSegments } from './segmenter';
 import {
   runPool,
   retrySegments,
@@ -32,6 +32,12 @@ import {
   restoreAll,
 } from './renderer';
 import { createToolbar, type ToolbarApi } from './toolbar';
+import {
+  discoverSegments,
+  createIdleChunkerScheduler,
+  DiscoveryAborted,
+  type ChunkerMode,
+} from './chunker';
 import { getTargetLang } from '../target-lang';
 import type { BackgroundCommand, DisplayMode, TranslationCapabilities } from '../types';
 import type { SegmentRecord, SemanticTranslation } from './types';
@@ -40,6 +46,10 @@ import type { SegmentRecord, SemanticTranslation } from './types';
 const OBSERVER_DEBOUNCE_MS = 200;
 /** 视口进入与动态分段共享的 micro-batch 聚合窗口（ms） */
 const BATCH_QUEUE_MS = 25;
+/** chunker 调度器预算（ms），与 Q21=B 一致 */
+const CHUNKER_BUDGET_MS = 8;
+/** chunker 每片段数上限，与 Q9 决策一致 */
+const CHUNK_SIZE = 200;
 
 // ---- 模块级状态（编排器是唯一状态持有者） ----
 
@@ -137,12 +147,6 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   targetLang = resolvedTargetLang;
   batchStreamEnabled = resolvedBatchStreamEnabled;
 
-  // v0.4 同步收集；大页面（上千段）首帧收集后续可用 requestIdleCallback 分片优化
-  records = batchStreamEnabled
-    ? collectSemanticSegments(document.body)
-    : collectSegments(document.body);
-  recordedEls = new Set(records.map((r) => r.el));
-
   // 防御：空分段页重复触发走全新路径时先销毁旧工具栏，避免重复挂载
   toolbar?.destroy();
   toolbar = createToolbar({
@@ -160,31 +164,84 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   viewportObserver?.disconnect();
   viewportObserver = null;
 
-  // 视口分组：视口内段走 runPool；视口外段挂 IO 等待进入后入池
-  const inView = records.filter(isSegmentInViewport);
-  const outOfView = records.filter((r) => !isSegmentInViewport(r));
-
-  // 视口外段也立即 markLoading 计入总进度
-  if (outOfView.length > 0) {
-    markSegmentsLoading(outOfView);
-  }
-
-  // 统一调度进度：空页面也需 updateProgress 让工具栏呈现“未发现可翻译文本”
-  updateProgress();
-  await enqueueSegments(inView, generation);
-
-  if (outOfView.length > 0) {
-    updateProgress();
-    viewportObserver = createViewportEnterObserver(generation);
-    for (const seg of outOfView) {
-      viewportObserver.observe(seg);
+  // 流式分段发现: 通过 chunker 把 walkSegments/walkSemanticSegments 切到 rIC 上,
+  // 1000+ 段页面不会在同步收集阶段冻结主线程(Q12=B 预算)。
+  // 每个 chunk flush 出来后立刻分入池(inView)/挂 IO(outOfView), 用户先看见可见区域。
+  const chunkerMode: ChunkerMode = batchStreamEnabled ? 'semantic' : 'flat';
+  records = [];
+  recordedEls = new Set();
+  // 收集阶段工具栏进不定态脉冲: total 未知, 显示"全文翻译中…"
+  toolbar.setIndeterminate(true);
+  // 空页面也要进“不发现任何段”分支; 以 `total=0` 收尾
+  try {
+    await discoverSegments({
+      root: document.body,
+      mode: chunkerMode,
+      chunkSize: CHUNK_SIZE,
+      scheduler: createIdleChunkerScheduler(CHUNKER_BUDGET_MS),
+      isActive: () => isSessionActive(generation),
+      isInViewport: isSegmentInViewport,
+      onChunk: (chunk) => handleDiscoveryChunk(chunk, generation),
+    });
+  } catch (error) {
+    if (error instanceof DiscoveryAborted) {
+      // 会话在发现中途被 restore / restart 抢占: 跳出, 并发下一次 start() 走全新路径
+      cleanupFailedStart(generation);
+      return;
     }
+    cleanupFailedStart(generation);
+    throw error;
+  } finally {
+    if (isSessionActive(generation) && toolbar) {
+      toolbar.setIndeterminate(false);
+    }
+  }
+  // 发现收尾: 不论 total=N 还是 0, 都跑一次 updateProgress 让工具栏从不定态切到
+  // 真实 M/N(空页面 → “未发现可翻译文本”)。
+  if (isSessionActive(generation)) {
+    updateProgress();
   }
 
   // 会话失效或初始页面无分段时不启动观察器
   if (isSessionActive(generation) && records.length > 0) {
     startObserver();
   }
+}
+
+/**
+ * 处理一个发现 chunk: 去重、入 records、视口内入池、视口外挂 IO。
+ * 供 onChunk 回调: 每隔 CHUNK_SIZE 段或预算耗尽时调用一次。
+ */
+function handleDiscoveryChunk(
+  chunk: { inView: SegmentRecord[]; outOfView: SegmentRecord[] },
+  generation: number,
+): void {
+  if (!isSessionActive(generation)) return;
+  // 去重: 同一段可能在 chunker 期间已被另一路径记入 (极端: MutationObserver 同时冲入)
+  const newInView = chunk.inView.filter((s) => !recordedEls.has(s.el));
+  const newOutView = chunk.outOfView.filter((s) => !recordedEls.has(s.el));
+  for (const s of newInView) recordedEls.add(s.el);
+  for (const s of newOutView) recordedEls.add(s.el);
+  if (newInView.length === 0 && newOutView.length === 0) return;
+  records.push(...newInView, ...newOutView);
+
+  // 视口内: 立即入池
+  if (newInView.length > 0) {
+    void enqueueSegments(newInView, generation).catch((err) => {
+      console.warn('[fullpage] discovery in-view enqueue failed', err);
+    });
+  }
+  // 视口外: markLoading + 挂 IO
+  if (newOutView.length > 0) {
+    markSegmentsLoading(newOutView);
+    if (!viewportObserver) {
+      viewportObserver = createViewportEnterObserver(generation);
+    }
+    for (const seg of newOutView) {
+      viewportObserver.observe(seg);
+    }
+  }
+  updateProgress();
 }
 
 /**
@@ -247,6 +304,12 @@ function cleanupFailedStart(generation: number): void {
   targetLang = '';
   sessionGeneration += 1;
 }
+
+/** 用于 `__reset`: 导入保留, 以备单测需要。 */
+void collectSegments;
+void collectSemanticSegments;
+void walkSegments;
+void walkSemanticSegments;
 
 /** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */
 function queueSegments(segs: SegmentRecord[], generation: number): void {
