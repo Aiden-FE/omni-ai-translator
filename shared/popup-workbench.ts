@@ -1,8 +1,9 @@
-// popup 文本翻译工作台状态机（#77 变体 A 骨架 + #79 流式输出与停止）
+// popup 文本翻译工作台状态机（#77 变体 A 骨架 + #79 流式输出与停止 + #80 错误差异化 / 重试）
 // 纯函数：原文输入准入判定（空 / 就绪 / 超限）+ 流式翻译生命周期迁移
 // （就绪 → 流式 → 完成 / 停止 / 错误）。
+// 错误态携带 errorType（四类互斥），供视图按 errorFeedback 差异化渲染横幅。
 // 不持久化任何内容；状态仅存在于 popup 生命周期内（文本翻译会话）。
-import type { TranslateResult } from './types';
+import type { ErrorType, TranslateResult } from './types';
 
 /** 原文最大字符数（按 Unicode 码点计数） */
 export const WORKBENCH_MAX_LENGTH = 5000;
@@ -25,6 +26,8 @@ export interface WorkbenchState {
   /** 流式期间为已累计的部分译文；stopped 后保留 */
   translatedText: string;
   errorMessage: string;
+  /** 四类互斥错误类型；null = 无分类（如连接中断）或无错误 */
+  errorType: ErrorType | null;
 }
 
 /** 输入准入判定结果 */
@@ -41,7 +44,7 @@ export type WorkbenchAction =
   | { type: 'stream-start' }
   | { type: 'stream-chunk'; deltaText: string }
   | { type: 'stream-done'; result: TranslateResult }
-  | { type: 'stream-error'; message: string }
+  | { type: 'stream-error'; message: string; errorType?: ErrorType }
   | { type: 'stream-stop' };
 
 /** 码点计数（与 Array.from / spread 一致，emoji 等代理对计为 1 个字符） */
@@ -67,6 +70,7 @@ export function createWorkbenchState(): WorkbenchState {
     outputPhase: 'idle',
     translatedText: '',
     errorMessage: '',
+    errorType: null,
   };
 }
 
@@ -90,6 +94,7 @@ export function reduceWorkbench(state: WorkbenchState, action: WorkbenchAction):
         outputPhase: 'streaming',
         translatedText: '',
         errorMessage: '',
+        errorType: null,
       };
     }
     case 'stream-chunk': {
@@ -107,6 +112,7 @@ export function reduceWorkbench(state: WorkbenchState, action: WorkbenchAction):
         // 以 done.result 为准；result 译文为空时保留已累计的部分译文
         translatedText: action.result.translatedText || state.translatedText,
         errorMessage: '',
+        errorType: null,
       };
     }
     case 'stream-error': {
@@ -116,6 +122,7 @@ export function reduceWorkbench(state: WorkbenchState, action: WorkbenchAction):
         outputPhase: 'error',
         translatedText: '',
         errorMessage: action.message,
+        errorType: action.errorType ?? null,
       };
     }
     case 'stream-stop': {
