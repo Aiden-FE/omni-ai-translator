@@ -9,7 +9,9 @@ import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import SourceConfigPanel from '@/shared/ui/SourceConfigPanel.vue';
 import Button from '@/shared/ui/components/button/Button.vue';
 import ScrollArea from '@/shared/ui/components/scroll-area/ScrollArea.vue';
+import LanguageSelect from '@/shared/ui/components/language-select/LanguageSelect.vue';
 import { getSettings } from '@/shared/storage';
+import { resolveInitialTargetLang } from '@/shared/language-catalog';
 import type { StreamPortMessage } from '@/shared/types';
 import {
   WORKBENCH_MAX_LENGTH,
@@ -20,7 +22,9 @@ import {
 
 const state = reactive(createWorkbenchState());
 const view = ref<'translator' | 'settings'>('translator');
-const targetLang = ref('');
+// 临时目标语言（BCP 47 代码，#78）：仅当前文本翻译会话生效，不写入存储；
+// popup 每次打开（组件挂载）重新从默认目标语言初始化。
+const targetLangCode = ref('en');
 const sourceArea = ref<HTMLTextAreaElement | null>(null);
 const settingsPanel = ref<InstanceType<typeof SourceConfigPanel> | null>(null);
 
@@ -35,10 +39,12 @@ let streamPort: ReturnType<typeof browser.runtime.connect> | null = null;
 let streamFinished = false;
 
 async function initTargetLang() {
-  // 骨架阶段沿用设置中的默认目标语言;未配置时跟随浏览器语言。
-  // 正式语言目录与可搜索选择器在 #78 落地。
+  // 从设置中的默认目标语言初始化;未配置时跟随浏览器首选语言(#78 共享目录解析)。
   const settings = await getSettings();
-  targetLang.value = settings.defaultTargetLang?.trim() || navigator.language || 'en';
+  targetLangCode.value = resolveInitialTargetLang(
+    settings.defaultTargetLang,
+    navigator.language,
+  ).code;
 }
 
 onMounted(async () => {
@@ -79,7 +85,7 @@ function finishStream() {
 async function translate() {
   if (!canTranslate.value) return;
   const text = state.sourceText;
-  const lang = targetLang.value;
+  const lang = targetLangCode.value;
 
   const port = browser.runtime.connect({ name: 'translate-stream' });
   streamPort = port;
@@ -201,8 +207,12 @@ function handleAddProvider() {
       <div class="flex flex-none items-center gap-2 text-sm text-muted-foreground">
         <span>自动识别</span>
         <span aria-hidden="true">→</span>
-        <!-- 正式语言目录与可搜索选择器在 #78 落地;流式期间需禁用切换(isStreaming) -->
-        <span class="text-foreground">{{ targetLang }}</span>
+        <!-- 可搜索目标语言选择器(#78):临时目标语言,流式期间锁定切换 -->
+        <LanguageSelect
+          v-model="targetLangCode"
+          :disabled="isStreaming"
+          aria-label="目标语言"
+        />
       </div>
 
       <section

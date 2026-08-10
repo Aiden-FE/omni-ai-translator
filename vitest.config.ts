@@ -1,8 +1,10 @@
 import { defineConfig } from 'vitest/config';
+import vue from '@vitejs/plugin-vue';
 
 // Vitest 配置：单元测试（与 WXT 构建独立，不影响 build）
 // e2e 测试仍由 Playwright 负责（见 playwright.config.ts）
 export default defineConfig({
+  plugins: [vue()],
   test: {
     include: ['shared/**/*.test.ts', 'scripts/**/*.test.ts'],
     globals: true,
