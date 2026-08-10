@@ -24,6 +24,8 @@ import Input from '@/shared/ui/components/input/Input.vue';
 import Label from '@/shared/ui/components/label/Label.vue';
 import Select from '@/shared/ui/components/select/Select.vue';
 import Badge from '@/shared/ui/components/badge/Badge.vue';
+import LanguageSelect from '@/shared/ui/components/language-select/LanguageSelect.vue';
+import { findLanguageByCode } from '@/shared/language-catalog';
 
 const props = withDefaults(defineProps<{
   variant?: 'popup' | 'options';
@@ -34,11 +36,13 @@ const props = withDefaults(defineProps<{
 const providers = ref<ProviderConfig[]>([]);
 const activeSourceId = ref<string>(DEFAULT_ACTIVE_SOURCE_ID);
 const allSources = ref<ProviderConfig[]>([]);
+// 默认目标语言（BCP 47 代码；空字符串 = 跟随浏览器首选语言，#81）
 const targetLang = ref('');
 const testMsgs = ref<Record<string, string>>({});
 const bannerTestMsg = ref('');
 const browserLang = ref(navigator.language || '');
 const collapsedCards = ref<Record<string, boolean>>({});
+const langSelect = ref<InstanceType<typeof LanguageSelect> | null>(null);
 
 const DEFAULT_BASE_URL: Record<ProviderType, string> = {
   llm: DEFAULT_LLM_BASE_URL_BY_PROTOCOL['openai-completions'],
@@ -92,23 +96,6 @@ const activeSourceName = computed(() => {
   return s?.name ?? '免 Key 兜底';
 });
 
-function defaultTargetLang(): string {
-  const lang = browserLang.value.toLowerCase();
-  const map: Record<string, string> = {
-    'zh-cn': '简体中文',
-    'zh-tw': '繁體中文',
-    'zh-hk': '繁體中文',
-    zh: '中文',
-    en: 'English',
-    ja: '日本語',
-    ko: '한국어',
-    fr: 'Français',
-    de: 'Deutsch',
-    es: 'Español',
-  };
-  return map[lang] ?? map[lang.split('-')[0]] ?? lang;
-}
-
 function sendMessage<T>(message: Message): Promise<T> {
   return browser.runtime.sendMessage(message) as Promise<T>;
 }
@@ -119,17 +106,16 @@ async function loadActiveSources() {
   allSources.value = r.sources;
 }
 
-const targetLangInput = ref<InstanceType<typeof Input> | null>(null);
-
 onMounted(async () => {
   await loadActiveSources();
   providers.value = await getProviders();
   const s = await getSettings();
-  targetLang.value = s.defaultTargetLang || defaultTargetLang();
+  // 未知/历史遗留值（旧版展示名）视为未配置 → 跟随浏览器首选语言（#81）
+  targetLang.value = findLanguageByCode(s.defaultTargetLang ?? '') ? s.defaultTargetLang : '';
 
   if (props.variant === 'popup') {
     await nextTick();
-    targetLangInput.value?.focus();
+    langSelect.value?.focusTrigger();
     for (const p of providers.value) {
       collapsedCards.value[p.id] = p.id !== activeSourceId.value;
     }
@@ -138,7 +124,7 @@ onMounted(async () => {
 
 defineExpose({
   focusFirst() {
-    targetLangInput.value?.focus();
+    langSelect.value?.focusTrigger();
   },
   addProvider,
 });
@@ -148,9 +134,15 @@ async function saveProviders() {
   await loadActiveSources();
 }
 
+// 选择即持久化（#81）：空字符串表示跟随浏览器首选语言
 async function saveTargetLang() {
   const s = await getSettings();
   await setSettings({ ...s, defaultTargetLang: targetLang.value });
+}
+
+async function onTargetLangChange(code: string) {
+  targetLang.value = code;
+  await saveTargetLang();
 }
 
 async function addProvider() {
@@ -274,16 +266,16 @@ function isCollapsed(id: string): boolean {
     :class="variant === 'popup' ? 'source-config--popup' : 'source-config--options'"
   >
     <section class="space-y-2">
-      <Label for="target-lang-input">默认目标语言</Label>
-      <Input
-        id="target-lang-input"
-        ref="targetLangInput"
-        v-model="targetLang"
-        placeholder="留空则使用浏览器首选语言"
-        @change="saveTargetLang"
+      <Label>默认目标语言</Label>
+      <LanguageSelect
+        ref="langSelect"
+        :model-value="targetLang"
+        allow-browser-default
+        aria-label="默认目标语言"
+        @update:model-value="onTargetLangChange"
       />
       <p class="text-xs leading-5 text-muted-foreground">
-        留空时自动使用浏览器首选语言({{ browserLang }})。
+        选择「跟随浏览器语言」时按浏览器首选语言解析（{{ browserLang }}）。
       </p>
     </section>
 
