@@ -1,7 +1,7 @@
 // 全文翻译 e2e 性能回归(ADR-0001 D1-D4 性能门,Q16=C 真 DOM 端到端围栏)
 //
-// 围栏：start('replace') 起到「首段译文 DOM 落盘」(即 .llm-translator-block-host
-// 首次出现)的时间。真 DOM 预算(ADR-0001 / Q12=B):
+// 围栏：start('replace') 起到「首段译文写入源文本节点」的时间。
+// 真 DOM 预算(ADR-0001 / Q12=B):
 // - 1000 段 ≤ 80ms
 // - 5000 段 ≤ 400ms
 //
@@ -56,41 +56,6 @@ async function loadSyntheticPage(context: BrowserContext, segmentCount: number):
   return page;
 }
 
-/**
- * 预挂 MutationObserver 监 .llm-translator-block-host 首次出现,记录 timestamp。
- * 返回 promise resolve 到首次出现耗时(ms)。如 timeoutMs 内未触发则 reject。
- */
-async function armFirstSettledObserver(
-  page: Page,
-  timeoutMs: number,
-): Promise<{ resolve: (elapsedMs: number) => void; promise: Promise<number> }> {
-  let resolveFn!: (elapsedMs: number) => void;
-  const promise = new Promise<number>((res, rej) => {
-    resolveFn = res;
-    setTimeout(() => { rej(new Error(`first-settled not observed within ${timeoutMs}ms`)); }, timeoutMs);
-  });
-  await page.evaluate(() => {
-    const t0 = performance.now();
-    const observer = new MutationObserver((records) => {
-      for (const r of records) {
-        for (const node of r.addedNodes) {
-          if (node instanceof HTMLElement && node.classList.contains('llm-translator-block-host')) {
-            const elapsed = performance.now() - t0;
-            observer.disconnect();
-            (window as unknown as { __firstSettledResolver: (ms: number) => void }).__firstSettledResolver(elapsed);
-            return;
-          }
-        }
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    (window as unknown as { __firstSettledResolver: (ms: number) => void }).__firstSettledResolver = (ms: number) => {
-      // 由 page.exposeFunction 调入；这里兜底
-    };
-  });
-  return { resolve: resolveFn, promise };
-}
-
 async function configureMockProvider(context: BrowserContext, extensionId: string, mockBaseUrl: string): Promise<void> {
   const optionsPage = await context.newPage();
   await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
@@ -108,24 +73,26 @@ async function triggerFullpageTranslateAndMeasure(
   page: Page,
   timeoutMs: number,
 ): Promise<number> {
-  // 在 page 上下文预装 MO,t0 在 evaluate 内部取
-  const startPromise = page.evaluate(() => {
-    return new Promise<number>((resolve) => {
+  // replace 模式不会创建 block host，只会改写原文本节点；计时探针必须观察 characterData。
+  await page.evaluate(() => {
+    const state = globalThis as unknown as { __firstSettledPromise: Promise<number> };
+    state.__firstSettledPromise = new Promise<number>((resolve) => {
       const t0 = performance.now();
       const observer = new MutationObserver((records) => {
-        for (const r of records) {
-          for (const node of r.addedNodes) {
-            if (node instanceof HTMLElement && node.classList.contains('llm-translator-block-host')) {
-              observer.disconnect();
-              resolve(performance.now() - t0);
-              return;
-            }
+        for (const record of records) {
+          const target = record.target;
+          if (
+            record.type === 'characterData'
+            && target instanceof Text
+            && target.parentElement?.id.startsWith('gen-')
+          ) {
+            observer.disconnect();
+            resolve(performance.now() - t0);
+            return;
           }
         }
       });
-      observer.observe(document.body, { childList: true, subtree: true });
-      // 全局句柄,供 trigger 后若 MO 错过主线程 tick 时兜底
-      (globalThis as unknown as { __perfT0: number }).__perfT0 = t0;
+      observer.observe(document.body, { characterData: true, subtree: true });
     });
   });
 
@@ -136,24 +103,31 @@ async function triggerFullpageTranslateAndMeasure(
       timeout: 10_000,
     });
   }
-  const t0 = Date.now();
-  await sw.evaluate(async () => {
+  const delivered = await sw.evaluate(async () => {
     const tabs = await chrome.tabs.query({});
-    await Promise.allSettled(
+    const results = await Promise.allSettled(
       tabs.map((t) =>
         t.id === undefined
           ? Promise.reject(new Error('tab without id'))
           : chrome.tabs.sendMessage(t.id, { type: 'fullpage-translate', mode: 'replace' }),
       ),
     );
+    return results.filter((result) => result.status === 'fulfilled').length;
   });
+  if (delivered === 0) {
+    throw new Error('fullpage perf e2e: no tab consumed the command');
+  }
 
-  return Promise.race([
-    startPromise,
-    new Promise<number>((_, rej) => { setTimeout(() => rej(new Error(`first-settled > ${timeoutMs}ms`)), timeoutMs); }),
-  ]).finally(() => {
-    void t0;
-  });
+  return page.evaluate((timeout) => {
+    const state = globalThis as unknown as { __firstSettledPromise?: Promise<number> };
+    if (!state.__firstSettledPromise) throw new Error('first-settled observer was not armed');
+    return Promise.race([
+      state.__firstSettledPromise,
+      new Promise<number>((_, reject) => {
+        setTimeout(() => reject(new Error(`first-settled > ${timeout}ms`)), timeout);
+      }),
+    ]);
+  }, timeoutMs);
 }
 
 test('1000 段真 DOM：首段译文落盘 ≤ 80ms (ADR-0001 D1-D4 性能门)', async ({ context, extensionId }) => {

@@ -6,7 +6,8 @@ const extensionPath = path.resolve(process.cwd(), '.output/chrome-mv3');
 
 /** 通道入口: Playwright projects[] 指定。 */
 async function launchContext(browserName: 'chromium' | 'firefox' | 'edge'): Promise<BrowserContext> {
-  const userDataDir = path.resolve(process.cwd(), `.e2e-profile-${browserName}`);
+  // 空路径由 Playwright 创建并在 context 关闭后清理，避免用例间扩展存储串扰。
+  const userDataDir = '';
   if (browserName === 'firefox') {
     return firefox.launchPersistentContext(userDataDir, {
       headless: true,

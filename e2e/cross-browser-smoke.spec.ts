@@ -8,8 +8,8 @@ test('通道冒烟:options 页可加载、标题可见', async ({ context, exten
   await page.goto(`chrome-extension://${extensionId}/options.html`);
   // 等待 Vue app mount
   await expect(page.locator('text=Omni AI Translator').first()).toBeVisible({ timeout: 10_000 });
-  // 提供方列表容器出现
-  await expect(page.locator('.provider-card, [data-testid="provider-list-empty"]').first())
+  // 无论是否配置自有源，当前生效源状态卡都会出现。
+  await expect(page.getByRole('status', { name: /当前生效:/ }))
     .toBeVisible({ timeout: 5_000 });
   await page.close();
 });
