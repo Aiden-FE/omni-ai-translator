@@ -17,3 +17,4 @@ dist/
 .pnpm-store
 .worktrees
 **/*.local.json
+.pi-subagents/
