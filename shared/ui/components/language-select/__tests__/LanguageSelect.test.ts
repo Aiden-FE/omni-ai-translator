@@ -6,9 +6,9 @@ import { nextTick } from 'vue';
 import LanguageSelect from '../LanguageSelect.vue';
 import { LANGUAGE_CATALOG, findLanguageByCode } from '@/shared/language-catalog';
 
-function mountSelect(props: { modelValue?: string; disabled?: boolean } = {}) {
+function mountSelect(props: { modelValue?: string; disabled?: boolean; ariaLabel?: string } = {}) {
   return mount(LanguageSelect, {
-    props: { modelValue: props.modelValue ?? 'en', disabled: props.disabled },
+    props: { modelValue: props.modelValue ?? 'en', disabled: props.disabled, ariaLabel: props.ariaLabel },
     attachTo: document.body,
   });
 }
@@ -27,6 +27,12 @@ describe('LanguageSelect — 触发器展示当前选中语言', () => {
   it('disabled 时触发器禁用', () => {
     const wrapper = mountSelect({ disabled: true });
     expect(wrapper.find('button[role="combobox"]').attributes('disabled')).toBeDefined();
+  });
+
+  it('ariaLabel 绑定到 combobox 触发器（而非外层容器）', () => {
+    const wrapper = mountSelect({ ariaLabel: '目标语言' });
+    expect(wrapper.find('button[role="combobox"]').attributes('aria-label')).toBe('目标语言');
+    expect(wrapper.find('div.relative').attributes('aria-label')).toBeUndefined();
   });
 });
 

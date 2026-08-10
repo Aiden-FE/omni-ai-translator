@@ -102,12 +102,14 @@ export function filterLanguages(query: string): LanguageEntry[] {
  * 1. 设置中的默认目标语言命中目录代码 → 使用该条目；
  * 2. 否则跟随浏览器首选语言：完整代码 → 主语言子标签 → 目录未收录回退 English。
  * 临时选择不经过此函数；重新打开 popup 时重新从默认目标语言初始化。
+ * 参数允许 undefined/null：存量 settings 对象可能缺失 defaultTargetLang 键
+ * （storage.get 不做默认值合并），缺失时等同未配置。
  */
 export function resolveInitialTargetLang(
-  defaultTargetLang: string,
+  defaultTargetLang: string | undefined | null,
   browserLanguage: string,
 ): LanguageEntry {
-  const configured = findLanguageByCode(defaultTargetLang);
+  const configured = defaultTargetLang ? findLanguageByCode(defaultTargetLang) : undefined;
   if (configured) return configured;
 
   const lang = browserLanguage.trim().toLowerCase();

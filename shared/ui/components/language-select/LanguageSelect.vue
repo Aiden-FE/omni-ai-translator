@@ -12,6 +12,8 @@ const props = defineProps<{
   modelValue: string;
   /** 禁用（如翻译进行中锁定选择器） */
   disabled?: boolean;
+  /** 触发按钮的无障碍标签（透传到 combobox，而非外层容器） */
+  ariaLabel?: string;
 }>();
 
 const emit = defineEmits<{
@@ -30,12 +32,17 @@ const selected = computed(
   () => findLanguageByCode(props.modelValue) ?? LANGUAGE_CATALOG[0],
 );
 
+/** 重置高亮项：当前选中优先，否则回到第一项 */
+function resetActiveIndex() {
+  const selectedIndex = filtered.value.findIndex((e) => e.code === selected.value.code);
+  activeIndex.value = selectedIndex >= 0 ? selectedIndex : 0;
+}
+
 function openDropdown() {
   if (props.disabled) return;
   open.value = true;
   query.value = '';
-  const selectedIndex = LANGUAGE_CATALOG.findIndex((e) => e.code === selected.value.code);
-  activeIndex.value = selectedIndex >= 0 ? selectedIndex : 0;
+  resetActiveIndex();
   void nextTick(() => searchInput.value?.focus());
 }
 
@@ -89,10 +96,9 @@ watch(open, (isOpen) => {
   }
 });
 
-// 查询变化后保持高亮项有效（当前选中优先，否则回到第一项）
+// 查询变化后保持高亮项有效
 watch(query, () => {
-  const selectedIndex = filtered.value.findIndex((e) => e.code === selected.value.code);
-  activeIndex.value = selectedIndex >= 0 ? selectedIndex : 0;
+  resetActiveIndex();
 });
 
 onBeforeUnmount(() => {
@@ -111,6 +117,7 @@ onBeforeUnmount(() => {
       class="flex h-7 items-center gap-1 rounded-md border border-input bg-card px-2 text-xs text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
       :aria-expanded="open"
       :aria-haspopup="true"
+      :aria-label="ariaLabel"
       :disabled="disabled"
       @click="openDropdown"
       @keydown.enter.prevent="openDropdown"

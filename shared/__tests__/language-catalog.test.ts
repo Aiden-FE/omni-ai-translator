@@ -108,4 +108,9 @@ describe('resolveInitialTargetLang — 会话初始值解析', () => {
     expect(resolveInitialTargetLang('', 'xx-XX').code).toBe('en');
     expect(resolveInitialTargetLang('', '').code).toBe('en');
   });
+
+  it('设置对象缺失 defaultTargetLang 键（undefined/null）→ 跟随浏览器语言', () => {
+    expect(resolveInitialTargetLang(undefined, 'ja-JP').code).toBe('ja');
+    expect(resolveInitialTargetLang(null, 'fr-FR').code).toBe('fr');
+  });
 });
