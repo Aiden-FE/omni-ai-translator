@@ -34,9 +34,8 @@ const canTranslate = computed(
   () => state.inputPhase === 'ready' && state.outputPhase !== 'streaming',
 );
 
-// 当前流式会话(port + 终结标记)。终结标记防止 done / error / disconnect 多路径重复处理。
+// 当前流式会话的 port。回调必须校验 port 仍为当前会话，避免旧会话延迟断开污染新翻译。
 let streamPort: ReturnType<typeof browser.runtime.connect> | null = null;
-let streamFinished = false;
 
 async function initTargetLang() {
   // 从设置中的默认目标语言初始化;未配置时跟随浏览器首选语言(#78 共享目录解析)。
@@ -55,8 +54,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   // popup 关闭时断开进行中的流式 port(后台经 onDisconnect 感知,不再写消息)
+  const port = streamPort;
+  if (port) finishStream(port);
   try {
-    streamPort?.disconnect();
+    port?.disconnect();
   } catch {
     // port 可能已被后台终结
   }
@@ -77,9 +78,10 @@ function onSourceKeydown(event: KeyboardEvent) {
   }
 }
 
-function finishStream() {
-  streamFinished = true;
+function finishStream(port: ReturnType<typeof browser.runtime.connect>): boolean {
+  if (streamPort !== port) return false;
   streamPort = null;
+  return true;
 }
 
 async function translate() {
@@ -89,19 +91,18 @@ async function translate() {
 
   const port = browser.runtime.connect({ name: 'translate-stream' });
   streamPort = port;
-  streamFinished = false;
   dispatch({ type: 'stream-start' });
 
   port.onMessage.addListener((msg: StreamPortMessage) => {
-    if (streamFinished) return;
+    if (streamPort !== port) return;
     if (msg.type === 'chunk') {
       dispatch({ type: 'stream-chunk', deltaText: msg.deltaText });
     } else if (msg.type === 'done') {
-      finishStream();
+      if (!finishStream(port)) return;
       dispatch({ type: 'stream-done', result: msg.result });
       try { port.disconnect(); } catch { /* 后台可能已断开 */ }
     } else if (msg.type === 'error') {
-      finishStream();
+      if (!finishStream(port)) return;
       dispatch({ type: 'stream-error', message: msg.result.error ?? '翻译失败,请重试' });
       try { port.disconnect(); } catch { /* 后台可能已断开 */ }
     }
@@ -110,8 +111,7 @@ async function translate() {
   // 异常断开(SW 回收 / 后台重启等):归一为可恢复的终态,不卡死不悬停。
   // 已有部分译文 → 视为停止并保留;无译文 → 网络错误。
   port.onDisconnect.addListener(() => {
-    if (streamFinished) return;
-    finishStream();
+    if (!finishStream(port)) return;
     if (state.translatedText) {
       dispatch({ type: 'stream-stop' });
     } else {
@@ -129,9 +129,9 @@ async function translate() {
 function stop() {
   if (!isStreaming.value) return;
   const port = streamPort;
-  finishStream();
+  if (!port || !finishStream(port)) return;
   try {
-    port?.disconnect();
+    port.disconnect();
   } catch {
     // port 可能已被后台终结
   }

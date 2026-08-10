@@ -425,6 +425,32 @@ describe('LLM Provider 流式翻译', () => {
     }
   });
 
+  it('外部取消信号会中止进行中的 LLM 响应流', async () => {
+    const fetchMock = vi.fn().mockImplementation((_, init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          init.signal?.addEventListener('abort', () => {
+            controller.error(new DOMException('Aborted', 'AbortError'));
+          });
+        },
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const provider = createLLMProvider(makeOpenAIConfig());
+    const controller = new AbortController();
+
+    const resultPromise = provider.translateStream!(baseReq, vi.fn(), controller.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(result.errorType).toBe('network');
+    expect(result.error).toContain('Aborted');
+  });
+
   it('OpenAI SSE 流式 — 多 chunk 累加 + [DONE] 终止 + 跳过非 data 行 + 跨 chunk 行缓冲', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

@@ -42,14 +42,14 @@ function resolveLangCode(lang: string): string {
  * GET translate_a/single?client=gtx&sl=<src>&tl=<target>&dt=t&q=<text>
  * 响应为嵌套数组：data[0] 是译文段数组，每段 [0] 为译文，拼接即得完整译文。
  */
-async function callGoogle(req: TranslateRequest): Promise<TranslateResult> {
+async function callGoogle(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
   const sl = req.sourceLang ? resolveLangCode(req.sourceLang) : 'auto';
   const tl = resolveLangCode(req.targetLang);
   const url = `${GOOGLE_ENDPOINT}?client=gtx&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(
     tl,
   )}&dt=t&q=${encodeURIComponent(req.text)}`;
 
-  const resp = await fetch(url, { method: 'GET' });
+  const resp = await fetch(url, { method: 'GET', signal });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
     return { translatedText: '', error: `Google HTTP ${resp.status}: ${await resp.text()}`, errorType };
@@ -78,9 +78,9 @@ async function callGoogle(req: TranslateRequest): Promise<TranslateResult> {
  *    header Authorization: Bearer <token>，body [{"Text": text}]
  * 响应：[{ translations: [{ text, to }] }]
  */
-async function callMicrosoft(req: TranslateRequest): Promise<TranslateResult> {
+async function callMicrosoft(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
   // 1. 取 token
-  const authResp = await fetch(MICROSOFT_AUTH_ENDPOINT, { method: 'GET' });
+  const authResp = await fetch(MICROSOFT_AUTH_ENDPOINT, { method: 'GET', signal });
   if (!authResp.ok) {
     const errorType = classifyError(null, authResp.status);
     return {
@@ -112,6 +112,7 @@ async function callMicrosoft(req: TranslateRequest): Promise<TranslateResult> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify([{ Text: req.text }]),
+    signal,
   });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
@@ -145,6 +146,7 @@ async function callMicrosoft(req: TranslateRequest): Promise<TranslateResult> {
 async function callGoogleWithKey(
   config: ProviderConfig,
   req: TranslateRequest,
+  signal?: AbortSignal,
 ): Promise<TranslateResult> {
   const apiKey = config.apiKey as string;
   const target = resolveLangCode(req.targetLang);
@@ -164,6 +166,7 @@ async function callGoogleWithKey(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
@@ -193,6 +196,7 @@ async function callGoogleWithKey(
 async function callMicrosoftWithKey(
   config: ProviderConfig,
   req: TranslateRequest,
+  signal?: AbortSignal,
 ): Promise<TranslateResult> {
   const apiKey = config.apiKey as string;
   const to = resolveLangCode(req.targetLang);
@@ -216,6 +220,7 @@ async function callMicrosoftWithKey(
     method: 'POST',
     headers,
     body: JSON.stringify([{ Text: req.text }]),
+    signal,
   });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
@@ -244,17 +249,19 @@ export function createTraditionalProvider(config: ProviderConfig): TranslationPr
   return {
     id: config.id,
     type: 'traditional' as const,
-    async translate(req: TranslateRequest): Promise<TranslateResult> {
+    async translate(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
       try {
         // 按 apiKey 是否存在切换：有 Key 走官方端点（读 config.baseUrl），无 Key 走免 Key 公共端点
         // 保留 await 以使 catch 能捕获 callXxx 的 rejected promise
         if (config.type === 'google') {
-          return config.apiKey ? await callGoogleWithKey(config, req) : await callGoogle(req);
+          return config.apiKey
+            ? await callGoogleWithKey(config, req, signal)
+            : await callGoogle(req, signal);
         }
         if (config.type === 'microsoft') {
           return config.apiKey
-            ? await callMicrosoftWithKey(config, req)
-            : await callMicrosoft(req);
+            ? await callMicrosoftWithKey(config, req, signal)
+            : await callMicrosoft(req, signal);
         }
         // 未知传统源类型
         return {

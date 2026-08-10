@@ -19,7 +19,7 @@ export interface TranslationProvider {
   /** 源类型分类：llm / traditional */
   type: 'llm' | 'traditional';
   /** 执行翻译 */
-  translate(req: TranslateRequest): Promise<TranslateResult>;
+  translate(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult>;
   /** 连通性测试（发送最小请求） */
   test(req?: TranslateRequest): Promise<TranslateResult>;
   /**
@@ -27,7 +27,11 @@ export interface TranslationProvider {
    * LLM 源实现此方法，逐 chunk 经 onChunk 回调推送增量译文，返回最终 TranslateResult（含完整译文）。
    * 传统源不实现（undefined），适配层回退到 translate() 一次性返回。
    */
-  translateStream?(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult>;
+  translateStream?(
+    req: TranslateRequest,
+    onChunk: (chunk: TranslateChunk) => void,
+    signal?: AbortSignal,
+  ): Promise<TranslateResult>;
   /** LLM 批量流式翻译；传统翻译源不实现，也不得由适配层逐段回退。 */
   translateBatchStream?(
     req: BatchTranslateRequest,

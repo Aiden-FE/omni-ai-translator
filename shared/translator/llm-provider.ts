@@ -26,9 +26,16 @@ const LLM_REQUEST_TIMEOUT_MESSAGE = '翻译请求超时（60 秒）';
 
 async function withRequestDeadline<T>(
   operation: (signal: AbortSignal) => Promise<T>,
+  externalSignal?: AbortSignal,
 ): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
+  const abortFromCaller = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    externalSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -41,6 +48,7 @@ async function withRequestDeadline<T>(
     throw error;
   } finally {
     clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
@@ -578,7 +586,7 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
   return {
     id: config.id,
     type: 'llm' as const,
-    async translate(req: TranslateRequest): Promise<TranslateResult> {
+    async translate(req: TranslateRequest, externalSignal?: AbortSignal): Promise<TranslateResult> {
       try {
         return await withRequestDeadline(async (signal) => {
           const protocol = normalizeLlmProtocol(config.responseStyle);
@@ -586,7 +594,7 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
           if (protocol === 'ollama') return await callOllama(config, req, signal);
           if (protocol === 'anthropic') return await callAnthropic(config, req, signal);
           return await callOpenAICompletions(config, req, signal);
-        });
+        }, externalSignal);
       } catch (err) {
         const errorType = classifyError(err);
         return {
@@ -599,7 +607,11 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     async test(req?: TranslateRequest): Promise<TranslateResult> {
       return this.translate(req ?? { text: 'hello', targetLang: '中文' });
     },
-    async translateStream(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult> {
+    async translateStream(
+      req: TranslateRequest,
+      onChunk: (chunk: TranslateChunk) => void,
+      externalSignal?: AbortSignal,
+    ): Promise<TranslateResult> {
       try {
         return await withRequestDeadline(async (signal) => {
           const protocol = normalizeLlmProtocol(config.responseStyle);
@@ -615,7 +627,7 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
             return await callAnthropicPromptStream(config, prompt, onDelta, signal, req.text);
           }
           return await callOpenAICompletionsPromptStream(config, prompt, onDelta, signal);
-        });
+        }, externalSignal);
       } catch (err) {
         const errorType = classifyError(err);
         return {

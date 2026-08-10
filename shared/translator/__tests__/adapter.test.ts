@@ -104,6 +104,33 @@ describe('translateWithAdapter — 默认源与路由', () => {
     const result = await translateWithAdapter({ text: 'hello', targetLang: '简体中文' });
     expect(result.translatedText).toBe('你好');
   });
+
+  it('将外部取消信号传递给传统翻译请求', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      activeProviderId: 'builtin:google',
+      defaultTargetLang: '',
+    });
+    vi.mocked(getProviders).mockResolvedValue([]);
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise((_, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('Aborted', 'AbortError'));
+      });
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const resultPromise = translateWithAdapterStream(
+      { text: 'hello', targetLang: 'zh-CN' },
+      vi.fn(),
+      controller.signal,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+    const result = await resultPromise;
+
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(result.error).toContain('Aborted');
+  });
 });
 
 describe('testWithAdapter', () => {
@@ -440,11 +467,11 @@ interface TestPortHarness {
 let batchConnectListener: ((port: TestPort) => void) | undefined;
 let translatorModule: typeof import('../index');
 
-function createBatchPort(postMessage = vi.fn()): TestPortHarness {
+function createPort(name: string, postMessage = vi.fn()): TestPortHarness {
   const messageListeners: PortMessageListener[] = [];
   const disconnectListeners: Array<() => void> = [];
   const port: TestPort = {
-    name: 'fullpage-translate-batch-stream',
+    name,
     onMessage: { addListener: (listener) => messageListeners.push(listener) },
     onDisconnect: { addListener: (listener) => disconnectListeners.push(listener) },
     postMessage,
@@ -462,6 +489,10 @@ function createBatchPort(postMessage = vi.fn()): TestPortHarness {
       for (const listener of disconnectListeners) listener();
     },
   };
+}
+
+function createBatchPort(postMessage = vi.fn()): TestPortHarness {
+  return createPort('fullpage-translate-batch-stream', postMessage);
 }
 
 describe('background batch stream port', () => {
@@ -691,6 +722,26 @@ describe('background batch stream port', () => {
     await vi.waitFor(() => expect(attemptedChunks).toEqual(['c1']));
     expect(harness.port.postMessage).not.toHaveBeenCalled();
     expect(harness.port.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('断开 scalar 流式 port 时取消底层翻译请求', async () => {
+    let requestSignal: AbortSignal | undefined;
+    const translateSpy = vi
+      .spyOn(translatorModule, 'translateWithAdapterStream')
+      .mockImplementation(async (_request, _onChunk, signal) => {
+        requestSignal = signal;
+        return new Promise<never>(() => {});
+      });
+    const harness = createPort('translate-stream');
+
+    harness.send({ type: 'request', text: 'hello', targetLang: 'zh-CN' });
+    expect(translateSpy).toHaveBeenCalledTimes(1);
+    expect(requestSignal?.aborted).toBe(false);
+
+    harness.emitDisconnect();
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(harness.port.postMessage).not.toHaveBeenCalled();
   });
 
   it('stops after postMessage throws and disconnects at most once without a second post', async () => {

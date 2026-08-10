@@ -198,9 +198,11 @@ export default defineBackground(() => {
     let requestAccepted = false;
     let disconnected = false;
     let terminalSent = false;
+    const requestController = new AbortController();
 
     port.onDisconnect.addListener(() => {
       disconnected = true;
+      requestController.abort();
     });
 
     const disconnectOnce = () => {
@@ -242,6 +244,7 @@ export default defineBackground(() => {
             throw new Error('translate-stream port disconnected');
           }
         },
+        requestController.signal,
       )
         .then(
           (result) => {

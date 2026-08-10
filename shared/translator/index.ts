@@ -60,6 +60,7 @@ export async function translateWithAdapter(req: TranslateRequest): Promise<Trans
 export async function translateWithAdapterStream(
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
+  signal?: AbortSignal,
 ): Promise<TranslateResult> {
   const config = await resolveActiveProviderConfig();
 
@@ -75,11 +76,11 @@ export async function translateWithAdapterStream(
 
   // provider 支持流式 → 调流式方法
   if (provider.translateStream) {
-    return provider.translateStream(req, onChunk);
+    return provider.translateStream(req, onChunk, signal);
   }
 
   // 传统源回退：调 translate() 一次性返回，完整译文作单 chunk 推送
-  const result = await provider.translate(req);
+  const result = await provider.translate(req, signal);
   if (!result.error && result.translatedText) {
     onChunk({ deltaText: result.translatedText });
   }
