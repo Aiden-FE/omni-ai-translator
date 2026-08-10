@@ -1,0 +1,55 @@
+<!doctype html>
+<!-- PROTOTYPE ONLY: Three popup layouts, switchable via ?variant=A|B|C. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omni AI Translator - Popup Prototype</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="./prototype-controls.css">
+  </head>
+  <body>
+    <main class="prototype-stage" aria-label="Omni AI Translator popup 原型">
+      <section id="prototype-root"></section>
+    </main>
+
+    <nav class="prototype-switcher" aria-label="原型变体切换">
+      <button id="previous-variant" type="button" aria-label="上一个变体">←</button>
+      <div class="switcher-label">
+        <span class="prototype-mark">PROTOTYPE</span>
+        <strong id="variant-label"></strong>
+        <span id="state-label"></span>
+      </div>
+      <button id="next-variant" type="button" aria-label="下一个变体">→</button>
+    </nav>
+
+    <button id="tweaks-toggle" class="tweaks-toggle" type="button">Tweaks</button>
+    <aside id="tweaks-panel" class="tweaks-panel" hidden>
+      <div class="tweaks-heading">
+        <strong>Tweaks</strong>
+        <button id="tweaks-close" type="button" aria-label="关闭 Tweaks">×</button>
+      </div>
+      <label>
+        <span>界面状态</span>
+        <select id="state-select">
+          <option value="empty">空白</option>
+          <option value="ready">就绪</option>
+          <option value="streaming">流式翻译</option>
+          <option value="complete">已完成</option>
+          <option value="stopped">已停止</option>
+          <option value="error">网络错误</option>
+          <option value="overlimit">超出字数</option>
+        </select>
+      </label>
+      <label>
+        <span>译文篇幅</span>
+        <select id="length-select">
+          <option value="short">短句</option>
+          <option value="long">多段文本</option>
+        </select>
+      </label>
+    </aside>
+
+    <script src="./prototype.js"></script>
+  </body>
+</html>

@@ -19,6 +19,7 @@
     "lint": "eslint . --ext .ts,.vue",
     "e2e": "wxt build && playwright test",
     "e2e:install": "playwright install chromium",
+    "prototype:popup": "python3 -m http.server 4173 --bind 127.0.0.1 --directory entrypoints/popup/prototype",
     "postinstall": "wxt prepare"
   },
   "devDependencies": {
