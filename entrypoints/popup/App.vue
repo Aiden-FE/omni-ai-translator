@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // popup:#77 文本翻译工作台(变体 A 上下工作台)为默认视图;
-// 翻译源配置(SourceConfigPanel)经 header 设置入口访问(保留现有能力)。
+// 翻译源配置(SourceConfigPanel)经 header 设置入口访问(保留现有能力);
+// #81 设置视图往返:工作台 ⇄ 设置导航不结束文本翻译会话;
+// 默认目标语言复用共享目录 + LanguageSelect,选择即持久化。
 // #79:翻译经 browser.runtime.connect({ name: 'translate-stream' }) 流式 port 通道发起,
 // 复用划词翻译 StreamPortMessage 契约(request / chunk / done / error);
 // 译文增量渲染 + 光标反馈,主按钮在流式期间变为「停止」。

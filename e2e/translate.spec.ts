@@ -74,8 +74,11 @@ test('配置的默认目标语言生效,prompt 使用用户配置值', async ({ 
   const optionsPage = await context.newPage();
   await optionsPage.goto(`chrome-extension://${extensionId}/options.html`);
 
-  // 设置默认目标语言(填后点击其它元素触发 change 保存)
-  await optionsPage.getByPlaceholder('留空则使用浏览器首选语言').fill('简体中文');
+  // 通过共享语言选择器设置默认目标语言（选择即持久化）。
+  const defaultTargetLang = optionsPage.getByRole('combobox', { name: '默认目标语言' });
+  await defaultTargetLang.click();
+  await optionsPage.getByRole('option', { name: /简体中文.*zh-CN/ }).click();
+  await expect(defaultTargetLang).toContainText('zh-CN');
   await optionsPage.getByRole('button', { name: '+ 添加提供方' }).click();
 
   const cards = optionsPage.locator('.provider-card');
@@ -106,7 +109,7 @@ test('配置的默认目标语言生效,prompt 使用用户配置值', async ({ 
     messages?: Array<{ content?: string }>;
   } | null;
   const prompt = body?.messages?.[0]?.content ?? '';
-  expect(prompt).toContain('into 简体中文');
+  expect(prompt).toContain('into zh-CN');
 });
 
 test('OpenAI Responses 使用 Base URL 连通并以 input 字段完成划词翻译', async ({ context, extensionId }) => {

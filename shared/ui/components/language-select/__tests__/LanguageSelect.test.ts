@@ -136,6 +136,55 @@ describe('LanguageSelect — 选择与选中高亮', () => {
   });
 });
 
+describe('LanguageSelect — 浏览器首选语言选项(#81)', () => {
+  function mountSelectWithBrowserDefault(modelValue: string) {
+    return mount(LanguageSelect, {
+      props: { modelValue, allowBrowserDefault: true },
+      attachTo: document.body,
+    });
+  }
+
+  it('allowBrowserDefault 时在目录顶部提供「跟随浏览器语言」选项', async () => {
+    const wrapper = mountSelectWithBrowserDefault('en');
+    await openDropdown(wrapper);
+    const options = wrapper.findAll('[role="option"]');
+    expect(options.length).toBe(LANGUAGE_CATALOG.length + 1);
+    expect(options[0].attributes('data-browser-default')).toBe('true');
+    expect(options[0].text()).toContain('跟随浏览器语言');
+  });
+
+  it('未开启 allowBrowserDefault 时不渲染该选项', async () => {
+    const wrapper = mountSelect();
+    await openDropdown(wrapper);
+    expect(wrapper.find('[role="option"][data-browser-default="true"]').exists()).toBe(false);
+  });
+
+  it('选择浏览器选项发出空字符串并关闭弹层', async () => {
+    const wrapper = mountSelectWithBrowserDefault('en');
+    await openDropdown(wrapper);
+    await wrapper.find('[role="option"][data-browser-default="true"]').trigger('click');
+    expect(wrapper.emitted('update:modelValue')).toEqual([['']]);
+    await nextTick();
+    expect(wrapper.find('input[type="search"]').exists()).toBe(false);
+  });
+
+  it('modelValue 为空时触发器展示「跟随浏览器语言」且浏览器项带选中态', async () => {
+    const wrapper = mountSelectWithBrowserDefault('');
+    expect(wrapper.find('button[role="combobox"]').text()).toContain('跟随浏览器语言');
+    await openDropdown(wrapper);
+    const option = wrapper.find('[role="option"][data-browser-default="true"]');
+    expect(option.attributes('aria-selected')).toBe('true');
+  });
+
+  it('搜索时按「浏览器」可命中浏览器选项', async () => {
+    const wrapper = mountSelectWithBrowserDefault('en');
+    await openDropdown(wrapper);
+    await wrapper.find('input[type="search"]').setValue('浏览器');
+    const options = wrapper.findAll('[role="option"]');
+    expect(options.some((o) => o.attributes('data-browser-default') === 'true')).toBe(true);
+  });
+});
+
 describe('LanguageSelect — 选项展示格式', () => {
   it('选项展示「中文名 / 原文名 · 代码」', async () => {
     const wrapper = mountSelect();
