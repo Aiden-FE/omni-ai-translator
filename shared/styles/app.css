@@ -26,6 +26,22 @@ textarea {
   font: inherit;
 }
 
+/* 流式翻译光标：闪烁指示进行中（popup 文本翻译 / 划词浮层共用命名） */
+@keyframes stream-cursor-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  95% {
+    opacity: 0;
+  }
+}
+
+.stream-cursor {
+  animation: stream-cursor-blink 1s step-end infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

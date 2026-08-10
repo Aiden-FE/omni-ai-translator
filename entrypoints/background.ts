@@ -193,34 +193,75 @@ export default defineBackground(() => {
 
     if (port.name !== 'translate-stream') return;
 
-    port.onMessage.addListener((msg: StreamPortMessage) => {
-      if (msg.type !== 'request') return;
+    // 客户端可在流式期间断开（popup「停止」/ 关闭 popup）：
+    // 此后不再向已断开的 port 写消息，避免 uncaught postMessage 错误。
+    let requestAccepted = false;
+    let disconnected = false;
+    let terminalSent = false;
+
+    port.onDisconnect.addListener(() => {
+      disconnected = true;
+    });
+
+    const disconnectOnce = () => {
+      if (disconnected) return;
+      disconnected = true;
+      try {
+        port.disconnect();
+      } catch {
+        // The peer can disappear between the state check and disconnect().
+      }
+    };
+
+    const postMessage = (message: StreamPortMessage): boolean => {
+      if (disconnected) return false;
+      try {
+        port.postMessage(message);
+        return true;
+      } catch {
+        disconnectOnce();
+        return false;
+      }
+    };
+
+    const finalize = (message: StreamPortMessage) => {
+      if (disconnected || terminalSent) return;
+      terminalSent = true;
+      if (postMessage(message)) disconnectOnce();
+    };
+
+    port.onMessage.addListener((msg: unknown) => {
+      if (disconnected || requestAccepted || (msg as StreamPortMessage).type !== 'request') return;
+      requestAccepted = true;
+      const request = msg as Extract<StreamPortMessage, { type: 'request' }>;
 
       translateWithAdapterStream(
-        { text: msg.text, targetLang: msg.targetLang, sourceLang: msg.sourceLang },
+        { text: request.text, targetLang: request.targetLang, sourceLang: request.sourceLang },
         (chunk) => {
-          port.postMessage({ type: 'chunk', deltaText: chunk.deltaText });
+          if (!postMessage({ type: 'chunk', deltaText: chunk.deltaText })) {
+            throw new Error('translate-stream port disconnected');
+          }
         },
       )
-        .then((result) => {
-          if (result.error) {
-            port.postMessage({ type: 'error', result });
-          } else {
-            port.postMessage({ type: 'done', result });
-          }
-          port.disconnect();
-        })
-        .catch((err) => {
-          port.postMessage({
-            type: 'error',
-            result: {
-              translatedText: '',
-              error: err instanceof Error ? err.message : String(err),
-              errorType: 'network',
-            },
-          });
-          port.disconnect();
-        });
+        .then(
+          (result) => {
+            const message: StreamPortMessage = result.error
+              ? { type: 'error', result }
+              : { type: 'done', result };
+            finalize(message);
+          },
+          (err) => {
+            if (disconnected) return;
+            finalize({
+              type: 'error',
+              result: {
+                translatedText: '',
+                error: err instanceof Error ? err.message : String(err),
+                errorType: 'network',
+              },
+            });
+          },
+        );
     });
   });
 });

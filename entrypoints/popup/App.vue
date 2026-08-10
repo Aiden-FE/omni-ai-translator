@@ -1,13 +1,16 @@
 <script setup lang="ts">
 // popup:#77 文本翻译工作台(变体 A 上下工作台)为默认视图;
 // 翻译源配置(SourceConfigPanel)经 header 设置入口访问(保留现有能力)。
+// #79:翻译经 browser.runtime.connect({ name: 'translate-stream' }) 流式 port 通道发起,
+// 复用划词翻译 StreamPortMessage 契约(request / chunk / done / error);
+// 译文增量渲染 + 光标反馈,主按钮在流式期间变为「停止」。
 // 状态机来自 shared/popup-workbench.ts;不持久化输入文本、译文或历史。
-import { ref, reactive, computed, onMounted, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import SourceConfigPanel from '@/shared/ui/SourceConfigPanel.vue';
 import Button from '@/shared/ui/components/button/Button.vue';
 import ScrollArea from '@/shared/ui/components/scroll-area/ScrollArea.vue';
 import { getSettings } from '@/shared/storage';
-import type { TranslateResult } from '@/shared/types';
+import type { StreamPortMessage } from '@/shared/types';
 import {
   WORKBENCH_MAX_LENGTH,
   createWorkbenchState,
@@ -22,9 +25,14 @@ const sourceArea = ref<HTMLTextAreaElement | null>(null);
 const settingsPanel = ref<InstanceType<typeof SourceConfigPanel> | null>(null);
 
 const charCount = computed(() => countWorkbenchCharacters(state.sourceText));
+const isStreaming = computed(() => state.outputPhase === 'streaming');
 const canTranslate = computed(
-  () => state.inputPhase === 'ready' && state.outputPhase !== 'translating',
+  () => state.inputPhase === 'ready' && state.outputPhase !== 'streaming',
 );
+
+// 当前流式会话(port + 终结标记)。终结标记防止 done / error / disconnect 多路径重复处理。
+let streamPort: ReturnType<typeof browser.runtime.connect> | null = null;
+let streamFinished = false;
 
 async function initTargetLang() {
   // 骨架阶段沿用设置中的默认目标语言;未配置时跟随浏览器语言。
@@ -37,6 +45,15 @@ onMounted(async () => {
   await initTargetLang();
   await nextTick();
   sourceArea.value?.focus();
+});
+
+onUnmounted(() => {
+  // popup 关闭时断开进行中的流式 port(后台经 onDisconnect 感知,不再写消息)
+  try {
+    streamPort?.disconnect();
+  } catch {
+    // port 可能已被后台终结
+  }
 });
 
 function dispatch(action: Parameters<typeof reduceWorkbench>[1]) {
@@ -54,24 +71,65 @@ function onSourceKeydown(event: KeyboardEvent) {
   }
 }
 
+function finishStream() {
+  streamFinished = true;
+  streamPort = null;
+}
+
 async function translate() {
   if (!canTranslate.value) return;
   const text = state.sourceText;
   const lang = targetLang.value;
-  dispatch({ type: 'translate-start' });
-  try {
-    const result = await browser.runtime.sendMessage({
-      type: 'translate',
-      payload: { text, targetLang: lang },
-    }) as TranslateResult;
-    if (result.error) {
-      dispatch({ type: 'translate-error', message: result.error });
-    } else {
-      dispatch({ type: 'translate-success', result });
+
+  const port = browser.runtime.connect({ name: 'translate-stream' });
+  streamPort = port;
+  streamFinished = false;
+  dispatch({ type: 'stream-start' });
+
+  port.onMessage.addListener((msg: StreamPortMessage) => {
+    if (streamFinished) return;
+    if (msg.type === 'chunk') {
+      dispatch({ type: 'stream-chunk', deltaText: msg.deltaText });
+    } else if (msg.type === 'done') {
+      finishStream();
+      dispatch({ type: 'stream-done', result: msg.result });
+      try { port.disconnect(); } catch { /* 后台可能已断开 */ }
+    } else if (msg.type === 'error') {
+      finishStream();
+      dispatch({ type: 'stream-error', message: msg.result.error ?? '翻译失败,请重试' });
+      try { port.disconnect(); } catch { /* 后台可能已断开 */ }
     }
+  });
+
+  // 异常断开(SW 回收 / 后台重启等):归一为可恢复的终态,不卡死不悬停。
+  // 已有部分译文 → 视为停止并保留;无译文 → 网络错误。
+  port.onDisconnect.addListener(() => {
+    if (streamFinished) return;
+    finishStream();
+    if (state.translatedText) {
+      dispatch({ type: 'stream-stop' });
+    } else {
+      dispatch({ type: 'stream-error', message: '翻译连接中断,请重试' });
+    }
+  });
+
+  try {
+    port.postMessage({ type: 'request', text, targetLang: lang });
   } catch {
-    dispatch({ type: 'translate-error', message: '翻译请求失败,请重试' });
+    // 建连即失败 → 交给 onDisconnect 兜底
   }
+}
+
+function stop() {
+  if (!isStreaming.value) return;
+  const port = streamPort;
+  finishStream();
+  try {
+    port?.disconnect();
+  } catch {
+    // port 可能已被后台终结
+  }
+  dispatch({ type: 'stream-stop' });
 }
 
 async function openSettings() {
@@ -143,6 +201,7 @@ function handleAddProvider() {
       <div class="flex flex-none items-center gap-2 text-sm text-muted-foreground">
         <span>自动识别</span>
         <span aria-hidden="true">→</span>
+        <!-- 正式语言目录与可搜索选择器在 #78 落地;流式期间需禁用切换(isStreaming) -->
         <span class="text-foreground">{{ targetLang }}</span>
       </div>
 
@@ -162,7 +221,7 @@ function handleAddProvider() {
         <textarea
           ref="sourceArea"
           :value="state.sourceText"
-          :disabled="state.outputPhase === 'translating'"
+          :disabled="isStreaming"
           class="h-36 w-full resize-none rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
           :class="state.inputPhase === 'overlimit' ? 'border-destructive' : ''"
           placeholder="输入或粘贴要翻译的文本"
@@ -180,15 +239,22 @@ function handleAddProvider() {
         </p>
       </section>
 
-      <!-- 主操作按钮:位置固定在原文区与译文区之间,不随状态跳动 -->
+      <!-- 主操作按钮:位置固定在原文区与译文区之间,不随状态跳动;
+           流式期间同位置按钮变为「停止」(#79) -->
       <div class="flex-none">
         <Button
           class="h-10 w-full"
-          :disabled="!canTranslate"
-          @click="translate"
+          :variant="isStreaming ? 'destructive' : 'default'"
+          :disabled="isStreaming ? false : !canTranslate"
+          @click="isStreaming ? stop() : translate()"
         >
-          {{ state.outputPhase === 'translating' ? '翻译中…' : '翻译' }}
-          <kbd class="ml-2 text-xs opacity-70">⌘ ↵</kbd>
+          <template v-if="isStreaming">
+            停止
+          </template>
+          <template v-else>
+            翻译
+            <kbd class="ml-2 text-xs opacity-70">⌘ ↵</kbd>
+          </template>
         </Button>
       </div>
 
@@ -203,9 +269,13 @@ function handleAddProvider() {
             class="text-xs text-success"
           >已完成</span>
           <span
-            v-else-if="state.outputPhase === 'translating'"
+            v-else-if="isStreaming"
             class="text-xs text-muted-foreground"
           >翻译中</span>
+          <span
+            v-else-if="state.outputPhase === 'stopped'"
+            class="text-xs text-muted-foreground"
+          >已停止</span>
         </div>
         <ScrollArea class="min-h-0 flex-1 rounded-md border border-border bg-muted/40">
           <div
@@ -215,13 +285,21 @@ function handleAddProvider() {
           >
             {{ state.errorMessage }}
           </div>
+          <!-- 流式进行中:已到达的部分译文 + 闪烁光标 -->
           <div
-            v-else-if="state.outputPhase === 'translating'"
-            class="px-3 py-2 text-sm text-muted-foreground"
+            v-else-if="isStreaming"
+            class="whitespace-pre-wrap px-3 py-2 text-sm"
             aria-live="polite"
           >
-            正在翻译…
+            <span
+              v-if="!state.translatedText"
+              class="text-muted-foreground"
+            >正在翻译…</span>{{ state.translatedText }}<span
+              class="stream-cursor text-muted-foreground"
+              aria-hidden="true"
+            >▋</span>
           </div>
+          <!-- 完成 / 已停止:保留译文(停止后为已到达的部分译文) -->
           <div
             v-else-if="state.translatedText"
             class="whitespace-pre-wrap px-3 py-2 text-sm"
