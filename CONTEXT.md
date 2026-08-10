@@ -24,6 +24,11 @@
 ### 1.2 翻译能力
 | 术语 | 定义 |
 |---|---|
+| 文本翻译 | 用户主动提供独立文本并获取译文的翻译能力；与当前网页内容和页面翻译状态无关。 |
+| 文本翻译会话 | 从 popup 打开到关闭的一次临时交互上下文；在文本翻译与设置界面之间导航不会结束该会话。 |
+| 默认目标语言 | 用户在设置中持久化的目标语言偏好，供各类翻译能力初始化使用；未配置时跟随浏览器首选语言。 |
+| 临时目标语言 | 单次文本翻译期间对默认目标语言的临时覆盖；不改变默认目标语言，也不影响其他翻译能力。 |
+| 目标语言目录 | 文本翻译与设置共享的标准目标语言集合；目录不随当前翻译源变化。 |
 | 划词翻译 | content script 监听 `mouseup`，划词后出现浮按钮（`llm-translator-trigger`），点击触发；浮层在 about:blank iframe 内（`entrypoints/content.ts:showPanel`） |
 | 全文翻译 | 右键菜单 `fullpage-replace` / `fullpage-bilingual` → background `tabs.sendMessage` → fullpage.content → orchestrator |
 | `DisplayMode` | `'replace' \| 'bilingual'` 全文译文显示模式 |
@@ -194,7 +199,7 @@ ProviderConfig
 | P0 | 提交 typecheck 修复 PR | Q5/Q6 | 0.5 天 |
 | P1 | ① 全页大文档性能（1000+ 段） | Q7 | 1 周 |
 | P2 | ② Firefox/Edge e2e 覆盖 | R1 候选 | 2-3 天 |
-| P3 | ③ popup 翻译状态 / 历史 | R1 候选，R9 拍板延后 | 3-4 天 |
+| P3 | ③ 文本翻译 | 独立于页面翻译状态；不含输入、译文或历史持久化 | 3-4 天 |
 | P4 | CONTEXT.md 移入 `docs/adr/` | Q4 转正式 | 后续 sprint |
 | P5 | v0.4.0 release tag + AMO 提交 | 收尾 | 0.5 天 |
 
