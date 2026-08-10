@@ -1,6 +1,7 @@
 // popup 文本翻译工作台状态机单测
 // - #77 验收标准「单测覆盖翻译工作台状态机(空 / 就绪 / 超限)」
 // - #79 验收标准「单测覆盖流式状态机(就绪 → 流式 → 完成 / 停止)」
+// - #80 验收标准「单测覆盖 ErrorType → 展示文案映射与重试触发逻辑」
 // 被测 seam：shared/popup-workbench.ts 的纯函数状态机（无 DOM / browser 依赖）
 import { describe, it, expect } from 'vitest';
 import {
@@ -75,6 +76,7 @@ describe('createWorkbenchState — 初始状态', () => {
       outputPhase: 'idle',
       translatedText: '',
       errorMessage: '',
+      errorType: null,
     });
   });
 });
@@ -115,6 +117,7 @@ describe('reduceWorkbench — 输入与启动迁移', () => {
     expect(next.outputPhase).toBe('streaming');
     expect(next.translatedText).toBe('');
     expect(next.errorMessage).toBe('');
+    expect(next.errorType).toBeNull();
   });
 });
 
@@ -173,6 +176,37 @@ describe('reduceWorkbench — 流式迁移(就绪 → 流式 → 完成 / 停止
     expect(next.translatedText).toBe('');
   });
 
+  it('stream-error: 携带 errorType 时记录到状态(供差异化横幅)', () => {
+    const next = reduceWorkbench(streamingState(), {
+      type: 'stream-error',
+      message: '未配置可用翻译源',
+      errorType: 'no-config',
+    });
+    expect(next.outputPhase).toBe('error');
+    expect(next.errorType).toBe('no-config');
+  });
+
+  it('stream-error: 无 errorType(连接中断等)时为 null', () => {
+    const next = reduceWorkbench(streamingState(), {
+      type: 'stream-error',
+      message: '翻译连接中断,请重试',
+    });
+    expect(next.errorType).toBeNull();
+  });
+
+  it('重试: error 后 stream-start 重新进入流式,原文与输入阶段保留', () => {
+    const errored = reduceWorkbench(streamingState('hello'), {
+      type: 'stream-error',
+      message: '翻译请求失败',
+      errorType: 'network',
+    });
+    const retried = reduceWorkbench(errored, { type: 'stream-start' });
+    expect(retried.outputPhase).toBe('streaming');
+    expect(retried.sourceText).toBe('hello');
+    expect(retried.errorMessage).toBe('');
+    expect(retried.errorType).toBeNull();
+  });
+
   it('stream-stop: 保留已到达的部分译文,进入 stopped', () => {
     const streaming = reduceWorkbench(streamingState(), { type: 'stream-chunk', deltaText: '你好世' });
     const next = reduceWorkbench(streaming, { type: 'stream-stop' });
@@ -205,6 +239,15 @@ describe('reduceWorkbench — 流式迁移(就绪 → 流式 → 完成 / 停止
       reduceWorkbench(stopped, { type: 'stream-done', result: { translatedText: '晚到' } }),
     ).toBe(stopped);
     expect(reduceWorkbench(stopped, { type: 'stream-error', message: '晚到' })).toBe(stopped);
+  });
+
+  it('stream-done: 成功后清空残留 errorType', () => {
+    const streaming = streamingState();
+    const next = reduceWorkbench(streaming, {
+      type: 'stream-done',
+      result: { translatedText: '你好' },
+    });
+    expect(next.errorType).toBeNull();
   });
 
   it('streaming 期间 edit-text 被拒绝(原文区锁定)', () => {
