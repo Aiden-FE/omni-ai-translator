@@ -4,6 +4,9 @@
 // #79:翻译经 browser.runtime.connect({ name: 'translate-stream' }) 流式 port 通道发起,
 // 复用划词翻译 StreamPortMessage 契约(request / chunk / done / error);
 // 译文增量渲染 + 光标反馈,主按钮在流式期间变为「停止」。
+// #80:翻译出错按 ErrorType 四类差异化展示错误横幅(文案来自 errorFeedback),
+// 横幅内提供重试(保留原文与当前临时目标语言);译文可复制并给出短暂已复制反馈。
+// 错误横幅渲染在译文区内,不推动主操作按钮位置。
 // 状态机来自 shared/popup-workbench.ts;不持久化输入文本、译文或历史。
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue';
 import SourceConfigPanel from '@/shared/ui/SourceConfigPanel.vue';
@@ -12,6 +15,7 @@ import ScrollArea from '@/shared/ui/components/scroll-area/ScrollArea.vue';
 import LanguageSelect from '@/shared/ui/components/language-select/LanguageSelect.vue';
 import { getSettings } from '@/shared/storage';
 import { resolveInitialTargetLang } from '@/shared/language-catalog';
+import { errorFeedback } from '@/shared/translator/error';
 import type { StreamPortMessage } from '@/shared/types';
 import {
   WORKBENCH_MAX_LENGTH,
@@ -33,6 +37,22 @@ const isStreaming = computed(() => state.outputPhase === 'streaming');
 const canTranslate = computed(
   () => state.inputPhase === 'ready' && state.outputPhase !== 'streaming',
 );
+
+// 错误横幅文案:有 errorType 时按 errorFeedback 差异化展示;否则展示原始错误信息
+const errorBanner = computed(() =>
+  state.errorType
+    ? errorFeedback(state.errorType)
+    : { main: state.errorMessage, guidance: '' },
+);
+
+// 译文可复制:完成或已停止(保留部分译文)且有译文内容
+const canCopyTranslation = computed(
+  () =>
+    (state.outputPhase === 'success' || state.outputPhase === 'stopped')
+    && state.translatedText.length > 0,
+);
+const copied = ref(false);
+let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 当前流式会话的 port。回调必须校验 port 仍为当前会话，避免旧会话延迟断开污染新翻译。
 let streamPort: ReturnType<typeof browser.runtime.connect> | null = null;
@@ -61,6 +81,7 @@ onUnmounted(() => {
   } catch {
     // port 可能已被后台终结
   }
+  if (copiedTimer) clearTimeout(copiedTimer);
 });
 
 function dispatch(action: Parameters<typeof reduceWorkbench>[1]) {
@@ -103,7 +124,11 @@ async function translate() {
       try { port.disconnect(); } catch { /* 后台可能已断开 */ }
     } else if (msg.type === 'error') {
       if (!finishStream(port)) return;
-      dispatch({ type: 'stream-error', message: msg.result.error ?? '翻译失败,请重试' });
+      dispatch({
+        type: 'stream-error',
+        message: msg.result.error ?? '翻译失败,请重试',
+        errorType: msg.result.errorType,
+      });
       try { port.disconnect(); } catch { /* 后台可能已断开 */ }
     }
   });
@@ -136,6 +161,22 @@ function stop() {
     // port 可能已被后台终结
   }
   dispatch({ type: 'stream-stop' });
+}
+
+// 复制当前译文;成功后短暂展示「已复制」反馈(约 1.5s 后恢复)
+async function copyTranslation() {
+  if (!canCopyTranslation.value) return;
+  try {
+    await navigator.clipboard.writeText(state.translatedText);
+  } catch {
+    return; // 剪贴板不可用时保持原状
+  }
+  copied.value = true;
+  if (copiedTimer) clearTimeout(copiedTimer);
+  copiedTimer = setTimeout(() => {
+    copied.value = false;
+    copiedTimer = null;
+  }, 1500);
 }
 
 async function openSettings() {
@@ -274,26 +315,55 @@ function handleAddProvider() {
       >
         <div class="flex flex-none items-baseline justify-between">
           <span class="text-xs font-medium">译文</span>
-          <span
-            v-if="state.outputPhase === 'success'"
-            class="text-xs text-success"
-          >已完成</span>
-          <span
-            v-else-if="isStreaming"
-            class="text-xs text-muted-foreground"
-          >翻译中</span>
-          <span
-            v-else-if="state.outputPhase === 'stopped'"
-            class="text-xs text-muted-foreground"
-          >已停止</span>
+          <span class="flex items-baseline gap-2">
+            <span
+              v-if="state.outputPhase === 'success'"
+              class="text-xs text-success"
+            >已完成</span>
+            <span
+              v-else-if="isStreaming"
+              class="text-xs text-muted-foreground"
+            >翻译中</span>
+            <span
+              v-else-if="state.outputPhase === 'stopped'"
+              class="text-xs text-muted-foreground"
+            >已停止</span>
+            <!-- 有译文时一键复制;复制成功短暂反馈「已复制」(#80) -->
+            <button
+              v-if="canCopyTranslation"
+              type="button"
+              class="text-xs"
+              :class="copied ? 'text-success' : 'text-primary hover:underline'"
+              @click="copyTranslation"
+            >
+              {{ copied ? '已复制 ✓' : '复制' }}
+            </button>
+          </span>
         </div>
         <ScrollArea class="min-h-0 flex-1 rounded-md border border-border bg-muted/40">
+          <!-- 错误横幅(#80):按 ErrorType 差异化展示,带重试入口;
+               渲染在译文区内,不推动主操作按钮位置 -->
           <div
             v-if="state.outputPhase === 'error'"
-            class="px-3 py-2 text-sm text-destructive"
+            class="flex flex-col gap-2 px-3 py-2"
             role="alert"
           >
-            {{ state.errorMessage }}
+            <div class="text-sm text-destructive">
+              {{ errorBanner.main }}
+              <span
+                v-if="errorBanner.guidance"
+                class="text-xs text-muted-foreground"
+              >{{ errorBanner.guidance }}</span>
+            </div>
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                @click="translate"
+              >
+                重试
+              </Button>
+            </div>
           </div>
           <!-- 流式进行中:已到达的部分译文 + 闪烁光标 -->
           <div
