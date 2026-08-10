@@ -19,8 +19,6 @@ import {
   SYNC_SCHEDULER,
   type ChunkerChunk,
 } from './chunker';
-import type { SegmentRecord } from './types';
-
 /** 构造合成 N 段 DOM(深度 1-3,文本 60-200 字符) */
 function buildSyntheticDom(segmentCount: number): HTMLElement {
   const body = document.createElement('div');
@@ -154,7 +152,7 @@ describe('chunker / discoverSegments (sync scheduler)', () => {
   it('chunk 内部: 自定义 isInViewport 偶数 idx 视口外,验证 emit 分组', async () => {
     const root = buildSyntheticDom(10);
     let i = 0;
-    const custom = (_s: SegmentRecord) => { i += 1; return i % 2 === 1; };
+    const custom = () => { i += 1; return i % 2 === 1; };
     const chunks: ChunkerChunk[] = [];
     await discoverSegments({
       root,
