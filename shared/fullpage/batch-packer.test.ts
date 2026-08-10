@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { BatchTranslatedChunk, BatchTranslateChunk } from '@/shared/types';
 import {
   MAX_BATCH_CHUNKS,
+  MAX_BATCH_PARTS,
   MAX_BATCH_SOURCE_CHARS,
   countCodePoints,
   createTransportChunks,
@@ -78,6 +79,30 @@ describe('transport batch packing', () => {
     expect(packTransportBatches(chunks).map((batch) => batch.length)).toEqual([20, 1]);
   });
 
+  it('limits complex requests to 40 total parts while preserving chunk order', () => {
+    const chunks = Array.from({ length: 20 }, (_, chunkIndex) => ({
+      chunkId: `complex-${chunkIndex}`,
+      segmentId: `segment-${chunkIndex}`,
+      parts: Array.from({ length: 5 }, (_, partId) => ({
+        partId,
+        sliceIndex: 0,
+        text: 'x',
+      })),
+    }));
+
+    const batches = packTransportBatches(chunks);
+
+    expect(batches.map((batch) => batch.length)).toEqual([8, 8, 4]);
+    expect(batches.map((batch) => batch.flatMap((chunk) => chunk.parts).length)).toEqual([
+      40,
+      40,
+      20,
+    ]);
+    expect(batches.flat().map((chunk) => chunk.chunkId)).toEqual(
+      chunks.map((chunk) => chunk.chunkId),
+    );
+  });
+
   it('counts Unicode code points and never exceeds 6000', () => {
     const chunks = [wireChunk('a', '😀'.repeat(3000)), wireChunk('b', '文'.repeat(3001))];
 
@@ -106,6 +131,21 @@ describe('transport batch packing', () => {
     }]);
   });
 
+  it('transport-splits one semantic segment that exceeds the part budget', () => {
+    const chunks = createTransportChunks(
+      segmentWithParts(Array.from({ length: 41 }, () => 'x')),
+    );
+
+    expect(chunks.map((chunk) => chunk.parts.length)).toEqual([40, 1]);
+    expect(chunks.map((chunk) => chunk.chunkId)).toEqual([
+      'multipart-segment:0',
+      'multipart-segment:1',
+    ]);
+    expect(chunks.flatMap((chunk) => chunk.parts).map((part) => part.sliceIndex)).toEqual(
+      Array.from({ length: 41 }, (_, index) => index),
+    );
+  });
+
   it('rejects empty and over-budget chunks instead of emitting invalid requests', () => {
     expect(() => packTransportBatches([wireChunk('empty', '')])).toThrow();
     expect(() => packTransportBatches([wireChunk('oversized', 'x'.repeat(MAX_BATCH_SOURCE_CHARS + 1))])).toThrow();
@@ -113,6 +153,7 @@ describe('transport batch packing', () => {
 
   it('exports the literal transport limits', () => {
     expect(MAX_BATCH_CHUNKS).toBe(20);
+    expect(MAX_BATCH_PARTS).toBe(40);
     expect(MAX_BATCH_SOURCE_CHARS).toBe(6000);
   });
 
@@ -144,5 +185,20 @@ describe('transport batch packing', () => {
         { partId: 1, sliceIndex: 2, text: 'b' },
       ],
     }])).toBe(false);
+  });
+
+  it('rejects more than 40 total parts at the background boundary', () => {
+    const chunkWithParts = (count: number): BatchTranslateChunk => ({
+      chunkId: `parts-${count}`,
+      segmentId: 'segment',
+      parts: Array.from({ length: count }, (_, partId) => ({
+        partId,
+        sliceIndex: 0,
+        text: 'x',
+      })),
+    });
+
+    expect(isValidBatchTranslateChunks([chunkWithParts(40)])).toBe(true);
+    expect(isValidBatchTranslateChunks([chunkWithParts(41)])).toBe(false);
   });
 });

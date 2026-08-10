@@ -38,7 +38,7 @@ const INITIAL_REQUEST_COUNT = 1;
 /** 初始 fixture 的语义段总数。 */
 const INITIAL_SEGMENT_COUNT = 10;
 
-/** 视口 fixture：首屏一批 + 同一 25ms 窗口进入视口的一批。 */
+/** 视口 fixture：首屏优先一批 + 发现结束后后台排空一批。 */
 const VIEWPORT_REQUEST_COUNT = 2;
 
 interface CapturedBatchPart {
@@ -585,7 +585,7 @@ test('工具栏收起后迷你把手可见,点把手恢复工具栏', async ({ c
   await expect(miniHandle).toBeHidden();
 });
 
-test('dynamic and viewport arrivals in one queue window share one batch request', async ({
+test('visible segments are prioritized, then off-screen segments drain without scrolling', async ({
   context,
   extensionId,
 }) => {
@@ -598,48 +598,24 @@ test('dynamic and viewport arrivals in one queue window share one batch request'
   await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
 
-  // 此时视口外段不应被派发：请求计数 = 1（仅视口内批次）。
-  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
-
-  // dynamic queueSegments 先加 loading；页面 observer 立即滚动，触发独立 IO arrival。
-  await page.evaluate(() => {
-    const viewportTarget = document.querySelector('#out-1');
-    const firstSpacer = document.querySelector('[data-test="spacer-before-out-1"]');
-    if (!(viewportTarget instanceof HTMLElement) || !(firstSpacer instanceof HTMLElement)) {
-      throw new Error('mixed-arrival fixture anchors missing');
-    }
-
-    const observer = new MutationObserver(() => {
-      const dynamic = document.querySelector('#dynamic-mixed');
-      if (dynamic?.nextElementSibling?.classList.contains('llm-translator-loading-host')) {
-        observer.disconnect();
-        document.body.dataset.mixedArrivalScrolls = '1';
-        viewportTarget.scrollIntoView({ block: 'center' });
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    const dynamic = document.createElement('p');
-    dynamic.id = 'dynamic-mixed';
-    dynamic.textContent = 'Dynamic segment enters the shared batch queue.';
-    firstSpacer.before(dynamic);
-  });
-
-  await expect(page.locator('body')).toHaveAttribute('data-mixed-arrival-scrolls', '1');
-  await expect(page.locator('#dynamic-mixed')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
-  await expect(page.locator('#out-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  // 不滚动页面；发现完成后，所有视口外段仍应由后台 batch 排空。
+  for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
+    await expect(page.locator(`#${id}`)).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
+  }
   expect(getRequestCount(CHAT_ROUTE)).toBe(VIEWPORT_REQUEST_COUNT);
 
   const requests = getCapturedBatchRequests();
   expect(requests).toHaveLength(VIEWPORT_REQUEST_COUNT);
-  const mixedRequest = requests.find((request) => {
-    const source = request.chunks.flatMap((chunk) => chunk.parts).map((part) => part.text);
-    return source.includes('Dynamic segment enters the shared batch queue.');
-  });
-  expect(mixedRequest?.chunks.flatMap((chunk) => chunk.parts).map((part) => part.text))
+  expect(requests[0].chunks.flatMap((chunk) => chunk.parts).map((part) => part.text))
     .toEqual(expect.arrayContaining([
-      'Dynamic segment enters the shared batch queue.',
+      'The first viewport paragraph opens the viewport scheduling test.',
+      'The second viewport paragraph continues the visible content.',
+      'The third viewport paragraph closes the on-screen introduction.',
+    ]));
+  expect(requests[1].chunks.flatMap((chunk) => chunk.parts).map((part) => part.text))
+    .toEqual(expect.arrayContaining([
       'The first out-of-viewport paragraph waits for the IntersectionObserver.',
+      'The sixth out-of-viewport paragraph closes the off-screen content.',
     ]));
 });
 
@@ -656,24 +632,21 @@ test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loa
   const page = await openTestPageUrl(context, viewportTestPageUrl);
   await triggerFullpageTranslate(context, 'replace');
 
-  // 视口内 3 段立即译出,视口外 6 段保留 loading 宿主且仍为原文(已注册到 IO)
+  // 视口内 3 段优先译出，视口外 6 段随后由后台队列排空。
   await expect(page.locator('#in-1')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-2')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(page.locator('#in-3')).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
-  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
-
-  // 视口外 6 段仍为原文(loading 宿主可见,IO 监听中)
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
-    const seg = page.locator(`#${id}`);
-    await expect(seg).not.toHaveText(MOCK_TRANSLATION);
+    await expect(page.locator(`#${id}`)).toHaveText(MOCK_TRANSLATION, { timeout: 15_000 });
   }
+  expect(getRequestCount(CHAT_ROUTE)).toBe(VIEWPORT_REQUEST_COUNT);
 
   // 恢复原文:编排器 handleRestore 末尾应 viewportObserver?.disconnect(); viewportObserver = null;
-  // 视口外段 IO 监听终止,段元素 + 文本还原,全部注入宿主清理
+  // 编排器停止所有观察与后台队列，段元素 + 文本还原，全部注入宿主清理。
   await page.getByRole('button', { name: '恢复原文' }).click();
   await expect(page.locator('[data-llm-translator]')).toHaveCount(0);
 
-  // 6 视口外段恢复为原文(与视口内段共用 restoreAll 路径,验证段元素未损坏)
+  // 6 视口外段恢复为原文（与视口内段共用 restoreAll 路径）。
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
     const seg = page.locator(`#${id}`);
     await expect(seg).not.toHaveText(MOCK_TRANSLATION);
@@ -699,13 +672,11 @@ test('恢复原文后 IntersectionObserver 已 disconnect,滚动不触发新 loa
   // 不会加新的 loading 宿主。若 disconnect 被移除,此处会显示 6 个新 loading 宿主。
   await expect(page.locator('[data-llm-translator]')).toHaveCount(0);
 
-  // 6 视口外段仍为原文(IO 未触发 onEnter -> 未派发翻译请求)
+  // 6 视口外段仍为原文，滚动没有重新激活已结束的会话。
   for (const id of ['out-1', 'out-2', 'out-3', 'out-4', 'out-5', 'out-6'] as const) {
     const seg = page.locator(`#${id}`);
     await expect(seg).not.toHaveText(MOCK_TRANSLATION);
   }
 
-  // Sanity check(弱观察):请求计数仍为 1。runPool 的 shouldStop 会阻止新请求,
-  // 即使 IO 未 disconnect,此断言也通过;但与强断言组合,共同锁定「IO 已 disconnect」语义。
-  expect(getRequestCount(CHAT_ROUTE)).toBe(INITIAL_REQUEST_COUNT);
+  expect(getRequestCount(CHAT_ROUTE)).toBe(VIEWPORT_REQUEST_COUNT);
 });

@@ -235,6 +235,48 @@ describe('runBatchPool', () => {
     await poolPromise;
   });
 
+  it('times out silent ports, releases their permits, and starts queued batches', async () => {
+    vi.useFakeTimers();
+    try {
+      const segments = Array.from(
+        { length: 4 },
+        (_, index) => semanticSegment(`silent-${index}`, ['x'.repeat(6000)]),
+      );
+      const poolPromise = runBatchPool(segments, options());
+
+      expect(runtime.ports).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(runtime.ports).toHaveLength(4);
+      expect(segments.slice(0, 3).map((segment) => segment.status)).toEqual([
+        'failed',
+        'failed',
+        'failed',
+      ]);
+      expect(segments.slice(0, 3).map((segment) => segment.errorType)).toEqual([
+        'network',
+        'network',
+        'network',
+      ]);
+      for (const port of runtime.ports.slice(0, 3)) {
+        expect(port.disconnect).toHaveBeenCalledTimes(1);
+      }
+      expect(runtime.activePortCount()).toBe(1);
+      expect(segments[3].status).toBe('translating');
+
+      const queuedPort = runtime.ports[3];
+      queuedPort.emitChunk(translatedChunk(queuedPort, 0));
+      queuedPort.emitDone();
+
+      const result = await poolPromise;
+      expect(result.failed).toEqual(segments.slice(0, 3));
+      expect(result.succeeded).toEqual([segments[3]]);
+      expect(runtime.activePortCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects terminal settlement errors without leaking shared gate permits', async () => {
     const requestGate = createBatchRequestGate();
     const settlementError = new Error('settlement callback failed');

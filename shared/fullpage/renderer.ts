@@ -52,6 +52,48 @@ function findInsertionRef(seg: SegmentRecord): Element {
   return seg.el.closest(BLOCK_SELECTOR) ?? seg.el;
 }
 
+/** flex/grid 的直接子项不能再插入一个译文兄弟节点，否则会改变宿主布局轨道。 */
+function isLayoutContainer(el: Element | null): boolean {
+  if (!el) return false;
+  try {
+    const display = window.getComputedStyle(el).display;
+    return display === 'flex'
+      || display === 'inline-flex'
+      || display === 'grid'
+      || display === 'inline-grid';
+  } catch {
+    return false;
+  }
+}
+
+/** 把源元素的排版属性传入 shadow，译文保持页面原有视觉语言。 */
+function inheritSourceTypography(host: HTMLElement, source: HTMLElement): void {
+  let sourceStyle: CSSStyleDeclaration;
+  try {
+    sourceStyle = window.getComputedStyle(source);
+  } catch {
+    return;
+  }
+
+  const properties = [
+    ['color', 'color'],
+    ['font-family', 'fontFamily'],
+    ['font-size', 'fontSize'],
+    ['font-weight', 'fontWeight'],
+    ['font-style', 'fontStyle'],
+    ['line-height', 'lineHeight'],
+    ['letter-spacing', 'letterSpacing'],
+    ['text-align', 'textAlign'],
+    ['text-transform', 'textTransform'],
+    ['direction', 'direction'],
+  ] as const;
+
+  for (const [cssName, styleName] of properties) {
+    const value = sourceStyle[styleName];
+    if (value) host.style.setProperty(`--llm-translator-source-${cssName}`, value);
+  }
+}
+
 /**
  * 在参考元素后插入译文块宿主，跳过已有连续译文块以保持堆叠顺序。
  * 同祖先多段依次堆叠：新块插到最后一个连续 block-host 之后。
@@ -75,8 +117,11 @@ function insertBlockAfter(ref: Element, host: HTMLElement): void {
  * @param className - 宿主 class（llm-translator-block-host 或 llm-translator-failed-host）
  * @returns [宿主元素, shadow root]
  */
-function createShadowHost(className: string): [HTMLElement, ShadowRoot] {
-  const host = document.createElement('div');
+function createShadowHost(
+  className: string,
+  tagName: 'div' | 'span' = 'div',
+): [HTMLElement, ShadowRoot] {
+  const host = document.createElement(tagName);
   host.className = className;
   host.setAttribute('data-llm-translator', '');
   const shadow = host.attachShadow({ mode: 'open' });
@@ -135,14 +180,28 @@ export function applyBilingual(seg: SegmentRecord): void {
   // 还原文本节点（若此前为替换模式，恢复原文；若为原始状态则 no-op）
   restoreTextNodes(seg);
 
-  const [host, shadow] = createShadowHost('llm-translator-block-host');
+  const ref = findInsertionRef(seg);
+  const placeInsideLayoutItem = isLayoutContainer(seg.el.parentElement)
+    || (ref !== seg.el && (
+      isLayoutContainer(ref)
+      || isLayoutContainer(ref.parentElement)
+    ));
+  const [host, shadow] = createShadowHost(
+    'llm-translator-block-host',
+    placeInsideLayoutItem ? 'span' : 'div',
+  );
+  inheritSourceTypography(host, seg.el);
   const container = document.createElement('div');
   container.className = 'llm-translator-block-content';
   container.textContent = seg.translatedText ?? '';
   shadow.appendChild(container);
 
-  const ref = findInsertionRef(seg);
-  insertBlockAfter(ref, host);
+  if (placeInsideLayoutItem) {
+    host.setAttribute('data-placement', 'inside-layout-item');
+    seg.el.appendChild(host);
+  } else {
+    insertBlockAfter(ref, host);
+  }
 
   seg.blockHost = host;
 }
@@ -157,7 +216,11 @@ export function markLoading(seg: SegmentRecord): void {
 
   clearLoadingMark(seg);
 
-  const [host, shadow] = createShadowHost('llm-translator-loading-host');
+  const placeInsideLayoutItem = isLayoutContainer(seg.el.parentElement);
+  const [host, shadow] = createShadowHost(
+    'llm-translator-loading-host',
+    placeInsideLayoutItem ? 'span' : 'div',
+  );
   const status = document.createElement('span');
   status.className = 'llm-translator-loading-status';
   status.setAttribute('role', 'status');
@@ -170,7 +233,12 @@ export function markLoading(seg: SegmentRecord): void {
   shadow.appendChild(status);
 
   const ref = seg.failedMarkHost ?? seg.blockHost ?? seg.el;
-  ref.after(host);
+  if (placeInsideLayoutItem && ref === seg.el) {
+    host.setAttribute('data-placement', 'inside-layout-item');
+    seg.el.appendChild(host);
+  } else {
+    ref.after(host);
+  }
   seg.loadingMarkHost = host;
 }
 
@@ -184,22 +252,37 @@ export function clearLoadingMark(seg: SegmentRecord): void {
  * 失败标记：在段尾追加带 shadow 的小徽标宿主（⚠ + 虚线底边）。
  * 替换/双语模式通用：双语模式插到 blockHost 之后，替换模式插到 seg.el 之后。
  */
-export function markFailed(seg: SegmentRecord): void {
+export function markFailed(seg: SegmentRecord, onRetry?: () => void): void {
   clearLoadingMark(seg);
   // 先清除旧徽标
   if (seg.failedMarkHost) {
     seg.failedMarkHost.remove();
   }
 
-  const [host, shadow] = createShadowHost('llm-translator-failed-host');
-  const badge = document.createElement('span');
+  const placeInsideLayoutItem = isLayoutContainer(seg.el.parentElement);
+  const [host, shadow] = createShadowHost(
+    'llm-translator-failed-host',
+    placeInsideLayoutItem ? 'span' : 'div',
+  );
+  const badge = document.createElement(onRetry ? 'button' : 'span');
   badge.className = 'llm-translator-failed-badge';
   badge.textContent = '⚠';
+  if (badge instanceof HTMLButtonElement) {
+    badge.type = 'button';
+    badge.title = '重试此段翻译';
+    badge.setAttribute('aria-label', '重试此段翻译');
+    badge.addEventListener('click', onRetry!);
+  }
   shadow.appendChild(badge);
 
   // 双语模式插到 blockHost 之后，替换模式插到 seg.el 之后
   const ref = seg.blockHost ?? seg.el;
-  ref.after(host);
+  if (placeInsideLayoutItem && ref === seg.el) {
+    host.setAttribute('data-placement', 'inside-layout-item');
+    seg.el.appendChild(host);
+  } else {
+    ref.after(host);
+  }
 
   seg.failedMarkHost = host;
 }

@@ -17,6 +17,7 @@ import type {
 export type { BatchPoolOptions, BatchRequestGate } from './types';
 
 const BATCH_PORT_NAME = 'fullpage-translate-batch-stream';
+const BATCH_PORT_TIMEOUT_MS = 65_000;
 const SEMANTIC_CACHE_VERSION = 'semantic-v1';
 const CACHE_SEP = '\u0000';
 let requestSequence = 0;
@@ -323,6 +324,7 @@ export async function runBatchPool(
       ) => {
         if (finished) return;
         finished = true;
+        clearTimeout(timeoutId);
 
         let settlementError = initialError;
         const failOwner = (owner: OwnerState) => {
@@ -350,6 +352,7 @@ export async function runBatchPool(
         }
       };
 
+      const timeoutId = setTimeout(() => finish('error', 'network'), BATCH_PORT_TIMEOUT_MS);
       try {
         port = browser.runtime.connect({ name: BATCH_PORT_NAME }) as unknown as BatchPort;
         port.onMessage.addListener((message: unknown) => {

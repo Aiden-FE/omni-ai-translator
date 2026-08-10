@@ -46,6 +46,8 @@ import type { SegmentRecord, SemanticTranslation } from './types';
 const OBSERVER_DEBOUNCE_MS = 200;
 /** 视口进入与动态分段共享的 micro-batch 聚合窗口（ms） */
 const BATCH_QUEUE_MS = 25;
+/** 动态视口外段等待滚入视口的短暂优先窗口，之后自动后台翻译。 */
+const DEFERRED_DRAIN_MS = 100;
 /** chunker 调度器预算（ms），与 Q21=B 一致 */
 const CHUNKER_BUDGET_MS = 8;
 /** chunker 每片段数上限，与 Q9 决策一致 */
@@ -96,6 +98,10 @@ let isFlushing = false;
 let queuedSegments: Set<SegmentRecord> = new Set();
 let batchQueueTimer: ReturnType<typeof setTimeout> | null = null;
 let batchQueueGeneration = 0;
+/** 已注册 viewportObserver、尚未派发的段。 */
+let deferredViewportSegments: Set<SegmentRecord> = new Set();
+let deferredDrainTimer: ReturnType<typeof setTimeout> | null = null;
+let deferredDrainGeneration = 0;
 
 /**
  * 启动全文翻译。
@@ -130,6 +136,7 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
 async function doStart(requestedMode: DisplayMode): Promise<void> {
   const generation = ++sessionGeneration;
   clearBatchQueue();
+  clearDeferredDrain();
   active = true;
   mode = requestedMode;
   let resolvedTargetLang: string;
@@ -200,6 +207,9 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   // 真实 M/N(空页面 → “未发现可翻译文本”)。
   if (isSessionActive(generation)) {
     updateProgress();
+    // 视口只决定优先级，不决定是否翻译。发现结束后后台排空所有未相交段，
+    // 避免 sticky/hidden 几何或用户不滚动时进度永久停在 N-x/N。
+    scheduleDeferredDrain(generation, 0);
   }
 
   // 会话失效或初始页面无分段时不启动观察器
@@ -238,6 +248,7 @@ function handleDiscoveryChunk(
       viewportObserver = createViewportEnterObserver(generation);
     }
     for (const seg of newOutView) {
+      deferredViewportSegments.add(seg);
       viewportObserver.observe(seg);
     }
   }
@@ -293,6 +304,7 @@ function cleanupFailedStart(generation: number): void {
   if (records.length > 0) restoreAll(records);
   stopObserver();
   clearBatchQueue();
+  clearDeferredDrain();
   viewportObserver?.disconnect();
   viewportObserver = null;
   toolbar?.destroy();
@@ -313,21 +325,26 @@ void walkSemanticSegments;
 
 /** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */
 function queueSegments(segs: SegmentRecord[], generation: number): void {
-  if (segs.length === 0 || !isSessionActive(generation)) return;
+  const pendingSegments = segs.filter((seg) => seg.status === 'pending');
+  if (pendingSegments.length === 0 || !isSessionActive(generation)) return;
   if (batchQueueTimer !== null && batchQueueGeneration !== generation) {
     clearBatchQueue();
   }
   batchQueueGeneration = generation;
-  for (const seg of segs) queuedSegments.add(seg);
-  markSegmentsLoading(segs);
+  for (const seg of pendingSegments) queuedSegments.add(seg);
+  markSegmentsLoading(pendingSegments);
   updateProgress();
   if (batchQueueTimer !== null) return;
   batchQueueTimer = setTimeout(() => {
     batchQueueTimer = null;
     const queuedGeneration = batchQueueGeneration;
-    const segments = Array.from(queuedSegments);
+    const queued = Array.from(queuedSegments);
     queuedSegments = new Set();
     if (!isSessionActive(queuedGeneration)) return;
+    discardDisconnectedSegments(queued);
+    const segments = queued.filter(
+      (seg) => seg.status === 'pending' && seg.el.isConnected,
+    );
     void enqueueSegments(segments, queuedGeneration).catch((err) => {
       console.warn('[fullpage] micro-batch enqueue failed', err);
     });
@@ -343,6 +360,61 @@ function clearBatchQueue(): void {
   batchQueueGeneration = 0;
 }
 
+/** 安排视口外段兜底派发；初始发现结束立即安排，动态段保留短暂视口优先窗口。 */
+function scheduleDeferredDrain(generation: number, delay = DEFERRED_DRAIN_MS): void {
+  if (!isSessionActive(generation) || deferredViewportSegments.size === 0) return;
+  if (deferredDrainTimer !== null) {
+    if (deferredDrainGeneration === generation) return;
+    clearTimeout(deferredDrainTimer);
+  }
+  deferredDrainGeneration = generation;
+  deferredDrainTimer = setTimeout(() => {
+    deferredDrainTimer = null;
+    const scheduledGeneration = deferredDrainGeneration;
+    deferredDrainGeneration = 0;
+    if (!isSessionActive(scheduledGeneration)) return;
+
+    const deferred = Array.from(deferredViewportSegments);
+    for (const seg of deferred) {
+      deferredViewportSegments.delete(seg);
+      viewportObserver?.unobserve(seg);
+    }
+    discardDisconnectedSegments(deferred);
+    const segments = deferred.filter(
+      (seg) => seg.status === 'pending' && seg.el.isConnected,
+    );
+    queueSegments(segments, scheduledGeneration);
+  }, delay);
+}
+
+function clearDeferredDrain(): void {
+  if (deferredDrainTimer !== null) {
+    clearTimeout(deferredDrainTimer);
+    deferredDrainTimer = null;
+  }
+  deferredDrainGeneration = 0;
+  deferredViewportSegments = new Set();
+}
+
+/** SPA 删除尚未完成的源节点时，从进度与所有注入状态中同步移除该段。 */
+function discardDisconnectedSegments(segments: SegmentRecord[]): void {
+  const disconnected = segments.filter((seg) => !seg.el.isConnected);
+  if (disconnected.length === 0) return;
+  const discarded = new Set(disconnected);
+  for (const seg of disconnected) {
+    clearLoadingMark(seg);
+    clearFailedMark(seg);
+    seg.blockHost?.remove();
+    seg.blockHost = undefined;
+    deferredViewportSegments.delete(seg);
+    viewportObserver?.unobserve(seg);
+    recordedEls.delete(seg.el);
+  }
+  records = records.filter((seg) => !discarded.has(seg));
+  updateFailureCount();
+  updateProgress();
+}
+
 /**
  * 创建视口外段 IO 观察器。onEnter 内部将单段走 enqueueSegments
  * 复用同一入池路径；错误由编排器侧 try/catch 隔离，不让 IO 回调异常
@@ -352,6 +424,7 @@ function createViewportEnterObserver(
   generation: number,
 ): ViewportObserver {
   return createViewportObserver((seg) => {
+    deferredViewportSegments.delete(seg);
     queueSegments([seg], generation);
   });
 }
@@ -368,7 +441,10 @@ function isSessionActive(generation: number): boolean {
  */
 function handleSettled(seg: SegmentRecord, generation: number): void {
   if (!isSessionActive(generation)) return;
-  if (!seg.el.isConnected) return;
+  if (!seg.el.isConnected) {
+    discardDisconnectedSegments([seg]);
+    return;
+  }
   if (seg.status === 'translating') {
     updateProgress();
     return;
@@ -382,7 +458,9 @@ function handleSettled(seg: SegmentRecord, generation: number): void {
       applyBilingual(seg);
     }
   } else if (seg.status === 'failed') {
-    markFailed(seg);
+    markFailed(seg, () => {
+      void handleRetry([seg]);
+    });
     updateFailureCount();
   }
 }
@@ -430,6 +508,7 @@ function handleRestore(): void {
   restoreAll(records);
   stopObserver();
   clearBatchQueue();
+  clearDeferredDrain();
   viewportObserver?.disconnect();
   viewportObserver = null;
   toolbar?.destroy();
@@ -440,14 +519,17 @@ function handleRestore(): void {
 }
 
 /** 工具栏回调：重试失败段 — 清除失败标记后重跑池（复用缓存），成功则渲染并更新计数 */
-async function handleRetry(): Promise<void> {
+async function handleRetry(requestedSegments?: SegmentRecord[]): Promise<void> {
   const generation = sessionGeneration;
-  const failedSegs = records.filter((r) => r.status === 'failed');
+  const failedSegs = (requestedSegments ?? records).filter((r) => r.status === 'failed');
   if (failedSegs.length === 0) return;
   for (const seg of failedSegs) {
     clearFailedMark(seg);
+    seg.status = 'pending';
+    seg.errorType = undefined;
   }
   markSegmentsLoading(failedSegs);
+  updateFailureCount();
   updateProgress();
   // retrySegments 重置段状态后复用池逻辑；onSettled 的 active 校验保证恢复后不误渲染，
   // 翻译仍完成并写入缓存（有利于再次触发时秒级渲染）
@@ -572,8 +654,10 @@ async function flushAddedNodes(): Promise<void> {
           viewportObserver = createViewportEnterObserver(generation);
         }
         for (const seg of outOfViewNew) {
+          deferredViewportSegments.add(seg);
           viewportObserver.observe(seg);
         }
+        scheduleDeferredDrain(generation);
       }
     }
   } finally {
@@ -630,6 +714,7 @@ export function __reset(): void {
   }
   stopObserver();
   clearBatchQueue();
+  clearDeferredDrain();
   viewportObserver?.disconnect();
   viewportObserver = null;
   toolbar?.destroy();

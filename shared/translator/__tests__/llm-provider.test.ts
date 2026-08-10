@@ -30,6 +30,36 @@ describe('LLM Provider 错误归一化', () => {
     expect(result.error).toContain('Failed to fetch');
   });
 
+  it.each([
+    ['OpenAI Chat', undefined],
+    ['OpenAI Responses', 'openai-responses'],
+    ['Anthropic', 'anthropic'],
+    ['Ollama', 'ollama'],
+  ] as const)('%s 上游请求悬挂时在 60 秒后主动中止并返回超时错误', async (_name, responseStyle) => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_, init: RequestInit) =>
+        new Promise((_, reject) => {
+          if (!init.signal) {
+            reject(new Error('missing AbortSignal'));
+            return;
+          }
+          init.signal.addEventListener('abort', () => reject(new Error('aborted by signal')));
+        })));
+      const provider = createLLMProvider(makeOpenAIConfig({ responseStyle }));
+
+      const resultPromise = provider.translate(baseReq);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await resultPromise;
+
+      expect(result.translatedText).toBe('');
+      expect(result.errorType).toBe('network');
+      expect(result.error).toContain('翻译请求超时');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('429 状态码 → rate-limit 错误', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
@@ -168,6 +198,7 @@ describe('LLM Provider anthropic 响应风格', () => {
     expect(callBody.messages[0].role).toBe('user');
     expect(callBody.messages[0].content).toBe('hello');
     expect(callBody.temperature).toBe(0.3);
+    expect(callBody.thinking).toEqual({ type: 'disabled' });
   });
 
   it('anthropic 风格无 apiKey → 不发送 x-api-key 头，端点 401 → unreachable', async () => {
@@ -264,6 +295,7 @@ describe('LLM Provider responseStyle 回归', () => {
     const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(callBody.max_tokens).toBeUndefined();
     expect(callBody.system).toBeUndefined();
+    expect(callBody.reasoning_effort).toBe('none');
   });
 
   it('responseStyle 显式 openai-completions → 走 Chat Completions 路径', async () => {
@@ -306,6 +338,7 @@ describe('LLM Provider OpenAI Responses', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
       model: 'test-model',
       input: expect.stringContaining('hello'),
+      reasoning: { effort: 'none' },
     });
     expect(result.translatedText).toBe('你好,世界');
   });
@@ -356,6 +389,42 @@ describe('LLM Provider 流式翻译', () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ['OpenAI Chat', undefined],
+    ['OpenAI Responses', 'openai-responses'],
+    ['Anthropic', 'anthropic'],
+    ['Ollama', 'ollama'],
+  ] as const)('%s 响应流悬挂时在 60 秒后主动中止', async (_name, responseStyle) => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn().mockImplementation((_, init: RequestInit) => ({
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            if (!init.signal) {
+              controller.error(new Error('missing AbortSignal'));
+              return;
+            }
+            init.signal.addEventListener('abort', () => {
+              controller.error(new Error('aborted by signal'));
+            });
+          },
+        }),
+      })));
+      const provider = createLLMProvider(makeOpenAIConfig({ responseStyle }));
+
+      const resultPromise = provider.translateStream!(baseReq, vi.fn());
+      await vi.advanceTimersByTimeAsync(60_000);
+      const result = await resultPromise;
+
+      expect(result.errorType).toBe('network');
+      expect(result.error).toContain('翻译请求超时');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('OpenAI SSE 流式 — 多 chunk 累加 + [DONE] 终止 + 跳过非 data 行 + 跨 chunk 行缓冲', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -384,6 +453,7 @@ describe('LLM Provider 流式翻译', () => {
     // 验证请求体含 stream: true
     const callBody = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(callBody.stream).toBe(true);
+    expect(callBody.reasoning_effort).toBe('none');
   });
 
   it('OpenAI Responses SSE — 提取 output_text.delta，跳过畸形事件并在 [DONE] 结束', async () => {
@@ -408,7 +478,9 @@ describe('LLM Provider 流式翻译', () => {
     const result = await provider.translateStream!(baseReq, (chunk) => chunks.push(chunk.deltaText));
 
     expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9999/v1/responses');
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).stream).toBe(true);
+    const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(requestBody.stream).toBe(true);
+    expect(requestBody.reasoning).toEqual({ effort: 'none' });
     expect(chunks).toEqual(['你', '好,世界']);
     expect(result.translatedText).toBe('你好,世界');
   });
@@ -839,7 +911,7 @@ describe('LLM Provider batch streaming', () => {
     expect(body.max_tokens).toBe(8192);
     expect(body.system).toContain('Response object schema:');
     expect(body.messages[0].content).toContain('"chunkId":"c1"');
-    expect(body.thinking).toBeUndefined();
+    expect(body.thinking).toEqual({ type: 'disabled' });
   });
 
   it('gives a 20-chunk 6000-codepoint Anthropic batch a dedicated output budget without duplicating the prompt', async () => {
@@ -865,7 +937,7 @@ describe('LLM Provider batch streaming', () => {
       role: 'user',
       content: JSON.stringify(maxSizeBatchRequest.chunks),
     }]);
-    expect(body.thinking).toBeUndefined();
+    expect(body.thinking).toEqual({ type: 'disabled' });
   });
 
   it('streams validated Ollama batch chunks and sends think false', async () => {

@@ -21,6 +21,28 @@ import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reaso
 
 const ANTHROPIC_SCALAR_MAX_TOKENS = 1024;
 const ANTHROPIC_BATCH_MAX_TOKENS = 8192;
+const LLM_REQUEST_TIMEOUT_MS = 60_000;
+const LLM_REQUEST_TIMEOUT_MESSAGE = '翻译请求超时（60 秒）';
+
+async function withRequestDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, LLM_REQUEST_TIMEOUT_MS);
+
+  try {
+    return await operation(controller.signal);
+  } catch (error) {
+    if (timedOut) throw new Error(LLM_REQUEST_TIMEOUT_MESSAGE);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function buildPrompt(text: string, targetLang: string, sourceLang?: string): string {
   const source = sourceLang ? `from ${sourceLang} ` : '';
@@ -33,6 +55,7 @@ function buildPrompt(text: string, targetLang: string, sourceLang?: string): str
 async function callOpenAICompletions(
   provider: ProviderConfig,
   req: TranslateRequest,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
   const resp = await fetch(url, {
@@ -41,9 +64,11 @@ async function callOpenAICompletions(
       'Content-Type': 'application/json',
       ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
+      reasoning_effort: 'none',
       temperature: 0.3,
     }),
   });
@@ -121,6 +146,7 @@ function extractResponsesStreamFailure(value: unknown, apiKey?: string): string 
 async function callOpenAIResponses(
   provider: ProviderConfig,
   req: TranslateRequest,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
   const resp = await fetch(url, {
@@ -129,9 +155,11 @@ async function callOpenAIResponses(
       'Content-Type': 'application/json',
       ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       input: buildPrompt(req.text, req.targetLang, req.sourceLang),
+      reasoning: { effort: 'none' },
     }),
   });
   if (!resp.ok) {
@@ -149,6 +177,7 @@ async function callOpenAIResponses(
 async function callAnthropic(
   provider: ProviderConfig,
   req: TranslateRequest,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
   const resp = await fetch(url, {
@@ -158,11 +187,13 @@ async function callAnthropic(
       'anthropic-version': '2023-06-01',
       ...(provider.apiKey ? { 'x-api-key': provider.apiKey } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       max_tokens: ANTHROPIC_SCALAR_MAX_TOKENS,
       system: buildPrompt(req.text, req.targetLang, req.sourceLang),
       messages: [{ role: 'user', content: req.text }],
+      thinking: { type: 'disabled' },
       temperature: 0.3,
     }),
   });
@@ -181,11 +212,13 @@ async function callAnthropic(
 async function callOllama(
   provider: ProviderConfig,
   req: TranslateRequest,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       stream: false,
@@ -266,6 +299,7 @@ async function callOpenAICompletionsPromptStream(
   provider: ProviderConfig,
   prompt: string,
   onDelta: DeltaHandler,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
   const resp = await fetch(url, {
@@ -274,9 +308,11 @@ async function callOpenAICompletionsPromptStream(
       'Content-Type': 'application/json',
       ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       messages: [{ role: 'user', content: prompt }],
+      reasoning_effort: 'none',
       temperature: 0.3,
       stream: true,
     }),
@@ -307,6 +343,7 @@ async function callOpenAICompletionsPromptStream(
     }
   } catch (err) {
     filter.rethrowCallbackFailure();
+    if (signal.aborted) throw err;
     // 流读取中断：返回已收到的部分译文 + network 错误
     const errorType = classifyError(err);
     return {
@@ -322,6 +359,7 @@ async function callOpenAIResponsesPromptStream(
   provider: ProviderConfig,
   prompt: string,
   onDelta: DeltaHandler,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
   const resp = await fetch(url, {
@@ -330,9 +368,11 @@ async function callOpenAIResponsesPromptStream(
       'Content-Type': 'application/json',
       ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       input: prompt,
+      reasoning: { effort: 'none' },
       stream: true,
     }),
   });
@@ -375,6 +415,7 @@ async function callOpenAIResponsesPromptStream(
     }
   } catch (err) {
     filter.rethrowCallbackFailure();
+    if (signal.aborted) throw err;
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),
@@ -394,6 +435,7 @@ async function callAnthropicPromptStream(
   provider: ProviderConfig,
   systemPrompt: string,
   onDelta: DeltaHandler,
+  signal: AbortSignal,
   userContent: string = systemPrompt,
   maxTokens: number = ANTHROPIC_SCALAR_MAX_TOKENS,
 ): Promise<TranslateResult> {
@@ -405,11 +447,13 @@ async function callAnthropicPromptStream(
       'anthropic-version': '2023-06-01',
       ...(provider.apiKey ? { 'x-api-key': provider.apiKey } : {}),
     },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       max_tokens: maxTokens,
       system: systemPrompt,
       messages: [{ role: 'user', content: userContent }],
+      thinking: { type: 'disabled' },
       temperature: 0.3,
       stream: true,
     }),
@@ -454,6 +498,7 @@ async function callAnthropicPromptStream(
     }
   } catch (err) {
     filter.rethrowCallbackFailure();
+    if (signal.aborted) throw err;
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),
@@ -473,11 +518,13 @@ async function callOllamaPromptStream(
   provider: ProviderConfig,
   prompt: string,
   onDelta: DeltaHandler,
+  signal: AbortSignal,
 ): Promise<TranslateResult> {
   const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
   const resp = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal,
     body: JSON.stringify({
       model: provider.model,
       stream: true,
@@ -512,6 +559,7 @@ async function callOllamaPromptStream(
     }
   } catch (err) {
     filter.rethrowCallbackFailure();
+    if (signal.aborted) throw err;
     const errorType = classifyError(err);
     return {
       translatedText: filter.finish(),
@@ -532,11 +580,13 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     type: 'llm' as const,
     async translate(req: TranslateRequest): Promise<TranslateResult> {
       try {
-        const protocol = normalizeLlmProtocol(config.responseStyle);
-        if (protocol === 'openai-responses') return await callOpenAIResponses(config, req);
-        if (protocol === 'ollama') return await callOllama(config, req);
-        if (protocol === 'anthropic') return await callAnthropic(config, req);
-        return await callOpenAICompletions(config, req);
+        return await withRequestDeadline(async (signal) => {
+          const protocol = normalizeLlmProtocol(config.responseStyle);
+          if (protocol === 'openai-responses') return await callOpenAIResponses(config, req, signal);
+          if (protocol === 'ollama') return await callOllama(config, req, signal);
+          if (protocol === 'anthropic') return await callAnthropic(config, req, signal);
+          return await callOpenAICompletions(config, req, signal);
+        });
       } catch (err) {
         const errorType = classifyError(err);
         return {
@@ -551,17 +601,21 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     },
     async translateStream(req: TranslateRequest, onChunk: (chunk: TranslateChunk) => void): Promise<TranslateResult> {
       try {
-        const protocol = normalizeLlmProtocol(config.responseStyle);
-        const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
-        const onDelta = (deltaText: string) => onChunk({ deltaText });
-        if (protocol === 'openai-responses') {
-          return await callOpenAIResponsesPromptStream(config, prompt, onDelta);
-        }
-        if (protocol === 'ollama') return await callOllamaPromptStream(config, prompt, onDelta);
-        if (protocol === 'anthropic') {
-          return await callAnthropicPromptStream(config, prompt, onDelta, req.text);
-        }
-        return await callOpenAICompletionsPromptStream(config, prompt, onDelta);
+        return await withRequestDeadline(async (signal) => {
+          const protocol = normalizeLlmProtocol(config.responseStyle);
+          const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
+          const onDelta = (deltaText: string) => onChunk({ deltaText });
+          if (protocol === 'openai-responses') {
+            return await callOpenAIResponsesPromptStream(config, prompt, onDelta, signal);
+          }
+          if (protocol === 'ollama') {
+            return await callOllamaPromptStream(config, prompt, onDelta, signal);
+          }
+          if (protocol === 'anthropic') {
+            return await callAnthropicPromptStream(config, prompt, onDelta, signal, req.text);
+          }
+          return await callOpenAICompletionsPromptStream(config, prompt, onDelta, signal);
+        });
       } catch (err) {
         const errorType = classifyError(err);
         return {
@@ -577,24 +631,27 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     ): Promise<BatchTranslateResult> {
       const parser = createBatchObjectStream(req.chunks, onChunk);
       try {
-        const protocol = normalizeLlmProtocol(config.responseStyle);
-        const prompt = buildBatchPrompt(req.targetLang, req.chunks);
-        let streamResult: TranslateResult;
-        if (protocol === 'openai-responses') {
-          streamResult = await callOpenAIResponsesPromptStream(config, prompt, parser.push);
-        } else if (protocol === 'ollama') {
-          streamResult = await callOllamaPromptStream(config, prompt, parser.push);
-        } else if (protocol === 'anthropic') {
-          streamResult = await callAnthropicPromptStream(
-            config,
-            buildBatchInstructions(req.targetLang),
-            parser.push,
-            JSON.stringify(req.chunks),
-            ANTHROPIC_BATCH_MAX_TOKENS,
-          );
-        } else {
-          streamResult = await callOpenAICompletionsPromptStream(config, prompt, parser.push);
-        }
+        const streamResult = await withRequestDeadline(async (signal) => {
+          const protocol = normalizeLlmProtocol(config.responseStyle);
+          const prompt = buildBatchPrompt(req.targetLang, req.chunks);
+          if (protocol === 'openai-responses') {
+            return await callOpenAIResponsesPromptStream(config, prompt, parser.push, signal);
+          }
+          if (protocol === 'ollama') {
+            return await callOllamaPromptStream(config, prompt, parser.push, signal);
+          }
+          if (protocol === 'anthropic') {
+            return await callAnthropicPromptStream(
+              config,
+              buildBatchInstructions(req.targetLang),
+              parser.push,
+              signal,
+              JSON.stringify(req.chunks),
+              ANTHROPIC_BATCH_MAX_TOKENS,
+            );
+          }
+          return await callOpenAICompletionsPromptStream(config, prompt, parser.push, signal);
+        });
 
         const result: BatchTranslateResult = { missingChunkIds: parser.finish() };
         if (streamResult.error) result.error = streamResult.error;

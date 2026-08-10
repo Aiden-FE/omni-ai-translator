@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 渲染器单元测试 - 替换/双语双模式渲染与 Shadow DOM 译文块隔离
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { collectSegments, collectSemanticSegments } from './segmenter';
 import {
   applyReplace,
@@ -234,6 +234,72 @@ describe('applyBilingual', () => {
 
     expect(document.querySelectorAll('.llm-translator-block-host')).toHaveLength(1);
   });
+
+  it('继承被翻译元素的排版样式，不再强制使用统一卡片视觉', () => {
+    document.body.innerHTML = `
+      <p style="color: rgb(12, 34, 56); font-family: Georgia; font-size: 21px;
+        font-weight: 700; line-height: 31px; text-align: right; letter-spacing: 2px">
+        Hello world
+      </p>
+    `;
+    const [seg] = collectSegments(document.body, { skipVisibilityCheck: true });
+    seg.translatedText = '你好，世界';
+    seg.status = 'done';
+
+    applyBilingual(seg);
+
+    const host = seg.blockHost!;
+    expect(host.style.getPropertyValue('--llm-translator-source-color')).toBe('rgb(12, 34, 56)');
+    expect(host.style.getPropertyValue('--llm-translator-source-font-family')).toContain('Georgia');
+    expect(host.style.getPropertyValue('--llm-translator-source-font-size')).toBe('21px');
+    expect(host.style.getPropertyValue('--llm-translator-source-font-weight')).toBe('700');
+    expect(host.style.getPropertyValue('--llm-translator-source-line-height')).toBe('31px');
+    expect(host.style.getPropertyValue('--llm-translator-source-text-align')).toBe('right');
+    expect(host.style.getPropertyValue('--llm-translator-source-letter-spacing')).toBe('2px');
+    const css = host.shadowRoot!.querySelector('style')!.textContent ?? '';
+    expect(css).toContain('background: transparent');
+    expect(css).not.toContain('border-left: 3px');
+  });
+
+  it('flex/grid 导航项的译文留在原项内部，不创建破坏顶栏的额外布局项', () => {
+    document.body.innerHTML = `
+      <nav style="display: flex">
+        <a href="#">Company Blog</a>
+        <a href="#">Subscribe</a>
+      </nav>
+    `;
+    const segments = collectSegments(document.body, { skipVisibilityCheck: true });
+    const firstLink = document.querySelector('a')!;
+    const seg = segments.find((candidate) => candidate.el === firstLink)!;
+    seg.translatedText = '公司博客';
+    seg.status = 'done';
+
+    applyBilingual(seg);
+
+    expect(seg.blockHost!.parentElement).toBe(firstLink);
+    expect(document.querySelector('nav')!.children).toHaveLength(2);
+    expect(seg.blockHost!.getAttribute('data-placement')).toBe('inside-layout-item');
+  });
+
+  it('嵌套在导航项内的文本段也不会把译文插到整个导航之后', () => {
+    document.body.innerHTML = `
+      <nav style="display: flex">
+        <a href="#"><span>Company Blog</span></a>
+        <a href="#"><span>Subscribe</span></a>
+      </nav>
+    `;
+    const segments = collectSegments(document.body, { skipVisibilityCheck: true });
+    const firstLabel = document.querySelector('span')!;
+    const seg = segments.find((candidate) => candidate.el === firstLabel)!;
+    seg.translatedText = '公司博客';
+    seg.status = 'done';
+
+    applyBilingual(seg);
+
+    expect(seg.blockHost!.parentElement).toBe(firstLabel);
+    expect(document.querySelector('nav')!.children).toHaveLength(2);
+    expect(document.querySelector('nav')!.nextElementSibling).not.toBe(seg.blockHost);
+  });
 });
 
 describe('markLoading / clearLoadingMark', () => {
@@ -303,6 +369,17 @@ describe('markLoading / clearLoadingMark', () => {
 
     expect(seg.loadingMarkHost).toBeUndefined();
   });
+
+  it('flex/grid 项的加载图标留在原项内部', () => {
+    document.body.innerHTML = '<nav style="display:flex"><a>Company</a><a>Blog</a></nav>';
+    const seg = collectSegments(document.body, { skipVisibilityCheck: true })
+      .find((candidate) => candidate.el.tagName === 'A')!;
+
+    markLoading(seg);
+
+    expect(seg.loadingMarkHost!.parentElement).toBe(seg.el);
+    expect(document.querySelector('nav')!.children).toHaveLength(2);
+  });
 });
 
 describe('markFailed / clearFailedMark', () => {
@@ -327,6 +404,33 @@ describe('markFailed / clearFailedMark', () => {
     const badge = shadow.querySelector('.llm-translator-failed-badge');
     expect(badge).not.toBeNull();
     expect(badge!.textContent).toBe('⚠');
+  });
+
+  it('失败徽标是可聚焦按钮，点击时只触发该段重试回调', () => {
+    const seg = setupFailedSegment('<p>Hello</p>');
+    const onRetry = vi.fn();
+    markFailed(seg, onRetry);
+
+    const badge = seg.failedMarkHost!.shadowRoot!
+      .querySelector('.llm-translator-failed-badge') as HTMLButtonElement;
+    expect(badge.tagName).toBe('BUTTON');
+    expect(badge.getAttribute('aria-label')).toBe('重试此段翻译');
+
+    badge.click();
+
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('flex/grid 项的失败图标留在原项内部', () => {
+    document.body.innerHTML = '<nav style="display:grid"><a>Company</a><a>Blog</a></nav>';
+    const seg = collectSegments(document.body, { skipVisibilityCheck: true })
+      .find((candidate) => candidate.el.tagName === 'A')!;
+    seg.status = 'failed';
+
+    markFailed(seg, vi.fn());
+
+    expect(seg.failedMarkHost!.parentElement).toBe(seg.el);
+    expect(document.querySelector('nav')!.children).toHaveLength(2);
   });
 
   it('替换模式下：徽标插到 seg.el 之后', () => {

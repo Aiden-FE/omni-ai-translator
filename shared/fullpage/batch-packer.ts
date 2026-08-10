@@ -4,6 +4,7 @@ import type { BatchTranslateChunk, BatchTranslatePart } from '@/shared/types';
 import type { SegmentRecord } from './types';
 
 export const MAX_BATCH_CHUNKS = 20;
+export const MAX_BATCH_PARTS = 40;
 export const MAX_BATCH_SOURCE_CHARS = 6000;
 
 export const countCodePoints = (text: string) => Array.from(text).length;
@@ -26,6 +27,7 @@ export function isValidBatchTranslateChunks(value: unknown): value is BatchTrans
 
   const chunkIds = new Set<string>();
   let sourceChars = 0;
+  let totalParts = 0;
   for (const chunk of value) {
     if (!isRecord(chunk)
       || typeof chunk.chunkId !== 'string'
@@ -35,6 +37,8 @@ export function isValidBatchTranslateChunks(value: unknown): value is BatchTrans
       return false;
     }
     chunkIds.add(chunk.chunkId);
+    totalParts += chunk.parts.length;
+    if (totalParts > MAX_BATCH_PARTS) return false;
 
     const partPairs = new Set<string>();
     let chunkChars = 0;
@@ -131,7 +135,10 @@ export function createTransportChunks(segment: SegmentRecord): BatchTranslateChu
   for (const part of parts) {
     const partChars = countCodePoints(part.text);
     if (partChars === 0) continue;
-    if (currentParts.length && currentChars + partChars > MAX_BATCH_SOURCE_CHARS) {
+    if (currentParts.length && (
+      currentParts.length === MAX_BATCH_PARTS
+      || currentChars + partChars > MAX_BATCH_SOURCE_CHARS
+    )) {
       chunks.push({
         chunkId: `${segment.id}:${chunks.length}`,
         segmentId: segment.id,
@@ -160,19 +167,30 @@ export function packTransportBatches(chunks: BatchTranslateChunk[]): BatchTransl
   const batches: BatchTranslateChunk[][] = [];
   let current: BatchTranslateChunk[] = [];
   let chars = 0;
+  let parts = 0;
 
   for (const chunk of chunks) {
     const nextChars = chunkSourceChars(chunk);
-    if (chunk.parts.length === 0 || nextChars === 0 || nextChars > MAX_BATCH_SOURCE_CHARS) {
+    const nextParts = chunk.parts.length;
+    if (nextParts === 0
+      || nextParts > MAX_BATCH_PARTS
+      || nextChars === 0
+      || nextChars > MAX_BATCH_SOURCE_CHARS) {
       throw new Error(`Invalid transport chunk ${chunk.chunkId}`);
     }
-    if (current.length && (current.length === MAX_BATCH_CHUNKS || chars + nextChars > MAX_BATCH_SOURCE_CHARS)) {
+    if (current.length && (
+      current.length === MAX_BATCH_CHUNKS
+      || parts + nextParts > MAX_BATCH_PARTS
+      || chars + nextChars > MAX_BATCH_SOURCE_CHARS
+    )) {
       batches.push(current);
       current = [];
       chars = 0;
+      parts = 0;
     }
     current.push(chunk);
     chars += nextChars;
+    parts += nextParts;
   }
 
   if (current.length) batches.push(current);

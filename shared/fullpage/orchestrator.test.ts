@@ -605,6 +605,37 @@ describe('工具栏回调', () => {
     expect(sendMessage).toHaveBeenCalledTimes(3);
   });
 
+  it('点击段落失败图标时只重试该段，不重试页面中的其他失败段', async () => {
+    document.body.innerHTML = '<p>first bad</p><p>second bad</p>';
+    const attempts = new Map<string, number>();
+    const { sendMessage } = setupBrowser((text) => {
+      const attempt = (attempts.get(text) ?? 0) + 1;
+      attempts.set(text, attempt);
+      if (attempt === 1) return { error: 'boom', errorType: 'network' };
+      return { translatedText: `[重试] ${text}` };
+    });
+    await start('replace');
+
+    const failedHosts = Array.from(
+      document.querySelectorAll<HTMLElement>('.llm-translator-failed-host'),
+    );
+    expect(failedHosts).toHaveLength(2);
+    const firstRetry = failedHosts[0].shadowRoot!
+      .querySelector('.llm-translator-failed-badge') as HTMLButtonElement;
+
+    firstRetry.click();
+    await drainMicrotasks();
+
+    expect(attempts.get('first bad')).toBe(2);
+    expect(attempts.get('second bad')).toBe(1);
+    expect(document.querySelectorAll('.llm-translator-failed-host')).toHaveLength(1);
+    expect(document.querySelectorAll('.llm-translator-loading-host')).toHaveLength(0);
+    expect(document.querySelectorAll('p')[0].textContent).toBe('[重试] first bad');
+    expect(document.querySelectorAll('p')[1].textContent).toBe('second bad');
+    expect(getRetryButton().textContent).toContain('1');
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+  });
+
   it('超过并发数的重试在 restore 后不再派发排队请求', async () => {
     document.body.innerHTML = Array.from(
       { length: 5 },
@@ -691,7 +722,8 @@ describe('onSettled 守卫', () => {
     await new Promise((r) => { setTimeout(r, 0); });
     await startPromise;
 
-    expect(__getState().records[0].status).toBe('done');
+    expect(__getState().records).toHaveLength(0);
+    expect(toolbarText()).toContain('未发现可翻译文本');
     expect(p.isConnected).toBe(false);
     expect(p.textContent).toBe('removable text');
   });
@@ -968,60 +1000,85 @@ describe('视口分组调度（IntersectionObserver）', () => {
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
-  it('doStart：mock IO 不触发相交时视口外段仍 markLoading 且不调用 sendMessage', async () => {
-    // 提供 IO mock 但不触发相交：验证生产路径 — 视口外段只 markLoading、不入池
+  it('IO 不触发相交时仍会在发现结束后后台排空视口外段', async () => {
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
     try {
-      document.body.innerHTML = '<p>in view text</p><p>out of view text</p>';
+      document.body.innerHTML = [
+        '<p>in view text</p>',
+        '<p>out of view text</p>',
+      ].join('');
       // jsdom 默认 getClientRects 为空 → isSegmentInViewport 走兑底视为视口内。
       // 这里覆盖两个 <p> 的 getClientRects + getBoundingClientRect 使其进入几何判定。
       const ps = document.querySelectorAll('p');
-      Object.defineProperty(ps[0], 'getClientRects', {
-        value: () => [{} as DOMRect],
-        configurable: true,
+      ps.forEach((p, index) => {
+        Object.defineProperty(p, 'getClientRects', {
+          value: () => [{} as DOMRect],
+          configurable: true,
+        });
+        Object.defineProperty(p, 'getBoundingClientRect', {
+          value: () => index === 0
+            ? { top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect
+            : { top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect,
+          configurable: true,
+        });
       });
-      Object.defineProperty(ps[0], 'getBoundingClientRect', {
-        value: () => ({ top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
-        configurable: true,
-      });
-      // 视口外：在视口下方 (top=2000) 且 innerHeight=768
-      Object.defineProperty(ps[1], 'getClientRects', {
-        value: () => [{} as DOMRect],
-        configurable: true,
-      });
-      Object.defineProperty(ps[1], 'getBoundingClientRect', {
-        value: () => ({ top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect),
-        configurable: true,
-      });
-      const resolveGates: Array<(v: TranslateResponse) => void> = [];
-      const gates = ['in view text', 'out of view text'].map(
-        () =>
-          new Promise<TranslateResponse>((r) => {
-            resolveGates.push(r);
-          }),
-      );
-      const { sendMessage } = setupBrowser(
-        (text) => (text === 'in view text' ? gates[0] : gates[1]),
-      );
+      const { sendMessage } = setupBrowser();
 
       const startPromise = start('replace');
       await drainMicrotasks();
 
-      // 视口外段已 markLoading 但未派发（未触发相交）
-      // 视口内段已派发，sendMessage 被调用 1 次
-      const loadingHosts = document.querySelectorAll('.llm-translator-loading-host');
-      expect(loadingHosts.length).toBe(2);
-      // 进度反映全 2 段：1 翻译中 + 1 waiting
-      expect(toolbarText()).toMatch(/全文翻译 0\/2|全文翻译 1\/2/);
-      // 仅入池 1 个：视口内段
+      // 可见段仍然优先派发。
       expect(sendMessage).toHaveBeenCalledTimes(1);
 
-      // 释放视口内段门控
-      resolveGates[0]({ translatedText: '一' });
-      await drainMicrotasks();
-      // 释放视口外段门控（即使入池也不会发生；仅保证清理）
-      resolveGates[1]({ translatedText: '二' });
+      // 推进 chunker 与下一批调度；不依赖滚动或 IO 回调。
+      await vi.runAllTimersAsync();
       await startPromise;
+      await drainMicrotasks();
+
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+      expect(__getState().records.every((segment) => segment.status === 'done')).toBe(true);
+      expect(document.querySelector('.llm-translator-loading-host')).toBeNull();
+      expect(toolbarText()).toContain('全文翻译完成 2/2');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('后台排空前已移除的视口外段会退出进度统计', async () => {
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    try {
+      document.body.innerHTML = '<p>in view text</p><p>removed outside text</p>';
+      const ps = document.querySelectorAll('p');
+      ps.forEach((p, index) => {
+        Object.defineProperty(p, 'getClientRects', {
+          value: () => [{} as DOMRect],
+          configurable: true,
+        });
+        Object.defineProperty(p, 'getBoundingClientRect', {
+          value: () => index === 0
+            ? { top: 100, bottom: 200, left: 0, right: 100, width: 100, height: 100 } as DOMRect
+            : { top: 2000, bottom: 2100, left: 0, right: 100, width: 100, height: 100 } as DOMRect,
+          configurable: true,
+        });
+      });
+      const { sendMessage } = setupBrowser();
+
+      const startPromise = start('replace');
+      await drainMicrotasks();
+      // 完成分段发现并运行 0ms deferred drain，让视口外段进入 25ms micro-batch。
+      await vi.advanceTimersByTimeAsync(0);
+      await startPromise;
+      await drainMicrotasks();
+      expect(__getState().records).toHaveLength(2);
+      ps[1].remove();
+
+      await vi.advanceTimersByTimeAsync(25);
+      await drainMicrotasks();
+
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(__getState().records).toHaveLength(1);
+      expect(document.querySelector('.llm-translator-loading-host')).toBeNull();
+      expect(toolbarText()).toContain('全文翻译完成 1/1');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1555,6 +1612,34 @@ describe('LLM semantic batch orchestration', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(connect).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  it('后台排空永不相交的语义段并通过 batch port 完成翻译', async () => {
+    vi.useFakeTimers();
+    Object.defineProperty(window, 'innerHeight', { value: 768, configurable: true, writable: true });
+    Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true, writable: true });
+    document.body.innerHTML = '<p>outside semantic text</p>';
+    const paragraph = document.querySelector('p') as HTMLElement;
+    setClientRectsNonEmpty([paragraph]);
+    mockViewportLayout(new Set());
+    installMockIO();
+    const { connect, sendMessage } = setupBatchBrowser();
+
+    const startPromise = start('replace');
+    await drainMicrotasks();
+    expect(connect).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+    await startPromise;
+    await drainMicrotasks();
+
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(paragraph.textContent).toBe('[批] outside semantic text');
+    expect(__getState().records[0].status).toBe('done');
+    expect(document.querySelector('.llm-translator-loading-host')).toBeNull();
+    expect(toolbarText()).toContain('全文翻译完成 1/1');
     vi.restoreAllMocks();
   });
 
