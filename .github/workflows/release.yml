@@ -2,7 +2,7 @@
 #
 # Responds to GitHub Release "published" events (created by prodflow-release-deploy).
 # Builds, packages, and uploads Chrome / Firefox / Edge extension zips to the Release,
-# then publishes to each browser's store (skipped for prerelease / dry-run).
+# then publishes to each configured browser store.
 #
 # Triggers:
 #   - release [published]: automatic, when a GitHub Release is published
@@ -22,7 +22,9 @@
 #   prerelease Releases run build + package + Release asset upload for all browsers,
 #   but skip all store uploads (Chrome Web Store / AMO / Edge Add-ons).
 #
-# Required GitHub Secrets (for store upload only):
+# Optional GitHub Secrets (required only for that store's upload):
+#   - If a store's entire credential set is absent, that store is skipped.
+#   - If a credential set is partially configured, the job fails and lists missing names.
 #
 #   Chrome Web Store (#63):
 #     CHROME_CLIENT_ID      - Google OAuth2 client ID
@@ -49,7 +51,7 @@
 #   - Version mismatch: ensure tag (vX.Y.Z), package.json version, and
 #     wxt.config.ts manifest.version all match (without the "v" prefix).
 #   - Missing secrets: configure in Repository Settings -> Secrets and variables -> Actions.
-#     Each browser checks its own secrets independently before upload.
+#     An unconfigured store is skipped; a partially configured store fails explicitly.
 #   - "Release not found": the tag must correspond to an existing GitHub Release.
 #   - Chrome upload fails: verify OAuth credentials are valid and not expired.
 #   - AMO upload fails: verify AMO_API_KEY/AMO_API_SECRET; check AMO API status.
@@ -252,40 +254,19 @@ jobs:
       # ================================================================
 
       # ----------------------------------------------------------------
-      # Verify Chrome Web Store secrets before upload.
-      # Only prints variable NAMES (never values) on failure.
+      # Detect Chrome Web Store configuration before upload.
+      # An entirely absent credential set skips this store; partial config fails.
       # ----------------------------------------------------------------
       - name: Check Chrome Web Store secrets
+        id: chrome_credentials
         if: matrix.browser == 'chrome' && steps.ctx.outputs.upload_store == 'true'
         env:
-          CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
-          EXTENSION_ID: ${{ secrets.CHROME_ITEM_ID }}
-          PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
-        run: |
-          MISSING=""
-          [ -z "$CLIENT_ID" ] && MISSING="$MISSING CHROME_CLIENT_ID"
-          [ -z "$CLIENT_SECRET" ] && MISSING="$MISSING CHROME_CLIENT_SECRET"
-          [ -z "$REFRESH_TOKEN" ] && MISSING="$MISSING CHROME_REFRESH_TOKEN"
-          [ -z "$EXTENSION_ID" ] && MISSING="$MISSING CHROME_ITEM_ID"
-          [ -z "$PUBLISHER_ID" ] && MISSING="$MISSING CHROME_PUBLISHER_ID"
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required GitHub Secrets:$MISSING"
-            echo ""
-            echo "Configure in: Repository Settings -> Secrets and variables -> Actions"
-            echo ""
-            echo "Required secrets for Chrome Web Store upload:"
-            echo "  CHROME_CLIENT_ID      - Google OAuth2 client ID"
-            echo "  CHROME_CLIENT_SECRET  - Google OAuth2 client secret"
-            echo "  CHROME_REFRESH_TOKEN  - OAuth2 refresh token"
-            echo "  CHROME_ITEM_ID        - Chrome Web Store extension ID"
-            echo "  CHROME_PUBLISHER_ID   - Chrome Web Store publisher ID (cli v4 / CWS API v2 必填)"
-            echo ""
-            echo "Guide: https://github.com/fregante/chrome-webstore-upload-keys"
-            exit 1
-          fi
-          echo "✓ All required Chrome Web Store secrets are present"
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_ITEM_ID: ${{ secrets.CHROME_ITEM_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+        run: bash scripts/check-store-credentials.sh chrome
 
       # ----------------------------------------------------------------
       # Upload and publish extension to Chrome Web Store.
@@ -294,7 +275,7 @@ jobs:
       # Credentials are passed via environment variables only.
       # ----------------------------------------------------------------
       - name: Upload and publish to Chrome Web Store
-        if: matrix.browser == 'chrome' && steps.ctx.outputs.upload_store == 'true'
+        if: matrix.browser == 'chrome' && steps.ctx.outputs.upload_store == 'true' && steps.chrome_credentials.outputs.configured == 'true'
         env:
           EXTENSION_ID: ${{ secrets.CHROME_ITEM_ID }}
           CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
@@ -310,31 +291,16 @@ jobs:
       # ================================================================
 
       # ----------------------------------------------------------------
-      # Verify AMO secrets before upload.
-      # Only prints variable NAMES (never values) on failure.
+      # Detect AMO configuration before upload.
+      # An entirely absent credential set skips this store; partial config fails.
       # ----------------------------------------------------------------
       - name: Check AMO secrets
+        id: firefox_credentials
         if: matrix.browser == 'firefox' && steps.ctx.outputs.upload_store == 'true'
         env:
           AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
           AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
-        run: |
-          MISSING=""
-          [ -z "$AMO_API_KEY" ] && MISSING="$MISSING AMO_API_KEY"
-          [ -z "$AMO_API_SECRET" ] && MISSING="$MISSING AMO_API_SECRET"
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required GitHub Secrets:$MISSING"
-            echo ""
-            echo "Configure in: Repository Settings -> Secrets and variables -> Actions"
-            echo ""
-            echo "Required secrets for AMO (Firefox Add-ons) upload:"
-            echo "  AMO_API_KEY     - AMO JWT issuer (API key)"
-            echo "  AMO_API_SECRET  - AMO JWT secret"
-            echo ""
-            echo "Guide: https://addons.mozilla.org/developers/ -> API Keys"
-            exit 1
-          fi
-          echo "✓ All required AMO secrets are present"
+        run: bash scripts/check-store-credentials.sh firefox
 
       # ----------------------------------------------------------------
       # Upload and publish extension to AMO (Firefox Add-ons).
@@ -343,7 +309,7 @@ jobs:
       # Credentials are passed via environment variables only.
       # ----------------------------------------------------------------
       - name: Upload and publish to AMO
-        if: matrix.browser == 'firefox' && steps.ctx.outputs.upload_store == 'true'
+        if: matrix.browser == 'firefox' && steps.ctx.outputs.upload_store == 'true' && steps.firefox_credentials.outputs.configured == 'true'
         env:
           AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
           AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
@@ -362,37 +328,18 @@ jobs:
       # ================================================================
 
       # ----------------------------------------------------------------
-      # Verify Edge Add-ons secrets before upload.
-      # Only prints variable NAMES (never values) on failure.
+      # Detect Edge Add-ons configuration before upload.
+      # An entirely absent credential set skips this store; partial config fails.
       # ----------------------------------------------------------------
       - name: Check Edge Add-ons secrets
+        id: edge_credentials
         if: matrix.browser == 'edge' && steps.ctx.outputs.upload_store == 'true'
         env:
           EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
           EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
           EDGE_CLIENT_SECRET: ${{ secrets.EDGE_CLIENT_SECRET }}
           EDGE_TENANT_ID: ${{ secrets.EDGE_TENANT_ID }}
-        run: |
-          MISSING=""
-          [ -z "$EDGE_PRODUCT_ID" ] && MISSING="$MISSING EDGE_PRODUCT_ID"
-          [ -z "$EDGE_CLIENT_ID" ] && MISSING="$MISSING EDGE_CLIENT_ID"
-          [ -z "$EDGE_CLIENT_SECRET" ] && MISSING="$MISSING EDGE_CLIENT_SECRET"
-          [ -z "$EDGE_TENANT_ID" ] && MISSING="$MISSING EDGE_TENANT_ID"
-          if [ -n "$MISSING" ]; then
-            echo "::error::Missing required GitHub Secrets:$MISSING"
-            echo ""
-            echo "Configure in: Repository Settings -> Secrets and variables -> Actions"
-            echo ""
-            echo "Required secrets for Edge Add-ons upload:"
-            echo "  EDGE_PRODUCT_ID     - Edge Add-ons extension product ID"
-            echo "  EDGE_CLIENT_ID      - Azure AD app client ID"
-            echo "  EDGE_CLIENT_SECRET  - Azure AD app client secret"
-            echo "  EDGE_TENANT_ID      - Azure AD tenant ID"
-            echo ""
-            echo "Guide: Azure AD app registration + Edge Partner Center"
-            exit 1
-          fi
-          echo "✓ All required Edge Add-ons secrets are present"
+        run: bash scripts/check-store-credentials.sh edge
 
       # ----------------------------------------------------------------
       # Upload and publish extension to Edge Add-ons via REST API.
@@ -401,7 +348,7 @@ jobs:
       # never echoed.
       # ----------------------------------------------------------------
       - name: Upload and publish to Edge Add-ons
-        if: matrix.browser == 'edge' && steps.ctx.outputs.upload_store == 'true'
+        if: matrix.browser == 'edge' && steps.ctx.outputs.upload_store == 'true' && steps.edge_credentials.outputs.configured == 'true'
         env:
           EDGE_PRODUCT_ID: ${{ secrets.EDGE_PRODUCT_ID }}
           EDGE_CLIENT_ID: ${{ secrets.EDGE_CLIENT_ID }}
