@@ -369,6 +369,13 @@
   cursor: pointer;
 }
 
+.error-banner-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
 .error-banner button:hover {
   background: hsl(356 74% 96%);
 }

@@ -13,8 +13,13 @@ export type LlmProtocol =
   | 'anthropic'
   | 'ollama';
 
-/** 翻译错误类型，四类互斥，供前端差异化反馈（契约供 #11 消费） */
-export type ErrorType = 'no-config' | 'network' | 'rate-limit' | 'unreachable';
+/** 翻译错误类型，五类互斥，供前端差异化反馈（契约供 #11 消费） */
+export type ErrorType =
+  | 'no-config'
+  | 'network'
+  | 'rate-limit'
+  | 'unreachable'
+  | 'unsupported-lang';
 
 /** 提供方配置（向后兼容：category 缺省时按 type 推断） */
 export interface ProviderConfig {
@@ -44,7 +49,7 @@ export interface TranslateRequest {
 export interface TranslateResult {
   translatedText: string;
   error?: string;
-  /** 错误类型标识，四类互斥，供前端差异化反馈 */
+  /** 错误类型标识，五类互斥，供前端差异化反馈 */
   errorType?: ErrorType;
 }
 

@@ -1,11 +1,11 @@
-// 错误归一化 — 将底层异常 / HTTP 状态码映射为四类 errorType
+// 错误归一化 - 将底层异常 / HTTP 状态码映射为五类 errorType
 import type { ErrorType } from '@/shared/types';
 
 /**
  * 从 fetch 异常或 HTTP 状态码推断错误类型
  * @param err - catch 到的异常（fetch TypeError 等）
  * @param status - HTTP 响应状态码（有响应时传入）
- * @returns 四类互斥的 errorType
+ * @returns 五类互斥的 errorType
  */
 export function classifyError(_err: unknown, status?: number): ErrorType {
   // 有明确 HTTP 状态码时按状态码分类
@@ -39,6 +39,8 @@ export function errorFeedback(errorType: ErrorType): ErrorFeedback {
       return { main: '翻译源繁忙（限流）', guidance: '请稍后再试或在配置页切换源' };
     case 'unreachable':
       return { main: '翻译源不可达', guidance: '请在配置页切换到其它源' };
+    case 'unsupported-lang':
+      return { main: '翻译源不支持该目标语言', guidance: '请在目标语言中选择其它语言' };
     default:
       return { main: '翻译失败', guidance: '' };
   }

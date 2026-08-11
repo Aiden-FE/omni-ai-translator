@@ -39,6 +39,8 @@ const targetLangCode = ref('en');
 const hasUserSwitchedTargetLang = ref(false);
 const sourceArea = ref<HTMLTextAreaElement | null>(null);
 const settingsPanel = ref<InstanceType<typeof SourceConfigPanel> | null>(null);
+// 目标语言选择器实例（#88）：unsupported-lang 错误时「更换语言」入口聚焦其触发器。
+const languageSelect = ref<InstanceType<typeof LanguageSelect> | null>(null);
 
 const charCount = computed(() => countWorkbenchCharacters(state.sourceText));
 const isStreaming = computed(() => state.outputPhase === 'streaming');
@@ -214,6 +216,11 @@ function handleErrorAction() {
   void translate();
 }
 
+// #88：翻译源不支持当前目标语言时，「更换语言」入口聚焦目标语言选择器，供用户改选后重试。
+function changeLanguage() {
+  languageSelect.value?.focusTrigger();
+}
+
 async function backToTranslator() {
   // #87 设置回流:用户未临时切换目标语言时,返回文本翻译前重新读取默认值同步(用户可能在设置中改了默认目标语言);
   // 已临时切换时保留用户选择,不覆盖。同步完成后再切视图,避免短暂闪现旧值。
@@ -287,6 +294,7 @@ function handleAddProvider() {
         >→</span>
         <!-- 可搜索目标语言选择器(#78):临时目标语言,流式期间锁定切换 -->
         <LanguageSelect
+          ref="languageSelect"
           :model-value="targetLangCode"
           :disabled="isStreaming"
           variant="workbench"
@@ -432,12 +440,22 @@ function handleAddProvider() {
             <strong>{{ errorBanner.main }}</strong>
             <small v-if="errorBanner.guidance">{{ errorBanner.guidance }}</small>
           </span>
-          <button
-            type="button"
-            @click="handleErrorAction"
-          >
-            {{ state.errorType === 'no-config' ? '打开设置' : '重试' }}
-          </button>
+          <span class="error-banner-actions">
+            <button
+              v-if="state.errorType === 'unsupported-lang'"
+              type="button"
+              @click="changeLanguage"
+            >
+              更换语言
+            </button>
+            <button
+              v-else
+              type="button"
+              @click="handleErrorAction"
+            >
+              {{ state.errorType === 'no-config' ? '打开设置' : '重试' }}
+            </button>
+          </span>
         </div>
       </section>
     </main>

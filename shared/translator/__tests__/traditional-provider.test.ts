@@ -281,7 +281,89 @@ describe('传统翻译 Provider — Microsoft', () => {
   });
 });
 
-describe('传统翻译 Provider — test()', () => {
+describe('传统翻译 Provider - 目标语言不支持 (#88)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('Google 未收录语言代码 -> unsupported-lang 错误，不发请求、不静默回退英文', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(makeGoogleConfig());
+    const result = await provider.translate({ text: 'hello', targetLang: 'xx' });
+
+    expect(result.translatedText).toBe('');
+    expect(result.errorType).toBe('unsupported-lang');
+    // 未发送请求：证明未静默回退 'en' 调用端点
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Microsoft 无 Key + 未知语言名 -> unsupported-lang 错误，不发请求', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(makeMicrosoftConfig());
+    const result = await provider.translate({ text: 'hello', targetLang: '火星语' });
+
+    expect(result.translatedText).toBe('');
+    expect(result.errorType).toBe('unsupported-lang');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Microsoft 有 Key + 空目标语言 -> unsupported-lang 错误，不发请求', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(
+      makeMicrosoftConfig({ apiKey: 'ms-test-key', region: 'eastus' }),
+    );
+    const result = await provider.translate({ text: 'hello', targetLang: '' });
+
+    expect(result.translatedText).toBe('');
+    expect(result.errorType).toBe('unsupported-lang');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Google 有 Key + 目录内语言代码 zh-CN -> 正常调用，不误判为不支持', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: { translations: [{ translatedText: '你好' }] } }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(
+      makeGoogleConfig({ apiKey: 'gk-test-key' }),
+    );
+    const result = await provider.translate({ text: 'hello', targetLang: 'zh-CN' });
+
+    expect(result.translatedText).toBe('你好');
+    expect(result.errorType).toBeUndefined();
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    // target 仍为 zh-CN，未被静默改成 en
+    expect(body.target).toBe('zh-CN');
+  });
+
+  it('人类可读名「简体中文」依旧解析为 zh-CN 且命中支持集合', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(makeMicrosoftConfig());
+    const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
+
+    expect(result.translatedText).toBe('你好');
+    expect(result.errorType).toBeUndefined();
+    expect(fetchMock.mock.calls[0][0]).toContain('to=zh-CN');
+  });
+});
+
+describe('传统翻译 Provider - test()', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();

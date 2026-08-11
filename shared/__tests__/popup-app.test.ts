@@ -329,11 +329,11 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     });
   }
 
-  async function mountAndStart(): Promise<{
+  async function mountAndStart(options: { attachTo?: HTMLElement } = {}): Promise<{
     wrapper: VueWrapper;
     startTranslation: () => Promise<void>;
   }> {
-    const wrapper = mount(App);
+    const wrapper = mount(App, options.attachTo ? { attachTo: options.attachTo } : {});
     wrappers.push(wrapper);
     await flushPromises();
     await wrapper.get('textarea').setValue('hello');
@@ -357,14 +357,15 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     vi.useRealTimers();
   });
 
-  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable'];
+  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable', 'unsupported-lang'];
 
-  // 四类 ErrorType 的期望文案(独立于被测组件:取自规格约定的四类互斥文案)
+  // 五类 ErrorType 的期望文案(独立于被测组件:取自规格约定的五类互斥文案)
   const expectedBanner: Record<ErrorType, { main: string; guidance: string }> = {
     'no-config': { main: '未配置可用翻译源', guidance: '请在配置页选择或添加源' },
     network: { main: '翻译请求失败', guidance: '请检查网络或源地址' },
     'rate-limit': { main: '翻译源繁忙（限流）', guidance: '请稍后再试或在配置页切换源' },
     unreachable: { main: '翻译源不可达', guidance: '请在配置页切换到其它源' },
+    'unsupported-lang': { main: '翻译源不支持该目标语言', guidance: '请在目标语言中选择其它语言' },
   };
 
   it.each(allTypes)('错误横幅按 ErrorType(%s) 差异化展示主文案与引导', async (errorType) => {
@@ -385,7 +386,7 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     expect(banner.text()).toContain(expectedBanner[errorType].guidance);
   });
 
-  it('四类 ErrorType 展示文案互不相同', () => {
+  it('五类 ErrorType 展示文案互不相同', () => {
     const mains = allTypes.map((t) => expectedBanner[t].main);
     expect(new Set(mains).size).toBe(allTypes.length);
   });
@@ -528,5 +529,30 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     await actionButton(wrapper, '打开设置').trigger('click');
     await flushPromises();
     expect(wrapper.find('[role="combobox"][aria-label="默认目标语言"]').exists()).toBe(true);
+  });
+
+  // #88：unsupported-lang 错误提供「更换语言」入口，点击聚焦目标语言选择器；同时保留「重试」。
+  it('unsupported-lang 错误展示「更换语言」+「重试」两个入口，「更换语言」聚焦选择器', async () => {
+    const port = createPopupPort();
+    stubBrowser([port]);
+    const { wrapper, startTranslation } = await mountAndStart({ attachTo: document.body });
+    await startTranslation();
+    port.emitMessage({
+      type: 'error',
+      result: { translatedText: '', error: 'fail', errorType: 'unsupported-lang' },
+    });
+    await wrapper.vm.$nextTick();
+
+    const banner = wrapper.find('[role="alert"]');
+    expect(banner.text()).toContain('翻译源不支持该目标语言');
+    const buttons = banner.findAll('button');
+    // unsupported-lang 仅提供「更换语言」（重试会用相同语言复现同一错误，故不展示）
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].text()).toContain('更换语言');
+
+    await buttons[0].trigger('click');
+    // 「更换语言」聚焦目标语言选择器的触发按钮（LanguageSelect.focusTrigger）
+    const trigger = wrapper.get('button[role="combobox"][aria-label="目标语言"]');
+    expect(document.activeElement).toBe(trigger.element);
   });
 });

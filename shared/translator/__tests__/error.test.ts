@@ -1,4 +1,4 @@
-// 错误归一化单元测试 — 覆盖四类错误路径（no-config / network / rate-limit / unreachable）
+// 错误归一化单元测试 - 覆盖五类错误路径（no-config / network / rate-limit / unreachable / unsupported-lang）
 import { describe, it, expect } from 'vitest';
 import { classifyError, errorTypeMessage, errorFeedback } from '../error';
 import type { ErrorType } from '@/shared/types';
@@ -37,7 +37,7 @@ describe('classifyError', () => {
 });
 
 describe('errorTypeMessage', () => {
-  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable'];
+  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable', 'unsupported-lang'];
 
   it.each(allTypes)('errorType=%s 返回非空可读提示', (type) => {
     const msg = errorTypeMessage(type);
@@ -61,14 +61,18 @@ describe('errorTypeMessage', () => {
     expect(errorTypeMessage('unreachable')).toContain('不可达');
   });
 
-  it('四类提示互不相同（可区分）', () => {
+  it('unsupported-lang 提示包含「不支持」', () => {
+    expect(errorTypeMessage('unsupported-lang')).toContain('不支持');
+  });
+
+  it('五类提示互不相同（可区分）', () => {
     const messages = allTypes.map((t) => errorTypeMessage(t));
-    expect(new Set(messages).size).toBe(4);
+    expect(new Set(messages).size).toBe(5);
   });
 });
 
 describe('errorFeedback', () => {
-  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable'];
+  const allTypes: ErrorType[] = ['no-config', 'network', 'rate-limit', 'unreachable', 'unsupported-lang'];
 
   it('no-config → 主文案「未配置可用翻译源」+ 引导「请在配置页选择或添加源」', () => {
     const fb = errorFeedback('no-config');
@@ -94,6 +98,12 @@ describe('errorFeedback', () => {
     expect(fb.guidance).toBe('请在配置页切换到其它源');
   });
 
+  it('unsupported-lang → 主文案「翻译源不支持该目标语言」+ 引导包含「选择其它语言」', () => {
+    const fb = errorFeedback('unsupported-lang');
+    expect(fb.main).toBe('翻译源不支持该目标语言');
+    expect(fb.guidance).toContain('选择其它语言');
+  });
+
   it.each(allTypes)('errorType=%s 的 main 和 guidance 均非空', (type) => {
     const fb = errorFeedback(type);
     expect(fb.main).toBeTruthy();
@@ -102,14 +112,14 @@ describe('errorFeedback', () => {
     expect(fb.guidance.length).toBeGreaterThan(2);
   });
 
-  it('四类 main 互不相同（可区分）', () => {
+  it('五类 main 互不相同（可区分）', () => {
     const mains = allTypes.map((t) => errorFeedback(t).main);
-    expect(new Set(mains).size).toBe(4);
+    expect(new Set(mains).size).toBe(5);
   });
 
-  it('四类 guidance 互不相同（可区分）', () => {
+  it('五类 guidance 互不相同（可区分）', () => {
     const guidances = allTypes.map((t) => errorFeedback(t).guidance);
-    expect(new Set(guidances).size).toBe(4);
+    expect(new Set(guidances).size).toBe(5);
   });
 
   it('no-config 引导包含「配置页」', () => {

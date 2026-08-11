@@ -9,11 +9,12 @@ import {
   GOOGLE_ENDPOINT,
   MICROSOFT_KEYLESS_TRANSLATE_ENDPOINT,
 } from './builtin-sources';
+import { LANGUAGE_CATALOG } from '@/shared/language-catalog';
 
 /**
  * 人类可读语言名 → 语言代码映射（targetLang 在上层为人类可读名如「简体中文」，
  * 传统翻译端点需要语言代码如 zh-CN）。覆盖 options.vue defaultTargetLang 常见值。
- * 未命中时回退 'en'。
+ * 未知名称不回退 'en'：#88 改为在入口校验并返回 unsupported-lang 错误。
  */
 const LANG_NAME_TO_CODE: Record<string, string> = {
   简体中文: 'zh-CN',
@@ -27,13 +28,46 @@ const LANG_NAME_TO_CODE: Record<string, string> = {
   Español: 'es',
 };
 
-/** 将人类可读语言名解析为语言代码，未知回退 en */
-function resolveLangCode(lang: string): string {
-  if (!lang) return 'en';
+/**
+ * 各传统翻译源支持的目标语言集合（#88）。
+ * 以共享目标语言目录（LANGUAGE_CATALOG，约 50 种主流语言）为口径，
+ * google / microsoft 各自维护一份常量，便于后续按源差异化收窄。
+ * 未命中集合的目标语言在 translate 入口返回 unsupported-lang 错误，不再静默回退英文。
+ */
+const GOOGLE_SUPPORTED_LANGS: ReadonlySet<string> = new Set(
+  LANGUAGE_CATALOG.map((entry) => entry.code.toLowerCase()),
+);
+const MICROSOFT_SUPPORTED_LANGS: ReadonlySet<string> = new Set(
+  LANGUAGE_CATALOG.map((entry) => entry.code.toLowerCase()),
+);
+
+/**
+ * 将人类可读语言名或语言代码解析为语言代码。
+ * @returns 语言代码；未知名称 / 非代码形式返回 null（由调用方决定 unsupported-lang 归类）。
+ * #88：删除未知回退 'en' 的兜底，避免静默改成英文。
+ */
+function resolveLangCode(lang: string): string | null {
+  if (!lang) return null;
   // 已是代码形式（如 en、zh-CN）直接返回
   if (LANG_NAME_TO_CODE[lang]) return LANG_NAME_TO_CODE[lang];
   if (/^[a-z]{2}(-[A-Za-z]+)?$/.test(lang)) return lang;
-  return 'en';
+  return null;
+}
+
+/**
+ * 解析目标语言并校验当前传统翻译源是否支持（#88）。
+ * @returns 解析出的语言代码；不支持或无法解析时返回 null，调用方据此返回 unsupported-lang 错误。
+ */
+function resolveSupportedTargetLang(lang: string, type: string): string | null {
+  const code = resolveLangCode(lang);
+  if (!code) return null;
+  const supported = type === 'google'
+    ? GOOGLE_SUPPORTED_LANGS
+    : type === 'microsoft'
+      ? MICROSOFT_SUPPORTED_LANGS
+      : undefined;
+  if (!supported) return code;
+  return supported.has(code.toLowerCase()) ? code : null;
 }
 
 /**
@@ -41,11 +75,15 @@ function resolveLangCode(lang: string): string {
  * GET translate_a/single?client=gtx&sl=<src>&tl=<target>&dt=t&q=<text>
  * 响应为嵌套数组：data[0] 是译文段数组，每段 [0] 为译文，拼接即得完整译文。
  */
-async function callGoogle(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
-  const sl = req.sourceLang ? resolveLangCode(req.sourceLang) : 'auto';
-  const tl = resolveLangCode(req.targetLang);
+async function callGoogle(
+  target: string,
+  source: string | null,
+  req: TranslateRequest,
+  signal?: AbortSignal,
+): Promise<TranslateResult> {
+  const sl = source ?? 'auto';
   const url = `${GOOGLE_ENDPOINT}?client=gtx&sl=${encodeURIComponent(sl)}&tl=${encodeURIComponent(
-    tl,
+    target,
   )}&dt=t&q=${encodeURIComponent(req.text)}`;
 
   const resp = await fetch(url, { method: 'GET', signal });
@@ -76,10 +114,14 @@ async function callGoogle(req: TranslateRequest, signal?: AbortSignal): Promise<
  * body 必须是裸字符串数组，无需 token 或鉴权 header。
  * 响应：[{ translations: [{ text, to }] }]
  */
-async function callMicrosoft(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
-  const from = req.sourceLang ? resolveLangCode(req.sourceLang) : '';
-  const to = resolveLangCode(req.targetLang);
-  const params = new URLSearchParams({ from, to, isEnterpriseClient: 'false' });
+async function callMicrosoft(
+  target: string,
+  source: string | null,
+  req: TranslateRequest,
+  signal?: AbortSignal,
+): Promise<TranslateResult> {
+  const from = source ?? '';
+  const params = new URLSearchParams({ from, to: target, isEnterpriseClient: 'false' });
   const url = `${MICROSOFT_KEYLESS_TRANSLATE_ENDPOINT}?${params.toString()}`;
   const resp = await fetch(url, {
     method: 'POST',
@@ -139,14 +181,15 @@ function unescapeMicrosoftPlainText(text: string): string {
  */
 async function callGoogleWithKey(
   config: ProviderConfig,
+  target: string,
+  source: string | null,
   req: TranslateRequest,
   signal?: AbortSignal,
 ): Promise<TranslateResult> {
   const apiKey = config.apiKey as string;
-  const target = resolveLangCode(req.targetLang);
   const body: Record<string, unknown> = { q: [req.text], target, format: 'text' };
-  if (req.sourceLang) {
-    body.source = resolveLangCode(req.sourceLang);
+  if (source) {
+    body.source = source;
   }
 
   // 端点构造：去尾斜杠，未以 v2 路径结尾则追加（兼容 host-only 默认值与完整端点）
@@ -189,14 +232,15 @@ async function callGoogleWithKey(
  */
 async function callMicrosoftWithKey(
   config: ProviderConfig,
+  target: string,
+  source: string | null,
   req: TranslateRequest,
   signal?: AbortSignal,
 ): Promise<TranslateResult> {
   const apiKey = config.apiKey as string;
-  const to = resolveLangCode(req.targetLang);
-  const params = new URLSearchParams({ 'api-version': '3.0', to });
-  if (req.sourceLang) {
-    params.set('from', resolveLangCode(req.sourceLang));
+  const params = new URLSearchParams({ 'api-version': '3.0', to: target });
+  if (source) {
+    params.set('from', source);
   }
   const url = `${config.baseUrl.replace(/\/+$/, '')}?${params.toString()}`;
 
@@ -238,6 +282,8 @@ async function callMicrosoftWithKey(
  *   有 Key → 官方 Key 鉴权端点（读 config.baseUrl；microsoft 有 Key 携带 Ocp-Apim-Subscription-Key + Region）
  *   无 Key → 内置免 Key 公共端点（builtin-sources.ts 常量，行为不变）
  * 失败经 classifyError 归类为 network / rate-limit / unreachable，不自动回退。
+ * #88：入口校验目标语言是否被当前源支持，不支持返回 unsupported-lang 错误，不再静默回退英文。
+ * 源语言不解析时不报错（交由端点自动识别），仅不携带 from/source 参数。
  */
 export function createTraditionalProvider(config: ProviderConfig): TranslationProvider {
   return {
@@ -245,17 +291,29 @@ export function createTraditionalProvider(config: ProviderConfig): TranslationPr
     type: 'traditional' as const,
     async translate(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
       try {
+        // 目标语言校验：不支持直接返回 unsupported-lang，不发请求（#88）。
+        const target = resolveSupportedTargetLang(req.targetLang, config.type);
+        if (!target) {
+          return {
+            translatedText: '',
+            error: `当前翻译源不支持目标语言「${req.targetLang || ''}」`,
+            errorType: 'unsupported-lang',
+          };
+        }
+        // 源语言可解析即携带，不可解析交给端点自动识别（不回退英文，也不报错）
+        const source = req.sourceLang ? resolveLangCode(req.sourceLang) : null;
+
         // 按 apiKey 是否存在切换：有 Key 走官方端点（读 config.baseUrl），无 Key 走免 Key 公共端点
         // 保留 await 以使 catch 能捕获 callXxx 的 rejected promise
         if (config.type === 'google') {
           return config.apiKey
-            ? await callGoogleWithKey(config, req, signal)
-            : await callGoogle(req, signal);
+            ? await callGoogleWithKey(config, target, source, req, signal)
+            : await callGoogle(target, source, req, signal);
         }
         if (config.type === 'microsoft') {
           return config.apiKey
-            ? await callMicrosoftWithKey(config, req, signal)
-            : await callMicrosoft(req, signal);
+            ? await callMicrosoftWithKey(config, target, source, req, signal)
+            : await callMicrosoft(target, source, req, signal);
         }
         // 未知传统源类型
         return {
