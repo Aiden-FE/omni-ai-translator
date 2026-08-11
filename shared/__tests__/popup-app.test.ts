@@ -176,7 +176,7 @@ describe('popup 设置视图往返（#81）', () => {
     expect(wrapper.text()).toContain('已完成');
   });
 
-  it('流式期间进入设置：导航不打断流，返回后译文继续累计', async () => {
+  it('流式期间进入设置：终止请求并保留部分译文,返回后不自动续传', async () => {
     const port = createPopupPort();
     stubBrowser({ ports: [port] });
     const wrapper = mount(App);
@@ -187,18 +187,24 @@ describe('popup 设置视图往返（#81）', () => {
     await actionButton(wrapper, '翻译').trigger('click');
     port.emitMessage({ type: 'chunk', deltaText: '流式' });
 
+    // PRD「翻译生命周期」:进入设置先终止请求(port disconnect)并保留部分译文
     await openSettingsView(wrapper);
-    port.emitMessage({ type: 'chunk', deltaText: '中' });
+    expect(port.port.disconnect).toHaveBeenCalledTimes(1);
 
     const back = wrapper.findAll('button').find((b) => b.attributes('aria-label') === '返回文本翻译');
     await back!.trigger('click');
-    await wrapper.vm.$nextTick();
+    await flushPromises();
 
-    expect(wrapper.text()).toContain('翻译中');
-    port.emitMessage({ type: 'done', result: { translatedText: '流式中' } });
+    // 返回文本翻译:不自动续传,状态停留在已停止,部分译文保留
+    expect(wrapper.text()).toContain('已停止');
+    expect(wrapper.text()).toContain('流式');
+    expect(wrapper.text()).not.toContain('翻译中');
+
+    // 旧 port 延迟到达的 chunk 不会复活已终止的流(streamPort 已置空,监听器早返回)
+    port.emitMessage({ type: 'chunk', deltaText: '中' });
     await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('已完成');
-    expect(wrapper.text()).toContain('流式中');
+    expect(wrapper.text()).not.toContain('流式中');
+    expect(wrapper.text()).toContain('流式');
   });
 
   it('新开文本翻译会话的临时目标语言跟随最新默认目标语言', async () => {

@@ -186,6 +186,10 @@ async function copyTranslation() {
 }
 
 async function openSettings() {
+  // PRD「翻译生命周期」:流式期间进入设置先终止请求并保留部分译文,再切换视图。
+  // 返回文本翻译时不自动续传已停止的流(见 backToTranslator,仅切回视图)。
+  // stop() 在非流式时为 no-op,故无需在此重复判定 isStreaming。
+  stop();
   view.value = 'settings';
   await nextTick();
   settingsPanel.value?.focusFirst();
