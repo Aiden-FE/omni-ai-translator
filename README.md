@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Aiden-FE/omni-ai-translator/releases/latest">下载最新版</a>
+  <a href="https://chromewebstore.google.com/detail/omni-ai-translator/hlnagbpimgifinglmfbmkgaooneplpli">Chrome 插件下载</a>
   ·
   <a href="#主要功能">主要功能</a>
   ·
-  <a href="https://aiden-fe.github.io/omni-ai-translator/docs/privacy/">隐私政策</a>
+  <a href="https://aiden-fe.github.io/omni-ai-translator/privacy/">隐私政策</a>
 </p>
 
 Omni AI Translator 默认提供免 Key 翻译源，安装后即可使用；也可以连接 OpenAI、Anthropic、Ollama 或其他兼容接口，在翻译质量、速度和数据去向之间自行选择。
@@ -48,15 +48,13 @@ Omni AI Translator 默认提供免 Key 翻译源，安装后即可使用；也�
 
 ### Chrome
 
-1. 打开 [最新 Release](https://github.com/Aiden-FE/omni-ai-translator/releases/latest)，下载名称以 `chrome.zip` 结尾的安装包并解压。
-2. 在地址栏打开 `chrome://extensions/`。
-3. 开启右上角的「开发者模式」。
-4. 点击「加载已解压的扩展程序」，选择刚才解压的文件夹。
-5. 建议将 Omni AI Translator 固定到浏览器工具栏，方便使用文本翻译。
+1. 打开 [Omni AI Translator 的 Chrome 网上应用店页面](https://chromewebstore.google.com/detail/omni-ai-translator/hlnagbpimgifinglmfbmkgaooneplpli)。
+2. 点击「添加至 Chrome」，并在浏览器提示中确认安装。
+3. 建议将 Omni AI Translator 固定到浏览器工具栏，方便使用文本翻译。
 
 ### Microsoft Edge
 
-操作与 Chrome 相同。请下载名称以 `edge.zip` 结尾的安装包，并在 `edge://extensions/` 中开启「开发人员模式」后加载解压目录。
+打开 [最新 Release](https://github.com/Aiden-FE/omni-ai-translator/releases/latest)，下载名称以 `edge.zip` 结尾的安装包并解压；然后在 `edge://extensions/` 中开启「开发人员模式」，加载解压目录。
 
 ### Firefox
 
@@ -97,7 +95,7 @@ Release 中同时提供 `firefox.zip` 构建包。未签名的扩展需要在 `a
 - 使用自定义翻译源时，文本和所需鉴权信息会直接发送到你配置的接口。
 - 配置、默认目标语言和 API Key 保存在浏览器本地；扩展不会保存文本翻译历史。
 
-请在处理敏感内容前确认所选翻译服务的数据政策。完整说明请阅读[隐私政策](https://aiden-fe.github.io/omni-ai-translator/docs/privacy/)。
+请在处理敏感内容前确认所选翻译服务的数据政策。完整说明请阅读[隐私政策](https://aiden-fe.github.io/omni-ai-translator/privacy/)。
 
 ## 本地开发
 
