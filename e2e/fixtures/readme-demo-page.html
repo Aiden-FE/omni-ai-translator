@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Shape of Thoughtful Technology</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: Georgia, "Times New Roman", serif;
+        color: #173139;
+        background: #f2f5f2;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        background:
+          linear-gradient(90deg, #dfe9e3 1px, transparent 1px) 0 0 / 72px 72px,
+          #f2f5f2;
+      }
+
+      .site-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 72px;
+        padding: 0 58px;
+        color: #f9fbf8;
+        background: #173139;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .brand {
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .site-header nav {
+        display: flex;
+        gap: 28px;
+        font-size: 13px;
+        color: #d7e2dc;
+      }
+
+      .page {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 250px;
+        gap: 72px;
+        width: min(1100px, calc(100% - 96px));
+        margin: 0 auto;
+        padding: 64px 0 80px;
+      }
+
+      article { max-width: 710px; }
+
+      .eyebrow {
+        margin: 0 0 18px;
+        color: #087c72;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        max-width: 680px;
+        margin: 0;
+        color: #102a31;
+        font-size: 52px;
+        font-weight: 500;
+        line-height: 1.08;
+        text-wrap: balance;
+      }
+
+      .dek {
+        max-width: 650px;
+        margin: 24px 0 0;
+        color: #4c6468;
+        font-size: 21px;
+        line-height: 1.55;
+      }
+
+      .meta {
+        display: flex;
+        gap: 18px;
+        margin: 28px 0 40px;
+        padding-bottom: 22px;
+        border-bottom: 1px solid #cbd7d0;
+        color: #718186;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 12px;
+      }
+
+      article p:not(.eyebrow):not(.dek):not(.meta) {
+        margin: 0 0 22px;
+        color: #294248;
+        font-size: 18px;
+        line-height: 1.8;
+      }
+
+      #selectable {
+        padding: 2px 3px;
+        background: #d9eee8;
+        border-radius: 2px;
+      }
+
+      aside {
+        align-self: start;
+        margin-top: 164px;
+        padding-top: 18px;
+        border-top: 3px solid #087c72;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      aside strong {
+        display: block;
+        margin-bottom: 10px;
+        color: #173139;
+        font-size: 13px;
+      }
+
+      aside p {
+        margin: 0;
+        color: #687b7f;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">FIELD NOTES</div>
+      <nav aria-label="Primary navigation">
+        <span>Ideas</span>
+        <span>Practice</span>
+        <span>Archive</span>
+      </nav>
+    </header>
+
+    <main class="page">
+      <article>
+        <p class="eyebrow" data-demo-translation="设计与技术">Design &amp; Technology</p>
+        <h1 data-demo-translation="有温度的技术，应当安静地融入生活">Thoughtful technology should quietly fit into everyday life</h1>
+        <p class="dek" data-demo-translation="最好的工具并不要求我们改变思考方式，而是让复杂的事情变得自然。">
+          The best tools do not ask us to change how we think. They make complex things feel natural.
+        </p>
+        <p class="meta" data-demo-translation="作者：Maya Chen · 阅读时间 6 分钟">
+          By Maya Chen · 6 min read · August 2026
+        </p>
+        <p data-demo-translation="优秀的软件很少大声宣扬自己。它理解用户的意图，减少不必要的步骤，并把注意力留给真正重要的事情。">
+          Good software rarely announces itself. It understands intent, removes unnecessary steps, and leaves attention for the work that matters.
+        </p>
+        <p data-demo-translation="语言工具尤其如此。翻译不仅是替换单词，更要保留语气、上下文与原作者的意图。">
+          <span id="selectable">Translation is more than replacing words. It should preserve tone, context, and the intent of the person who wrote them.</span>
+        </p>
+        <p data-demo-translation="当技术做到这一点时，它不再像一道障碍，而更像一座桥。">
+          When technology gets this right, it stops feeling like a barrier and starts becoming a bridge.
+        </p>
+      </article>
+
+      <aside>
+        <strong>ABOUT THIS ESSAY</strong>
+        <p>A short reflection on humane interfaces, clear language, and tools that respect attention.</p>
+      </aside>
+    </main>
+  </body>
+</html>

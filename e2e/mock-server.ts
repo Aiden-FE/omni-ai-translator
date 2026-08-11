@@ -6,7 +6,7 @@
 // - setFailMode:失败开关,开启后 OpenAI 兼容路由对请求体含 __FAIL__ 标记的请求返回 500(快速失败,无延迟)
 // - NONSTREAM_DELAY_MS:非流式成功响应统一 300ms 可观测延迟,使「先译完的段落先渲染」可被断言
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { AddressInfo } from 'node:net';
+import type { AddressInfo } from 'node:net';
 
 /** 记录最近一次请求体,供测试断言 prompt 内容 */
 let lastRequestBody: unknown = null;
