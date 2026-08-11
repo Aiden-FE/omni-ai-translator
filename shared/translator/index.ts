@@ -16,6 +16,7 @@ import { errorTypeMessage } from './error';
 import {
   BUILTIN_FREE_SOURCES,
   DEFAULT_ACTIVE_SOURCE_ID,
+  DEFAULT_FALLBACK_SOURCE_ID,
   getBuiltinSourceById,
 } from './builtin-sources';
 
@@ -28,10 +29,34 @@ async function resolveActiveProviderConfig(): Promise<ProviderConfig | null> {
     ?? null;
 }
 
+/** Only the built-in keyless chain may switch providers without explicit user selection. */
+async function translateWithDefaultFallback(
+  config: ProviderConfig,
+  req: TranslateRequest,
+  signal?: AbortSignal,
+): Promise<TranslateResult> {
+  const primaryResult = await createProvider(config).translate(req, signal);
+  const fallbackEligible = primaryResult.errorType === 'network'
+    || primaryResult.errorType === 'rate-limit'
+    || primaryResult.errorType === 'unreachable';
+
+  if (
+    config.id !== DEFAULT_ACTIVE_SOURCE_ID
+    || !fallbackEligible
+    || signal?.aborted
+  ) {
+    return primaryResult;
+  }
+
+  const fallbackConfig = getBuiltinSourceById(DEFAULT_FALLBACK_SOURCE_ID);
+  if (!fallbackConfig) return primaryResult;
+  return createProvider(fallbackConfig).translate(req, signal);
+}
+
 /**
  * 翻译：经适配层路由到当前生效源
  * 读取 settings.activeProviderId + providers + 内置免费源，从注册表创建 provider 并调用 translate。
- * - activeProviderId 为 null 时解析为默认 builtin:microsoft（显式默认值，非隐式回退）。
+ * - activeProviderId 为 null 时走默认免 Key 链：builtin:microsoft 失败后回退 builtin:google。
  * - 先在用户已配置源中查找，未命中再查内置免 Key 免费源。
  * - 均未命中才返回 no-config 错误。
  */
@@ -46,8 +71,7 @@ export async function translateWithAdapter(req: TranslateRequest): Promise<Trans
     };
   }
 
-  const provider = createProvider(config);
-  return provider.translate(req);
+  return translateWithDefaultFallback(config, req);
 }
 
 /**
@@ -79,8 +103,8 @@ export async function translateWithAdapterStream(
     return provider.translateStream(req, onChunk, signal);
   }
 
-  // 传统源回退：调 translate() 一次性返回，完整译文作单 chunk 推送
-  const result = await provider.translate(req, signal);
+  // 传统源一次性返回；默认免 Key 源在 Microsoft 失败时先尝试 Google。
+  const result = await translateWithDefaultFallback(config, req, signal);
   if (!result.error && result.translatedText) {
     onChunk({ deltaText: result.translatedText });
   }
@@ -127,10 +151,13 @@ export async function translateBatchWithAdapterStream(
 }
 
 /**
- * 连通性测试：对指定 provider 配置测试
- * 直接创建 provider 实例并调用 test，不依赖 settings 中的当前生效源。
+ * 连通性测试：默认免 Key 入口测试整条回退链，其他配置只测试指定 provider。
+ * 不依赖 settings 中的当前生效源。
  */
 export async function testWithAdapter(config: ProviderConfig): Promise<TranslateResult> {
+  if (config.id === DEFAULT_ACTIVE_SOURCE_ID) {
+    return translateWithDefaultFallback(config, { text: 'hello', targetLang: '中文' });
+  }
   const provider = createProvider(config);
   return provider.test();
 }

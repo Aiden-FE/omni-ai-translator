@@ -1,14 +1,13 @@
 // 传统翻译 Provider — Google / 微软 免 Key 免费翻译源实现
 // 端点为内置常量（builtin-sources.ts），不可由用户编辑。
 // 调用非官方公共端点，解析非标准响应结构（嵌套数组 / JSON），失败经 classifyError 归类。
-// 语义：用户可选的免费翻译源，不是兜底源；无隐式自动回退。
+// 本模块只负责单源请求；默认免 Key 链的 Microsoft → Google 回退由适配层统一编排。
 import type { ProviderConfig, TranslateRequest, TranslateResult } from '@/shared/types';
 import type { TranslationProvider } from './types';
 import { classifyError } from './error';
 import {
   GOOGLE_ENDPOINT,
-  MICROSOFT_AUTH_ENDPOINT,
-  MICROSOFT_TRANSLATE_ENDPOINT,
+  MICROSOFT_KEYLESS_TRANSLATE_ENDPOINT,
 } from './builtin-sources';
 
 /**
@@ -73,45 +72,19 @@ async function callGoogle(req: TranslateRequest, signal?: AbortSignal): Promise<
 
 /**
  * 调用微软翻译免 Key 端点（config.apiKey 缺省时使用）
- * 1. GET edge.microsoft.com/translate/auth 获取 JWT token（免 Key）
- * 2. POST api.cognitive.microsofttranslator.com/translate?api-version=3.0&to=<target>
- *    header Authorization: Bearer <token>，body [{"Text": text}]
+ * POST edge.microsoft.com/translate/translatetext?from=<source>&to=<target>
+ * body 必须是裸字符串数组，无需 token 或鉴权 header。
  * 响应：[{ translations: [{ text, to }] }]
  */
 async function callMicrosoft(req: TranslateRequest, signal?: AbortSignal): Promise<TranslateResult> {
-  // 1. 取 token
-  const authResp = await fetch(MICROSOFT_AUTH_ENDPOINT, { method: 'GET', signal });
-  if (!authResp.ok) {
-    const errorType = classifyError(null, authResp.status);
-    return {
-      translatedText: '',
-      error: `微软翻译鉴权失败 HTTP ${authResp.status}`,
-      errorType,
-    };
-  }
-  const token = (await authResp.text()).trim();
-  if (!token) {
-    return {
-      translatedText: '',
-      error: '微软翻译鉴权返回空 token',
-      errorType: 'unreachable',
-    };
-  }
-
-  // 2. 调用翻译
+  const from = req.sourceLang ? resolveLangCode(req.sourceLang) : '';
   const to = resolveLangCode(req.targetLang);
-  const params = new URLSearchParams({ 'api-version': '3.0', to });
-  if (req.sourceLang) {
-    params.set('from', resolveLangCode(req.sourceLang));
-  }
-  const url = `${MICROSOFT_TRANSLATE_ENDPOINT}?${params.toString()}`;
+  const params = new URLSearchParams({ from, to, isEnterpriseClient: 'false' });
+  const url = `${MICROSOFT_KEYLESS_TRANSLATE_ENDPOINT}?${params.toString()}`;
   const resp = await fetch(url, {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify([{ Text: req.text }]),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify([escapeMicrosoftPlainText(req.text)]),
     signal,
   });
   if (!resp.ok) {
@@ -123,7 +96,10 @@ async function callMicrosoft(req: TranslateRequest, signal?: AbortSignal): Promi
     };
   }
   const data = await resp.json();
-  const translatedText = data?.[0]?.translations?.[0]?.text?.trim() ?? '';
+  const responseText = data?.[0]?.translations?.[0]?.text;
+  const translatedText = typeof responseText === 'string'
+    ? unescapeMicrosoftPlainText(responseText).trim()
+    : '';
   if (!translatedText) {
     return {
       translatedText: '',
@@ -132,6 +108,24 @@ async function callMicrosoft(req: TranslateRequest, signal?: AbortSignal): Promi
     };
   }
   return { translatedText };
+}
+
+/**
+ * translatetext 会把裸露的尖括号当成 HTML 标签对齐并吞掉内容。
+ * 只解码本函数编码的三个实体，且保持原文中已存在的实体仅解码一层。
+ */
+function escapeMicrosoftPlainText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function unescapeMicrosoftPlainText(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 /**
@@ -190,7 +184,7 @@ async function callGoogleWithKey(
  *   headers: Ocp-Apim-Subscription-Key、Ocp-Apim-Subscription-Region（region 非空才发）、Content-Type
  *   body [{ Text: text }]
  * 响应：[{ translations: [{ text, to }] }]
- * 不再走 edge auth 取 JWT token（官方 Key 鉴权无需 token）。
+ * 直接使用 Azure Key header 鉴权，不依赖免 Key 端点。
  * Key / region 仅放入 header，不写入日志 / 错误文案。
  */
 async function callMicrosoftWithKey(

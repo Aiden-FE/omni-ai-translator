@@ -6,9 +6,21 @@ import { nextTick } from 'vue';
 import LanguageSelect from '../LanguageSelect.vue';
 import { LANGUAGE_CATALOG, findLanguageByCode } from '@/shared/language-catalog';
 
-function mountSelect(props: { modelValue?: string; disabled?: boolean; ariaLabel?: string } = {}) {
+function mountSelect(props: {
+  modelValue?: string;
+  disabled?: boolean;
+  ariaLabel?: string;
+  variant?: 'compact' | 'workbench';
+  label?: string;
+} = {}) {
   return mount(LanguageSelect, {
-    props: { modelValue: props.modelValue ?? 'en', disabled: props.disabled, ariaLabel: props.ariaLabel },
+    props: {
+      modelValue: props.modelValue ?? 'en',
+      disabled: props.disabled,
+      ariaLabel: props.ariaLabel,
+      variant: props.variant,
+      label: props.label,
+    },
     attachTo: document.body,
   });
 }
@@ -33,6 +45,20 @@ describe('LanguageSelect — 触发器展示当前选中语言', () => {
     const wrapper = mountSelect({ ariaLabel: '目标语言' });
     expect(wrapper.find('button[role="combobox"]').attributes('aria-label')).toBe('目标语言');
     expect(wrapper.find('div.relative').attributes('aria-label')).toBeUndefined();
+  });
+
+  it('workbench 变体展示上下文、中文名、原文名与代码', () => {
+    const wrapper = mountSelect({
+      modelValue: 'ja',
+      variant: 'workbench',
+      label: '目标语言',
+    });
+    const trigger = wrapper.get('button[role="combobox"]');
+    expect(trigger.classes()).toContain('language-select-trigger--workbench');
+    expect(trigger.text()).toContain('目标语言');
+    expect(trigger.text()).toContain('日语');
+    expect(trigger.text()).toContain('日本語');
+    expect(trigger.text()).toContain('ja');
   });
 });
 

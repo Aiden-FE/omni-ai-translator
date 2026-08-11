@@ -24,6 +24,10 @@ const props = defineProps<{
   ariaLabel?: string;
   /** 提供「跟随浏览器语言」选项，选择后 emit 空字符串（默认目标语言设置用） */
   allowBrowserDefault?: boolean;
+  /** compact 保持原有紧凑触发器；workbench 对齐 popup 原型的完整语言控制 */
+  variant?: 'compact' | 'workbench';
+  /** workbench 触发器左侧上下文标签（如「目标语言」） */
+  label?: string;
 }>();
 
 const emit = defineEmits<{
@@ -36,6 +40,7 @@ const activeIndex = ref(0);
 const searchInput = ref<HTMLInputElement | null>(null);
 const triggerEl = ref<HTMLButtonElement | null>(null);
 const rootEl = ref<HTMLElement | null>(null);
+const isWorkbench = computed(() => props.variant === 'workbench');
 
 const filtered = computed(() => filterLanguages(query.value));
 
@@ -150,12 +155,14 @@ onBeforeUnmount(() => {
   <div
     ref="rootEl"
     class="relative"
+    :class="isWorkbench ? 'min-w-0 flex-1' : ''"
   >
     <button
       ref="triggerEl"
       type="button"
       role="combobox"
-      class="flex h-7 items-center gap-1 rounded-md border border-input bg-card px-2 text-xs text-foreground shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+      class="language-select-trigger"
+      :class="isWorkbench ? 'language-select-trigger--workbench' : 'language-select-trigger--compact'"
       :aria-expanded="open"
       :aria-haspopup="true"
       :aria-label="ariaLabel"
@@ -163,36 +170,45 @@ onBeforeUnmount(() => {
       @click="openDropdown"
       @keydown.enter.prevent="openDropdown"
     >
-      <span>{{ selected.zhName }}</span>
+      <span
+        v-if="isWorkbench && label"
+        class="language-select-context"
+      >{{ label }}</span>
+      <strong class="language-select-name">
+        {{ selected.zhName }}<template v-if="isWorkbench && selected.nativeName"> / {{ selected.nativeName }}</template>
+      </strong>
       <span
         v-if="selected.code"
-        class="text-muted-foreground"
-      >· {{ selected.code }}</span>
+        class="language-select-code"
+      ><template v-if="!isWorkbench">· </template>{{ selected.code }}</span>
       <span
-        class="text-muted-foreground"
+        class="language-select-chevron"
         aria-hidden="true"
-      >▾</span>
+      >⌄</span>
     </button>
 
     <div
       v-if="open"
-      class="absolute left-0 top-full z-20 mt-1 w-72 overflow-hidden rounded-md border border-border bg-card text-card-foreground shadow-lg"
+      class="language-select-popover"
+      :class="isWorkbench ? 'language-select-popover--workbench' : 'language-select-popover--compact'"
       role="dialog"
       aria-label="选择目标语言"
     >
-      <input
-        ref="searchInput"
-        v-model="query"
-        type="search"
-        class="w-full border-b border-border bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none"
-        placeholder="搜索语言（代码 / 中文名 / 原文名）"
-        aria-label="搜索语言"
-        autocomplete="off"
-        @keydown="onKeydown"
-      >
+      <div class="language-select-search">
+        <span aria-hidden="true">⌕</span>
+        <input
+          ref="searchInput"
+          v-model="query"
+          type="search"
+          placeholder="搜索语言或代码"
+          aria-label="搜索语言"
+          autocomplete="off"
+          @keydown="onKeydown"
+        >
+      </div>
       <ul
         v-if="entries.length"
-        class="max-h-64 overflow-y-auto py-1"
+        class="language-select-options"
         role="listbox"
       >
         <li
@@ -202,23 +218,28 @@ onBeforeUnmount(() => {
           :data-code="entry.code || undefined"
           :data-browser-default="entry.code === '' ? 'true' : undefined"
           :aria-selected="entry.code === modelValue"
-          class="flex cursor-pointer items-baseline gap-1 px-3 py-1.5 text-sm"
+          class="language-select-option"
           :class="[
             entry.code === modelValue ? 'text-primary font-medium' : 'text-foreground',
             index === activeIndex ? 'bg-accent text-accent-foreground' : '',
           ]"
           @click="select(entry.code)"
         >
-          <span>{{ entry.zhName }}</span>
+          <span class="language-select-option-name">
+            <strong>{{ entry.zhName }}</strong>
+            <small v-if="entry.nativeName">{{ entry.nativeName }}</small>
+          </span>
+          <code v-if="entry.code">{{ entry.code }}</code>
           <span
-            v-if="entry.code"
-            class="text-xs text-muted-foreground"
-          >/ {{ entry.nativeName }} · {{ entry.code }}</span>
+            v-if="entry.code === modelValue"
+            class="language-select-check"
+            aria-hidden="true"
+          >✓</span>
         </li>
       </ul>
       <p
         v-else
-        class="px-3 py-3 text-sm text-muted-foreground"
+        class="language-select-empty"
         role="status"
       >
         没有匹配的语言

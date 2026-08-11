@@ -119,6 +119,25 @@ describe('reduceWorkbench — 输入与启动迁移', () => {
     expect(next.errorMessage).toBe('');
     expect(next.errorType).toBeNull();
   });
+
+  it('clear: 非流式状态重置原文、译文与错误', () => {
+    const streaming = reduceWorkbench(streamingState(), {
+      type: 'stream-chunk',
+      deltaText: '部分译文',
+    });
+    const errored = reduceWorkbench(streaming, {
+      type: 'stream-error',
+      message: '翻译请求失败',
+      errorType: 'network',
+    });
+
+    expect(reduceWorkbench(errored, { type: 'clear' })).toEqual(createWorkbenchState());
+  });
+
+  it('clear: 流式期间拒绝重置', () => {
+    const streaming = streamingState();
+    expect(reduceWorkbench(streaming, { type: 'clear' })).toBe(streaming);
+  });
 });
 
 describe('reduceWorkbench — 流式迁移(就绪 → 流式 → 完成 / 停止)', () => {
@@ -174,6 +193,21 @@ describe('reduceWorkbench — 流式迁移(就绪 → 流式 → 完成 / 停止
     expect(next.outputPhase).toBe('error');
     expect(next.errorMessage).toBe('未配置生效源');
     expect(next.translatedText).toBe('');
+  });
+
+  it('stream-error: 保留错误发生前已到达的部分译文', () => {
+    const streaming = reduceWorkbench(streamingState(), {
+      type: 'stream-chunk',
+      deltaText: '部分译文',
+    });
+    const next = reduceWorkbench(streaming, {
+      type: 'stream-error',
+      message: '翻译请求失败',
+      errorType: 'network',
+    });
+
+    expect(next.outputPhase).toBe('error');
+    expect(next.translatedText).toBe('部分译文');
   });
 
   it('stream-error: 携带 errorType 时记录到状态(供差异化横幅)', () => {

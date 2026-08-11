@@ -41,6 +41,7 @@ export interface WorkbenchInputEligibility {
 /** 工作台操作（流式契约对应 port 消息 request / chunk / done / error + 用户停止） */
 export type WorkbenchAction =
   | { type: 'edit-text'; text: string }
+  | { type: 'clear' }
   | { type: 'stream-start' }
   | { type: 'stream-chunk'; deltaText: string }
   | { type: 'stream-done'; result: TranslateResult }
@@ -87,6 +88,10 @@ export function reduceWorkbench(state: WorkbenchState, action: WorkbenchAction):
         inputPhase: phase,
       };
     }
+    case 'clear': {
+      if (state.outputPhase === 'streaming') return state;
+      return createWorkbenchState();
+    }
     case 'stream-start': {
       if (state.inputPhase !== 'ready' || state.outputPhase === 'streaming') return state;
       return {
@@ -120,7 +125,8 @@ export function reduceWorkbench(state: WorkbenchState, action: WorkbenchAction):
       return {
         ...state,
         outputPhase: 'error',
-        translatedText: '',
+        // 流式中途失败时保留已到达的部分译文，供复制并标记为未完成。
+        translatedText: state.translatedText,
         errorMessage: action.message,
         errorType: action.errorType ?? null,
       };

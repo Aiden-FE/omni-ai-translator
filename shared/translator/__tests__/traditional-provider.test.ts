@@ -132,16 +132,11 @@ describe('传统翻译 Provider — Microsoft', () => {
     vi.unstubAllGlobals();
   });
 
-  it('无 Key → 走 edge auth + translate 两步（Bearer token）', async () => {
-    const fetchMock = vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/translate/auth')) {
-        return Promise.resolve({ ok: true, status: 200, text: async () => 'jwt-token' });
-      }
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
-      });
+  it('无 Key → 走免鉴权 translatetext 端点，body 为裸字符串数组', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
     });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -150,12 +145,36 @@ describe('传统翻译 Provider — Microsoft', () => {
     expect(result.translatedText).toBe('你好');
     expect(result.errorType).toBeUndefined();
 
-    // 验证两次请求：auth + translate
-    expect(fetchMock.mock.calls).toHaveLength(2);
-    // 第二次请求带 Bearer token
-    const translateOpts = fetchMock.mock.calls[1][1] as RequestInit;
-    const headers = translateOpts.headers as Record<string, string>;
-    expect(headers.Authorization).toBe('Bearer jwt-token');
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    const url = fetchMock.mock.calls[0][0] as string;
+    const opts = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(url).toContain('edge.microsoft.com/translate/translatetext');
+    expect(url).toContain('from=');
+    expect(url).toContain('to=zh-CN');
+    expect(url).toContain('isEnterpriseClient=false');
+    expect(opts.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(opts.body as string)).toEqual(['hello']);
+  });
+
+  it('无 Key → 保护普通文本中的 HTML 特殊字符', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ translations: [{ text: '比较 &lt; 值 &gt; 与 &amp; 符号' }] }],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = createTraditionalProvider(makeMicrosoftConfig());
+    const result = await provider.translate({
+      text: 'Compare < value > and & symbol',
+      targetLang: '简体中文',
+    });
+
+    const opts = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(JSON.parse(opts.body as string)).toEqual([
+      'Compare &lt; value &gt; and &amp; symbol',
+    ]);
+    expect(result.translatedText).toBe('比较 < 值 > 与 & 符号');
   });
 
   it('有 Key + region → 携带 Ocp-Apim-Subscription-Key + Region header，不请求 auth 端点', async () => {
@@ -249,12 +268,11 @@ describe('传统翻译 Provider — Microsoft', () => {
     expect(result.errorType).toBe('unreachable');
   });
 
-  it('无 Key → auth 端点 429 → rate-limit 错误', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
-      if (url.includes('/translate/auth')) {
-        return Promise.resolve({ ok: false, status: 429, text: async () => 'Too Many' });
-      }
-      return Promise.resolve({ ok: true, status: 200, json: async () => [] });
+  it('无 Key → translatetext 端点 429 → rate-limit 错误', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => 'Too Many',
     }));
     const provider = createTraditionalProvider(makeMicrosoftConfig());
     const result = await provider.translate(baseReq);

@@ -18,3 +18,4 @@ dist/
 .worktrees
 **/*.local.json
 .pi-subagents/
+.e2e-profile-*

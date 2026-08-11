@@ -100,26 +100,19 @@ describe('createProvider', () => {
     vi.unstubAllGlobals();
   });
 
-  it('microsoft provider translate 经 auth token 调用翻译端点', async () => {
-    const authFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => 'fake-jwt-token',
-    });
-    const translateFetch = vi.fn().mockResolvedValue({
+  it('microsoft provider translate 调用免鉴权 translatetext 端点', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
     });
-    vi.stubGlobal('fetch', vi.fn().mockImplementation((url: string) => {
-      return url.includes('/translate/auth') ? authFetch() : translateFetch();
-    }));
+    vi.stubGlobal('fetch', fetchMock);
     const provider = createProvider(makeConfig('microsoft'));
     const result = await provider.translate({ text: 'hello', targetLang: '简体中文' });
     expect(result.translatedText).toBe('你好');
     expect(result.errorType).toBeUndefined();
-    expect(authFetch).toHaveBeenCalled();
-    expect(translateFetch).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toContain('/translate/translatetext');
     vi.unstubAllGlobals();
   });
 

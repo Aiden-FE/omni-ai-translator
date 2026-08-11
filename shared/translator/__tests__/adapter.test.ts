@@ -37,24 +37,50 @@ describe('translateWithAdapter — 默认源与路由', () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: null, defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([]);
 
-    // mock microsoft 翻译端点（auth + translate 两步）
+    // mock microsoft 免鉴权翻译端点
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
+    });
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/translate/auth')) {
-          return Promise.resolve({ ok: true, status: 200, text: async () => 'token' });
-        }
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
-        });
-      }),
+      fetchMock,
     );
 
     const result = await translateWithAdapter({ text: 'hello', targetLang: '简体中文' });
     expect(result.translatedText).toBe('你好');
     expect(result.errorType).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toContain('/translate/translatetext');
+  });
+
+  it('默认免 Key 链中 Microsoft 失败 → 自动回退到 Google', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: null, defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([]);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/translate/translatetext')) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          text: async () => 'Microsoft unavailable',
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => [[['Google 译文', 'hello', null, null, 1]], null, 'en'],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await translateWithAdapter({ text: 'hello', targetLang: '简体中文' });
+
+    expect(result).toEqual({ translatedText: 'Google 译文' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toContain('/translate/translatetext');
+    expect(fetchMock.mock.calls[1][0]).toContain('/translate_a/single');
   });
 
   it('activeProviderId 不匹配任何 provider 与内置源 → no-config 错误', async () => {
@@ -88,6 +114,31 @@ describe('translateWithAdapter — 默认源与路由', () => {
     expect(result.errorType).toBeUndefined();
   });
 
+  it('用户自配源失败 → 不隐式回退到公共免 Key 源', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'active-id', defaultTargetLang: '' });
+    vi.mocked(getProviders).mockResolvedValue([
+      {
+        id: 'active-id',
+        name: 'test',
+        type: 'llm',
+        baseUrl: 'https://example.com/v1',
+        model: 'm',
+      },
+    ]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      text: async () => 'Unavailable',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await translateWithAdapter({ text: 'hello', targetLang: '中文' });
+
+    expect(result.errorType).toBe('unreachable');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toContain('example.com');
+  });
+
   it('activeProviderId 指向 builtin:google → 路由到 google 免费源', async () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'builtin:google', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([]);
@@ -107,7 +158,7 @@ describe('translateWithAdapter — 默认源与路由', () => {
 
   it('将外部取消信号传递给传统翻译请求', async () => {
     vi.mocked(getSettings).mockResolvedValue({
-      activeProviderId: 'builtin:google',
+      activeProviderId: 'builtin:microsoft',
       defaultTargetLang: '',
     });
     vi.mocked(getProviders).mockResolvedValue([]);
@@ -129,6 +180,7 @@ describe('translateWithAdapter — 默认源与路由', () => {
     const result = await resultPromise;
 
     expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result.error).toContain('Aborted');
   });
 });
@@ -160,7 +212,7 @@ describe('testWithAdapter', () => {
     expect(result.translatedText).toBe('你好');
   });
 
-  it('对 microsoft 免费源配置测试 → 经 auth token 返回译文', async () => {
+  it('对 microsoft 免费源配置测试 → 经免鉴权端点返回译文', async () => {
     const config: ProviderConfig = {
       id: 'builtin:microsoft',
       name: '微软翻译（免费）',
@@ -172,21 +224,43 @@ describe('testWithAdapter', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/translate/auth')) {
-          return Promise.resolve({ ok: true, status: 200, text: async () => 'token' });
-        }
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
-        });
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => [{ translations: [{ text: '你好', to: 'zh-CN' }] }],
       }),
     );
 
     const result = await testWithAdapter(config);
     expect(result.translatedText).toBe('你好');
     expect(result.errorType).toBeUndefined();
+  });
+
+  it('测试默认免 Key 兜底 → Microsoft 失败后用 Google 验证成功', async () => {
+    const config: ProviderConfig = {
+      id: 'builtin:microsoft',
+      name: '微软翻译（免费）',
+      type: 'microsoft',
+      category: 'traditional',
+      baseUrl: 'https://api.cognitive.microsofttranslator.com/translate',
+      model: '',
+    };
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/translate/translatetext')) {
+        return Promise.resolve({ ok: false, status: 503, text: async () => 'Unavailable' });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => [[['Google 译文', 'hello', null, null, 1]], null, 'en'],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await testWithAdapter(config);
+
+    expect(result).toEqual({ translatedText: 'Google 译文' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -295,18 +369,13 @@ describe('translateWithAdapterStream', () => {
     vi.mocked(getSettings).mockResolvedValue({ activeProviderId: 'builtin:microsoft', defaultTargetLang: '' });
     vi.mocked(getProviders).mockResolvedValue([]);
 
-    // mock microsoft 翻译端点（auth + translate 两步）
+    // mock microsoft 免鉴权翻译端点
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation((url: string) => {
-        if (url.includes('/translate/auth')) {
-          return Promise.resolve({ ok: true, status: 200, text: async () => 'token' });
-        }
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => [{ translations: [{ text: '你好,世界', to: 'zh-CN' }] }],
-        });
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => [{ translations: [{ text: '你好,世界', to: 'zh-CN' }] }],
       }),
     );
 
@@ -319,6 +388,36 @@ describe('translateWithAdapterStream', () => {
     expect(chunks).toEqual(['你好,世界']);
     expect(result.translatedText).toBe('你好,世界');
     expect(result.errorType).toBeUndefined();
+  });
+
+  it('默认免 Key 链中 Microsoft 失败 → Google 译文作单 chunk 推送', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      activeProviderId: 'builtin:microsoft',
+      defaultTargetLang: '',
+    });
+    vi.mocked(getProviders).mockResolvedValue([]);
+
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/translate/translatetext')) {
+        return Promise.reject(new TypeError('Microsoft network error'));
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => [[['Google 译文', 'hello', null, null, 1]], null, 'en'],
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const chunks: string[] = [];
+    const result = await translateWithAdapterStream(
+      { text: 'hello', targetLang: '简体中文' },
+      (chunk) => chunks.push(chunk.deltaText),
+    );
+
+    expect(chunks).toEqual(['Google 译文']);
+    expect(result).toEqual({ translatedText: 'Google 译文' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('无可用源 → no-config 错误,不调 onChunk', async () => {

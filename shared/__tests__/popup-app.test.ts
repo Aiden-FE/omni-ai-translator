@@ -213,6 +213,26 @@ describe('popup 设置视图往返（#81）', () => {
     expect(workbenchTrigger.text()).toContain('ja');
   });
 
+  it('清空原文同时重置当前译文并把焦点还给输入区', async () => {
+    const port = createPopupPort();
+    stubBrowser({ ports: [port] });
+    const wrapper = mount(App, { attachTo: document.body });
+    wrappers.push(wrapper);
+    await flushPromises();
+    const textarea = wrapper.get('textarea');
+    await textarea.setValue('hello');
+
+    await actionButton(wrapper, '翻译').trigger('click');
+    port.emitMessage({ type: 'done', result: { translatedText: '你好' } });
+    await wrapper.vm.$nextTick();
+    await wrapper.get('button[aria-label="清空原文"]').trigger('click');
+    await flushPromises();
+
+    expect(textarea.element.value).toBe('');
+    expect(wrapper.text()).not.toContain('你好');
+    expect(document.activeElement).toBe(textarea.element);
+  });
+
   it('设置视图提供打开 options 完整设置页的入口', async () => {
     const { openOptionsPage } = stubBrowser({ ports: [] });
     const wrapper = mount(App);
@@ -235,6 +255,18 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
       runtime: {
         connect: vi.fn(() => queue.shift()!.port),
         openOptionsPage: vi.fn(),
+        sendMessage: vi.fn(async (message: Message) => {
+          if (message.type === 'get-active-sources') {
+            return {
+              sources: [
+                { id: 'builtin:microsoft', name: '微软翻译', type: 'microsoft' },
+                { id: 'builtin:google', name: 'Google 翻译', type: 'google' },
+              ],
+              activeSourceId: 'builtin:microsoft',
+            };
+          }
+          return { ok: true };
+        }),
       },
     });
   }
@@ -364,18 +396,16 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     port.emitMessage({ type: 'done', result: { translatedText: '你好' } });
     await flushPromises();
 
-    const copy = wrapper.findAll('button').find((b) => b.text().includes('复制'));
-    expect(copy).toBeDefined();
-    await copy!.trigger('click');
+    const copy = wrapper.get('button[aria-label="复制"]');
+    await copy.trigger('click');
     await flushPromises();
     expect(writeText).toHaveBeenCalledWith('你好');
 
-    const copied = wrapper.findAll('button').find((b) => b.text().includes('已复制'));
-    expect(copied).toBeDefined();
+    expect(wrapper.find('button[aria-label="已复制 ✓"]').exists()).toBe(true);
 
     vi.advanceTimersByTime(2000);
     await wrapper.vm.$nextTick();
-    expect(wrapper.findAll('button').some((b) => b.text().includes('已复制'))).toBe(false);
+    expect(wrapper.find('button[aria-label="已复制 ✓"]').exists()).toBe(false);
   });
 
   it('停止后保留的部分译文同样可复制', async () => {
@@ -391,9 +421,8 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     await actionButton(wrapper, '停止').trigger('click');
     await wrapper.vm.$nextTick();
 
-    const copy = wrapper.findAll('button').find((b) => b.text().includes('复制'));
-    expect(copy).toBeDefined();
-    await copy!.trigger('click');
+    const copy = wrapper.get('button[aria-label="复制"]');
+    await copy.trigger('click');
     await flushPromises();
     expect(writeText).toHaveBeenCalledWith('你好');
   });
@@ -403,6 +432,43 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     stubBrowser([port]);
     const { wrapper } = await mountAndStart();
     await wrapper.vm.$nextTick();
-    expect(wrapper.findAll('button').some((b) => b.text().includes('复制'))).toBe(false);
+    expect(wrapper.find('button[aria-label="复制"]').exists()).toBe(false);
+  });
+
+  it('流式失败后保留部分译文并允许复制', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    const port = createPopupPort();
+    stubBrowser([port]);
+    const { wrapper, startTranslation } = await mountAndStart();
+    await startTranslation();
+    port.emitMessage({ type: 'chunk', deltaText: '部分译文' });
+    port.emitMessage({
+      type: 'error',
+      result: { translatedText: '', error: 'fail', errorType: 'network' },
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.text()).toContain('部分译文');
+    await wrapper.get('button[aria-label="复制"]').trigger('click');
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith('部分译文');
+  });
+
+  it('未配置翻译源时错误操作进入 popup 设置页', async () => {
+    const port = createPopupPort();
+    stubBrowser([port]);
+    const { wrapper, startTranslation } = await mountAndStart();
+    await startTranslation();
+    port.emitMessage({
+      type: 'error',
+      result: { translatedText: '', error: 'fail', errorType: 'no-config' },
+    });
+    await wrapper.vm.$nextTick();
+
+    await actionButton(wrapper, '打开设置').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[role="combobox"][aria-label="默认目标语言"]').exists()).toBe(true);
   });
 });

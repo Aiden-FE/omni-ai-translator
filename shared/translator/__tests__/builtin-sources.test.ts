@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import {
   BUILTIN_FREE_SOURCES,
   DEFAULT_ACTIVE_SOURCE_ID,
+  DEFAULT_FALLBACK_SOURCE_ID,
   getBuiltinSourceById,
   isBuiltinSourceId,
 } from '../builtin-sources';
@@ -29,6 +30,10 @@ describe('BUILTIN_FREE_SOURCES', () => {
 describe('DEFAULT_ACTIVE_SOURCE_ID', () => {
   it('默认生效源为 builtin:microsoft（显式默认值）', () => {
     expect(DEFAULT_ACTIVE_SOURCE_ID).toBe('builtin:microsoft');
+  });
+
+  it('默认后备源为 builtin:google', () => {
+    expect(DEFAULT_FALLBACK_SOURCE_ID).toBe('builtin:google');
   });
 });
 
