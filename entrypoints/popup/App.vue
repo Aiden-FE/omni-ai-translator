@@ -32,6 +32,11 @@ const view = ref<'translator' | 'settings'>('translator');
 // 临时目标语言（BCP 47 代码，#78）：仅当前文本翻译会话生效，不写入存储；
 // popup 每次打开（组件挂载）重新从默认目标语言初始化。
 const targetLangCode = ref('en');
+// 用户是否已在文本翻译界面临时切换目标语言（#87 设置回流）。
+// true = 用户已主动切换，backToTranslator 保留该选择；false = 仍跟随默认，返回时重新读取默认值同步。
+// 仅用户主动切换语言时置 true；程序化赋值（initTargetLang / 返回时同步）不触发。
+// 标记在会话内不重置：提交翻译或清空原文均不代表会话结束；popup 关闭（卸载）即自然重置。
+const hasUserSwitchedTargetLang = ref(false);
 const sourceArea = ref<HTMLTextAreaElement | null>(null);
 const settingsPanel = ref<InstanceType<typeof SourceConfigPanel> | null>(null);
 
@@ -63,6 +68,12 @@ async function initTargetLang() {
     settings.defaultTargetLang,
     navigator.language,
   ).code;
+}
+
+// 用户在文本翻译界面切换目标语言(#87):标记为用户已切换,后续设置往返不再用默认值覆盖。
+function onTargetLangChange(code: string) {
+  hasUserSwitchedTargetLang.value = true;
+  targetLangCode.value = code;
 }
 
 onMounted(async () => {
@@ -203,7 +214,12 @@ function handleErrorAction() {
   void translate();
 }
 
-function backToTranslator() {
+async function backToTranslator() {
+  // #87 设置回流:用户未临时切换目标语言时,返回文本翻译前重新读取默认值同步(用户可能在设置中改了默认目标语言);
+  // 已临时切换时保留用户选择,不覆盖。同步完成后再切视图,避免短暂闪现旧值。
+  if (!hasUserSwitchedTargetLang.value) {
+    await initTargetLang();
+  }
   view.value = 'translator';
   void nextTick().then(() => sourceArea.value?.focus());
 }
@@ -271,11 +287,12 @@ function handleAddProvider() {
         >→</span>
         <!-- 可搜索目标语言选择器(#78):临时目标语言,流式期间锁定切换 -->
         <LanguageSelect
-          v-model="targetLangCode"
+          :model-value="targetLangCode"
           :disabled="isStreaming"
           variant="workbench"
           label="目标语言"
           aria-label="目标语言"
+          @update:model-value="onTargetLangChange"
         />
       </div>
 

@@ -239,6 +239,58 @@ describe('popup 设置视图往返（#81）', () => {
     expect(document.activeElement).toBe(textarea.element);
   });
 
+  it('未临时切换语言时,设置改默认值返回后同步为新默认值 (#87)', async () => {
+    settingsFixture.defaultTargetLang = 'zh-CN';
+    stubBrowser({ ports: [] });
+    const wrapper = mount(App);
+    wrappers.push(wrapper);
+    await flushPromises();
+
+    // 当前文本翻译会话内未临时切换目标语言
+    const workbenchTrigger = wrapper.find('button[role="combobox"][aria-label="目标语言"]');
+    expect(workbenchTrigger.text()).toContain('zh-CN');
+
+    await openSettingsView(wrapper);
+    // 用户在设置中把默认目标语言改为日语(模拟持久化后的最新值)
+    settingsFixture.defaultTargetLang = 'ja';
+
+    const back = wrapper.findAll('button').find((b) => b.attributes('aria-label') === '返回文本翻译');
+    await back!.trigger('click');
+    await flushPromises();
+
+    // 未临时切换 -> 返回后同步使用新默认值(日语)
+    const workbenchTriggerAfter = wrapper.find('button[role="combobox"][aria-label="目标语言"]');
+    expect(workbenchTriggerAfter.text()).toContain('ja');
+    expect(workbenchTriggerAfter.text()).toContain('日语');
+  });
+
+  it('已临时切换语言时,设置改默认值返回后保留临时选择 (#87)', async () => {
+    settingsFixture.defaultTargetLang = 'zh-CN';
+    stubBrowser({ ports: [] });
+    const wrapper = mount(App);
+    wrappers.push(wrapper);
+    await flushPromises();
+
+    // 用户在文本翻译界面临时切换目标语言为日语(覆盖默认值)
+    wrapper.findComponent(LanguageSelect).vm.$emit('update:modelValue', 'ja');
+    await wrapper.vm.$nextTick();
+    const workbenchTrigger = wrapper.find('button[role="combobox"][aria-label="目标语言"]');
+    expect(workbenchTrigger.text()).toContain('ja');
+
+    await openSettingsView(wrapper);
+    // 用户在设置中把默认目标语言改为韩语
+    settingsFixture.defaultTargetLang = 'ko';
+
+    const back = wrapper.findAll('button').find((b) => b.attributes('aria-label') === '返回文本翻译');
+    await back!.trigger('click');
+    await flushPromises();
+
+    // 已临时切换 -> 返回后保留临时选择(日语),不跟随新默认值(韩语)
+    const workbenchTriggerAfter = wrapper.find('button[role="combobox"][aria-label="目标语言"]');
+    expect(workbenchTriggerAfter.text()).toContain('ja');
+    expect(workbenchTriggerAfter.text()).not.toContain('ko');
+  });
+
   it('设置视图提供打开 options 完整设置页的入口', async () => {
     const { openOptionsPage } = stubBrowser({ ports: [] });
     const wrapper = mount(App);
