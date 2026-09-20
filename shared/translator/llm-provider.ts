@@ -1,9 +1,10 @@
-// LLM Provider — OpenAI 兼容 / Ollama 适配实现（迁移自 shared/llm.ts）
+// LLM Provider — 工厂层；负责 protocol 分发、timeout、错误归一化、reasoning 过滤。
+// 协议差异（headers / body / SSE 解析）收敛在 llm-adapters.ts 的 LlmProtocolAdapter 中。
+//
 // content-script 不应直接 fetch 第三方接口，统一由 background 调用本模块。
 import type {
   BatchTranslateRequest,
   BatchTranslateResult,
-  BatchTranslatedChunk,
   ProviderConfig,
   TranslateChunk,
   TranslateRequest,
@@ -16,11 +17,14 @@ import {
   createBatchObjectStream,
 } from './batch-object-stream';
 import { classifyError } from './error';
-import { normalizeLlmProtocol, resolveLlmEndpoint } from './llm-protocol';
-import { createReasoningStreamFilter, sanitizeReasoningArtifacts } from './reasoning-filter';
+import { normalizeLlmProtocol } from './llm-protocol';
+import { sanitizeReasoningArtifacts, createReasoningStreamFilter } from './reasoning-filter';
+import {
+  buildLlmUrl,
+  getLlmProtocolAdapter,
+  type AnthropicStreamOptions,
+} from './llm-adapters';
 
-const ANTHROPIC_SCALAR_MAX_TOKENS = 1024;
-const ANTHROPIC_BATCH_MAX_TOKENS = 8192;
 const LLM_REQUEST_TIMEOUT_MS = 60_000;
 const LLM_REQUEST_TIMEOUT_MESSAGE = '翻译请求超时（60 秒）';
 
@@ -57,202 +61,15 @@ function buildPrompt(text: string, targetLang: string, sourceLang?: string): str
   return `Translate the following text ${source}into ${targetLang}. Output ONLY the translation, without explanation or quotes. If the source text is markdown, preserve its structure and markup (headings, lists, code blocks).\n\n${text}`;
 }
 
-/**
- * 调用 OpenAI Chat Completions 兼容接口。
- */
-async function callOpenAICompletions(
-  provider: ProviderConfig,
-  req: TranslateRequest,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-    },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
-      reasoning_effort: 'none',
-      temperature: 0.3,
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const data = await resp.json();
-  const translatedText = data?.choices?.[0]?.message?.content?.trim() ?? '';
-  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function extractResponsesText(value: unknown): string {
-  if (!isRecord(value)) return '';
-  if (typeof value.output_text === 'string') return value.output_text.trim();
-  if (!Array.isArray(value.output)) return '';
-
-  let translatedText = '';
-  for (const outputItem of value.output) {
-    if (!isRecord(outputItem) || !Array.isArray(outputItem.content)) continue;
-    for (const contentItem of outputItem.content) {
-      if (
-        isRecord(contentItem)
-        && contentItem.type === 'output_text'
-        && typeof contentItem.text === 'string'
-      ) {
-        translatedText += contentItem.text;
-      }
-    }
-  }
-  return translatedText.trim();
-}
-
-function redactApiKey(message: string, apiKey?: string): string {
-  return apiKey ? message.split(apiKey).join('[REDACTED]') : message;
-}
-
-function extractResponsesStreamFailure(value: unknown, apiKey?: string): string | null {
-  if (!isRecord(value)) return null;
-
-  if (value.type === 'error') {
-    const message = typeof value.message === 'string'
-      ? value.message
-      : 'OpenAI Responses stream error';
-    return redactApiKey(message, apiKey);
-  }
-
-  if (value.type === 'response.failed') {
-    const response = isRecord(value.response) ? value.response : null;
-    const error = response && isRecord(response.error) ? response.error : null;
-    const message = error && typeof error.message === 'string'
-      ? error.message
-      : 'OpenAI Responses stream failed';
-    return redactApiKey(message, apiKey);
-  }
-
-  if (value.type === 'response.incomplete') {
-    const response = isRecord(value.response) ? value.response : null;
-    const details = response && isRecord(response.incomplete_details)
-      ? response.incomplete_details
-      : null;
-    const reason = details && typeof details.reason === 'string'
-      ? details.reason
-      : 'unknown reason';
-    return redactApiKey(`OpenAI Responses stream incomplete: ${reason}`, apiKey);
-  }
-
-  return null;
-}
-
-async function callOpenAIResponses(
-  provider: ProviderConfig,
-  req: TranslateRequest,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-    },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      input: buildPrompt(req.text, req.targetLang, req.sourceLang),
-      reasoning: { effort: 'none' },
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const data: unknown = await resp.json();
-  return { translatedText: sanitizeReasoningArtifacts(extractResponsesText(data)) };
-}
-
-/**
- * 调用原生 Anthropic Messages API 端点
- * 鉴权用 x-api-key（非 Bearer）+ anthropic-version 头；翻译指令作顶层 system，原文作 user message。
- */
-async function callAnthropic(
-  provider: ProviderConfig,
-  req: TranslateRequest,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      ...(provider.apiKey ? { 'x-api-key': provider.apiKey } : {}),
-    },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      max_tokens: ANTHROPIC_SCALAR_MAX_TOKENS,
-      system: buildPrompt(req.text, req.targetLang, req.sourceLang),
-      messages: [{ role: 'user', content: req.text }],
-      thinking: { type: 'disabled' },
-      temperature: 0.3,
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const data = await resp.json();
-  const translatedText = data?.content?.[0]?.text?.trim() ?? '';
-  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
-}
-
-/**
- * 调用 Ollama 本地接口
- */
-async function callOllama(
-  provider: ProviderConfig,
-  req: TranslateRequest,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      stream: false,
-      think: false,
-      messages: [{ role: 'user', content: buildPrompt(req.text, req.targetLang, req.sourceLang) }],
-      options: { temperature: 0.3 },
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const data = await resp.json();
-  const translatedText = data?.message?.content?.trim() ?? '';
-  return { translatedText: sanitizeReasoningArtifacts(translatedText) };
-}
-
-// ─── 流式实现 ───
-
 type DeltaHandler = (delta: string) => void;
 
-function createProviderDeltaFilter(onDelta: DeltaHandler): {
+interface ProviderDeltaFilter {
   push(delta: string): void;
   finish(): string;
   rethrowCallbackFailure(): void;
-} {
+}
+
+function createProviderDeltaFilter(onDelta: DeltaHandler): ProviderDeltaFilter {
   let callbackFailed = false;
   let callbackError: unknown;
   const filter = createReasoningStreamFilter((delta) => {
@@ -275,295 +92,75 @@ function createProviderDeltaFilter(onDelta: DeltaHandler): {
 }
 
 /**
- * 从 ReadableStream 读取全部内容并按行分割（支持跨 chunk 行拼接）。
- * 返回逐行 yield 的异步生成器。
+ * 非流式调用模板：fetch → 错误归一化 → adapter 解析。
  */
-async function* readLines(reader: ReadableStreamDefaultReader<Uint8Array>): AsyncGenerator<string> {
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      // 刷出缓冲区中剩余的不完整行
-      if (buffer) yield buffer;
-      return;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    // 最后一段可能不完整，保留在 buffer
-    buffer = lines.pop() ?? '';
-    for (const line of lines) {
-      yield line;
-    }
-  }
-}
-
-/**
- * 调用 OpenAI 兼容接口（流式）
- * body 加 stream: true，SSE 按 data: 行解析 choices[0].delta.content，遇 data: [DONE] 结束。
- * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
- */
-async function callOpenAICompletionsPromptStream(
-  provider: ProviderConfig,
-  prompt: string,
-  onDelta: DeltaHandler,
+async function callScalar(
+  config: ProviderConfig,
+  req: TranslateRequest,
   signal: AbortSignal,
 ): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-completions');
+  const protocol = normalizeLlmProtocol(config.responseStyle);
+  const adapter = getLlmProtocolAdapter(protocol);
+  const url = buildLlmUrl(config.baseUrl, protocol);
+  const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
   const resp = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-    },
+    headers: adapter.buildHeaders(config),
     signal,
-    body: JSON.stringify({
-      model: provider.model,
-      messages: [{ role: 'user', content: prompt }],
-      reasoning_effort: 'none',
-      temperature: 0.3,
-      stream: true,
-    }),
+    body: JSON.stringify(adapter.buildScalarBody(config, prompt, req.text)),
   });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const reader = resp.body!.getReader();
-  const filter = createProviderDeltaFilter(onDelta);
-  try {
-    for await (const line of readLines(reader)) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) continue;
-      const data = trimmed.slice(5).trim();
-      if (data === '[DONE]') break;
-      let parsed;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        // 跳过无法解析的行（可能是 SSE 注释行或不完整 JSON）
-        continue;
-      }
-      const delta = parsed?.choices?.[0]?.delta?.content;
-      if (delta) {
-        filter.push(delta);
-      }
-    }
-  } catch (err) {
-    filter.rethrowCallbackFailure();
-    if (signal.aborted) throw err;
-    // 流读取中断：返回已收到的部分译文 + network 错误
-    const errorType = classifyError(err);
     return {
-      translatedText: filter.finish(),
-      error: err instanceof Error ? err.message : String(err),
+      translatedText: '',
+      error: `HTTP ${resp.status}: ${await resp.text()}`,
       errorType,
     };
   }
-  return { translatedText: filter.finish() };
-}
-
-async function callOpenAIResponsesPromptStream(
-  provider: ProviderConfig,
-  prompt: string,
-  onDelta: DeltaHandler,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'openai-responses');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
-    },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      input: prompt,
-      reasoning: { effort: 'none' },
-      stream: true,
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-
-  const reader = resp.body!.getReader();
-  const filter = createProviderDeltaFilter(onDelta);
-  try {
-    for await (const line of readLines(reader)) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) continue;
-      const data = trimmed.slice(5).trim();
-      if (data === '[DONE]') break;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(data);
-      } catch {
-        // 兼容网关可能混入注释或无法解析的数据事件。
-        continue;
-      }
-      if (!isRecord(parsed)) continue;
-      const failure = extractResponsesStreamFailure(parsed, provider.apiKey);
-      if (failure) {
-        return {
-          translatedText: filter.finish(),
-          error: failure,
-          errorType: 'unreachable',
-        };
-      }
-      if (parsed.type === 'response.completed') break;
-      if (
-        parsed.type === 'response.output_text.delta'
-        && typeof parsed.delta === 'string'
-      ) {
-        filter.push(parsed.delta);
-      }
-    }
-  } catch (err) {
-    filter.rethrowCallbackFailure();
-    if (signal.aborted) throw err;
-    const errorType = classifyError(err);
-    return {
-      translatedText: filter.finish(),
-      error: err instanceof Error ? err.message : String(err),
-      errorType,
-    };
-  }
-  return { translatedText: filter.finish() };
+  const data: unknown = await resp.json();
+  const text = sanitizeReasoningArtifacts(adapter.parseScalarResponse(data));
+  return { translatedText: text };
 }
 
 /**
- * 调用原生 Anthropic Messages API 端点（流式）
- * body 加 stream: true，SSE 解析 content_block_delta 事件取 delta.text，message_stop 结束。
- * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
+ * 流式调用模板：fetch → 创建 delta 过滤 → adapter.readStream 推送增量 → 收尾。
+ * 失败信息由 adapter 在 readStream 返回值里提供，不抛。
  */
-async function callAnthropicPromptStream(
-  provider: ProviderConfig,
-  systemPrompt: string,
-  onDelta: DeltaHandler,
+async function callStream(
+  config: ProviderConfig,
+  req: TranslateRequest,
+  onChunk: (chunk: TranslateChunk) => void,
   signal: AbortSignal,
-  userContent: string = systemPrompt,
-  maxTokens: number = ANTHROPIC_SCALAR_MAX_TOKENS,
+  streamOpts?: AnthropicStreamOptions,
 ): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'anthropic');
+  const protocol = normalizeLlmProtocol(config.responseStyle);
+  const adapter = getLlmProtocolAdapter(protocol);
+  const url = buildLlmUrl(config.baseUrl, protocol);
+  const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
   const resp = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'anthropic-version': '2023-06-01',
-      ...(provider.apiKey ? { 'x-api-key': provider.apiKey } : {}),
-    },
+    headers: adapter.buildHeaders(config),
     signal,
-    body: JSON.stringify({
-      model: provider.model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
-      thinking: { type: 'disabled' },
-      temperature: 0.3,
-      stream: true,
-    }),
+    body: JSON.stringify(adapter.buildStreamBody(config, prompt, streamOpts)),
   });
   if (!resp.ok) {
     const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
-  const reader = resp.body!.getReader();
-  const filter = createProviderDeltaFilter(onDelta);
-  let currentEvent = '';
-  try {
-    for await (const line of readLines(reader)) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        currentEvent = '';
-        continue;
-      }
-      // SSE 事件行：event: xxx
-      if (trimmed.startsWith('event:')) {
-        currentEvent = trimmed.slice(6).trim();
-        continue;
-      }
-      // SSE 数据行：data: {...}
-      if (trimmed.startsWith('data:')) {
-        const data = trimmed.slice(5).trim();
-        if (currentEvent === 'message_stop') break;
-        if (currentEvent === 'content_block_delta') {
-          let parsed;
-          try {
-            parsed = JSON.parse(data);
-          } catch {
-            // 跳过无法解析的行
-            continue;
-          }
-          const delta = parsed?.delta?.text;
-          if (delta) {
-            filter.push(delta);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    filter.rethrowCallbackFailure();
-    if (signal.aborted) throw err;
-    const errorType = classifyError(err);
     return {
-      translatedText: filter.finish(),
-      error: err instanceof Error ? err.message : String(err),
+      translatedText: '',
+      error: `HTTP ${resp.status}: ${await resp.text()}`,
       errorType,
     };
   }
-  return { translatedText: filter.finish() };
-}
-
-/**
- * 调用 Ollama 本地接口（流式）
- * body 改 stream: true，NDJSON 按行取 message.content，流结束。
- * 逐 chunk 经 onChunk 推送，累加 delta 得完整译文。
- */
-async function callOllamaPromptStream(
-  provider: ProviderConfig,
-  prompt: string,
-  onDelta: DeltaHandler,
-  signal: AbortSignal,
-): Promise<TranslateResult> {
-  const url = resolveLlmEndpoint(provider.baseUrl, 'ollama');
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    signal,
-    body: JSON.stringify({
-      model: provider.model,
-      stream: true,
-      think: false,
-      messages: [{ role: 'user', content: prompt }],
-      options: { temperature: 0.3 },
-    }),
-  });
-  if (!resp.ok) {
-    const errorType = classifyError(null, resp.status);
-    return { translatedText: '', error: `HTTP ${resp.status}: ${await resp.text()}`, errorType };
-  }
   const reader = resp.body!.getReader();
-  const filter = createProviderDeltaFilter(onDelta);
+  const filter = createProviderDeltaFilter((delta) => onChunk({ deltaText: delta }));
   try {
-    for await (const line of readLines(reader)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        // 跳过无法解析的行
-        continue;
-      }
-      const delta = parsed?.message?.content;
-      if (delta) {
-        filter.push(delta);
-      }
-      // Ollama 流结束信号：done=true 或 response 为空
-      if (parsed?.done) break;
+    const result = await adapter.readStream(reader, filter.push, config);
+    if (result.failure) {
+      return {
+        translatedText: filter.finish(),
+        error: result.failure,
+        errorType: result.errorType ?? 'unreachable',
+      };
     }
   } catch (err) {
     filter.rethrowCallbackFailure();
@@ -580,7 +177,8 @@ async function callOllamaPromptStream(
 
 /**
  * 创建 LLM 翻译源 provider 实例
- * 按归一化后的 LLM 协议分发普通与流式请求。
+ * 在工厂里按归一化的 protocol 选择一个 LlmProtocolAdapter；三种调用模式（translate /
+ * translateStream / translateBatchStream）都走同一 adapter，不再各自 if/else 分发。
  */
 export function createLLMProvider(config: ProviderConfig): TranslationProvider {
   return {
@@ -588,19 +186,15 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
     type: 'llm' as const,
     async translate(req: TranslateRequest, externalSignal?: AbortSignal): Promise<TranslateResult> {
       try {
-        return await withRequestDeadline(async (signal) => {
-          const protocol = normalizeLlmProtocol(config.responseStyle);
-          if (protocol === 'openai-responses') return await callOpenAIResponses(config, req, signal);
-          if (protocol === 'ollama') return await callOllama(config, req, signal);
-          if (protocol === 'anthropic') return await callAnthropic(config, req, signal);
-          return await callOpenAICompletions(config, req, signal);
-        }, externalSignal);
+        return await withRequestDeadline(
+          (signal) => callScalar(config, req, signal),
+          externalSignal,
+        );
       } catch (err) {
-        const errorType = classifyError(err);
         return {
           translatedText: '',
           error: err instanceof Error ? err.message : String(err),
-          errorType,
+          errorType: classifyError(err),
         };
       }
     },
@@ -613,56 +207,70 @@ export function createLLMProvider(config: ProviderConfig): TranslationProvider {
       externalSignal?: AbortSignal,
     ): Promise<TranslateResult> {
       try {
-        return await withRequestDeadline(async (signal) => {
-          const protocol = normalizeLlmProtocol(config.responseStyle);
-          const prompt = buildPrompt(req.text, req.targetLang, req.sourceLang);
-          const onDelta = (deltaText: string) => onChunk({ deltaText });
-          if (protocol === 'openai-responses') {
-            return await callOpenAIResponsesPromptStream(config, prompt, onDelta, signal);
-          }
-          if (protocol === 'ollama') {
-            return await callOllamaPromptStream(config, prompt, onDelta, signal);
-          }
-          if (protocol === 'anthropic') {
-            return await callAnthropicPromptStream(config, prompt, onDelta, signal, req.text);
-          }
-          return await callOpenAICompletionsPromptStream(config, prompt, onDelta, signal);
-        }, externalSignal);
+        return await withRequestDeadline(
+          (signal) => callStream(config, req, onChunk, signal),
+          externalSignal,
+        );
       } catch (err) {
-        const errorType = classifyError(err);
         return {
           translatedText: '',
           error: err instanceof Error ? err.message : String(err),
-          errorType,
+          errorType: classifyError(err),
         };
       }
     },
     async translateBatchStream(
       req: BatchTranslateRequest,
-      onChunk: (chunk: BatchTranslatedChunk) => void,
+      onChunk: (chunk: import('@/shared/types').BatchTranslatedChunk) => void,
     ): Promise<BatchTranslateResult> {
       const parser = createBatchObjectStream(req.chunks, onChunk);
+      const protocol = normalizeLlmProtocol(config.responseStyle);
+      const adapter = getLlmProtocolAdapter(protocol);
       try {
         const streamResult = await withRequestDeadline(async (signal) => {
-          const protocol = normalizeLlmProtocol(config.responseStyle);
-          const prompt = buildBatchPrompt(req.targetLang, req.chunks);
-          if (protocol === 'openai-responses') {
-            return await callOpenAIResponsesPromptStream(config, prompt, parser.push, signal);
+          const url = buildLlmUrl(config.baseUrl, protocol);
+          const headers = adapter.buildHeaders(config);
+          // Anthropic 流式 batch 走 system=buildBatchInstructions、userContent=JSON.stringify(chunks)、
+          // max_tokens=8192 的覆盖路径；其它协议忽略 opts 走默认 prompt。
+          const streamOpts: AnthropicStreamOptions = {
+            userContent: JSON.stringify(req.chunks),
+            maxTokens: 8192,
+          };
+          const body = JSON.stringify(
+            protocol === 'anthropic'
+              ? adapter.buildStreamBody(config, buildBatchInstructions(req.targetLang), streamOpts)
+              : adapter.buildStreamBody(config, buildBatchPrompt(req.targetLang, req.chunks)),
+          );
+          const resp = await fetch(url, { method: 'POST', headers, signal, body });
+          if (!resp.ok) {
+            const errorType = classifyError(null, resp.status);
+            return {
+              translatedText: '',
+              error: `HTTP ${resp.status}: ${await resp.text()}`,
+              errorType,
+            } as TranslateResult;
           }
-          if (protocol === 'ollama') {
-            return await callOllamaPromptStream(config, prompt, parser.push, signal);
+          const reader = resp.body!.getReader();
+          const filter = createProviderDeltaFilter((delta) => parser.push(delta));
+          try {
+            const result = await adapter.readStream(reader, filter.push, config);
+            if (result.failure) {
+              return {
+                translatedText: filter.finish(),
+                error: result.failure,
+                errorType: result.errorType ?? 'unreachable',
+              } as TranslateResult;
+            }
+          } catch (err) {
+            filter.rethrowCallbackFailure();
+            if (signal.aborted) throw err;
+            return {
+              translatedText: filter.finish(),
+              error: err instanceof Error ? err.message : String(err),
+              errorType: classifyError(err),
+            } as TranslateResult;
           }
-          if (protocol === 'anthropic') {
-            return await callAnthropicPromptStream(
-              config,
-              buildBatchInstructions(req.targetLang),
-              parser.push,
-              signal,
-              JSON.stringify(req.chunks),
-              ANTHROPIC_BATCH_MAX_TOKENS,
-            );
-          }
-          return await callOpenAICompletionsPromptStream(config, prompt, parser.push, signal);
+          return { translatedText: filter.finish() } as TranslateResult;
         });
 
         const result: BatchTranslateResult = { missingChunkIds: parser.finish() };
