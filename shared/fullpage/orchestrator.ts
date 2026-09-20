@@ -8,19 +8,8 @@
 // segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是唯一状态持有者。
 // 样式隔离约定：所有注入 DOM 带 data-llm-translator（分段排除、观察器过滤、恢复清理均依赖）。
 
-import { collectSegments, collectSemanticSegments, walkSegments, walkSemanticSegments } from './segmenter';
-import {
-  runPool,
-  retrySegments,
-  isSegmentInViewport,
-  createViewportObserver,
-  type ViewportObserver,
-} from './translate-pool';
-import {
-  createBatchRequestGate,
-  retryBatchSegments,
-  runBatchPool,
-} from './batch-pool';
+import { isSegmentInViewport, createViewportObserver, type ViewportObserver } from './translate-pool';
+import { createBatchRequestGate } from './batch-pool';
 import {
   applyReplace,
   applyBilingual,
@@ -36,8 +25,8 @@ import {
   discoverSegments,
   createIdleChunkerScheduler,
   DiscoveryAborted,
-  type ChunkerMode,
 } from './chunker';
+import { pickStrategy, type TranslationStrategy, type StrategyContext } from './strategy';
 import { getTargetLang } from '../target-lang';
 import type { BackgroundCommand, DisplayMode, TranslationCapabilities } from '../types';
 import type { SegmentRecord, SemanticTranslation } from './types';
@@ -65,8 +54,8 @@ let active = false;
 let cache: Map<string, string> = new Map();
 /** LLM 语义译文缓存；key 由 batch pool 添加结构版本前缀。 */
 let semanticCache: Map<string, SemanticTranslation> = new Map();
-/** 当前会话翻译路径，由 capability 查询确定并供 retry / dynamic nodes 复用。 */
-let batchStreamEnabled = false;
+/** 当前会话翻译策略，由 capability 解析一次；chunker 模式、增量收段、入池与重试均经此分发。 */
+let strategy: TranslationStrategy | null = null;
 /** 所有会话入口共享同一个三槽 gate，避免 viewport/dynamic/retry pool 叠加并发。 */
 const batchRequestGate = createBatchRequestGate();
 /** 工具栏实例 */
@@ -152,7 +141,11 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     throw error;
   }
   targetLang = resolvedTargetLang;
-  batchStreamEnabled = resolvedBatchStreamEnabled;
+  strategy = pickStrategy(resolvedBatchStreamEnabled, {
+    cache,
+    semanticCache,
+    requestGate: batchRequestGate,
+  });
 
   // 防御：空分段页重复触发走全新路径时先销毁旧工具栏，避免重复挂载
   toolbar?.destroy();
@@ -174,7 +167,8 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   // 流式分段发现: 通过 chunker 把 walkSegments/walkSemanticSegments 切到 rIC 上,
   // 1000+ 段页面不会在同步收集阶段冻结主线程(Q12=B 预算)。
   // 每个 chunk flush 出来后立刻分入池(inView)/挂 IO(outOfView), 用户先看见可见区域。
-  const chunkerMode: ChunkerMode = batchStreamEnabled ? 'semantic' : 'flat';
+  // chunkerMode 由 strategy 解析 capability 时一并确定；不需要在编排器再分支一次。
+  const chunkerMode = strategy.chunkerMode;
   records = [];
   recordedEls = new Set();
   // 收集阶段工具栏进不定态脉冲: total 未知, 显示"全文翻译中…"
@@ -266,24 +260,14 @@ async function enqueueSegments(
   if (segs.length === 0) return;
   markSegmentsLoading(segs);
   updateProgress();
-  if (batchStreamEnabled) {
-    await runBatchPool(segs, {
-      targetLang,
-      concurrency: 3,
-      cache: semanticCache,
-      requestGate: batchRequestGate,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  } else {
-    await runPool(segs, {
-      targetLang,
-      concurrency: 3,
-      cache,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  }
+  if (!strategy) return;
+  const ctx: StrategyContext = {
+    targetLang,
+    generation,
+    isActive: () => isSessionActive(generation),
+    onSettled: (seg) => handleSettled(seg, generation),
+  };
+  await strategy.enqueue(segs, ctx);
 }
 
 async function resolveBatchStreamCapability(): Promise<boolean> {
@@ -312,16 +296,13 @@ function cleanupFailedStart(generation: number): void {
   records = [];
   recordedEls = new Set();
   active = false;
-  batchStreamEnabled = false;
+  strategy = null;
   targetLang = '';
   sessionGeneration += 1;
 }
 
 /** 用于 `__reset`: 导入保留, 以备单测需要。 */
-void collectSegments;
-void collectSemanticSegments;
-void walkSegments;
-void walkSemanticSegments;
+void pickStrategy;
 
 /** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */
 function queueSegments(segs: SegmentRecord[], generation: number): void {
@@ -533,24 +514,14 @@ async function handleRetry(requestedSegments?: SegmentRecord[]): Promise<void> {
   updateProgress();
   // retrySegments 重置段状态后复用池逻辑；onSettled 的 active 校验保证恢复后不误渲染，
   // 翻译仍完成并写入缓存（有利于再次触发时秒级渲染）
-  if (batchStreamEnabled) {
-    await retryBatchSegments(failedSegs, {
-      targetLang,
-      concurrency: 3,
-      cache: semanticCache,
-      requestGate: batchRequestGate,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  } else {
-    await retrySegments(failedSegs, {
-      targetLang,
-      concurrency: 3,
-      cache,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  }
+  if (!strategy) return;
+  const ctx: StrategyContext = {
+    targetLang,
+    generation,
+    isActive: () => isSessionActive(generation),
+    onSettled: (seg) => handleSettled(seg, generation),
+  };
+  await strategy.retry(failedSegs, ctx);
   if (!isSessionActive(generation)) return;
   updateFailureCount();
   updateProgress();
@@ -626,9 +597,8 @@ async function flushAddedNodes(): Promise<void> {
       try {
         if (!node.isConnected) continue;
         if (node.hasAttribute('data-llm-translator')) continue;
-        const segs = batchStreamEnabled
-          ? collectSemanticSegments(node)
-          : collectSegments(node);
+        if (!strategy) continue;
+        const segs = strategy.collectFor(node);
         for (const seg of segs) {
           if (recordedEls.has(seg.el)) continue;
           recordedEls.add(seg.el);
@@ -702,7 +672,7 @@ export function __getState(): OrchestratorStateSnapshot {
     active,
     cache,
     semanticCache,
-    batchStreamEnabled,
+    batchStreamEnabled: strategy?.chunkerMode === 'semantic',
     targetLang,
   };
 }
@@ -726,7 +696,7 @@ export function __reset(): void {
   sessionGeneration++;
   cache = new Map();
   semanticCache = new Map();
-  batchStreamEnabled = false;
+  strategy = null;
   targetLang = '';
   startInFlight = null;
   isFlushing = false;
