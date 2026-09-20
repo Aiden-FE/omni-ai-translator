@@ -67,7 +67,7 @@ test('输入原文 -> 流式翻译完成 -> 译文展示与复制', async ({ con
   // 输入原文
   const source = popup.getByRole('textbox', { name: '原文输入区' });
   await source.fill('Hello world');
-  await expect(popup.getByText('11 / 5000')).toBeVisible();
+  await expect(popup.getByText('11 / 20000')).toBeVisible();
 
   // 主操作按钮:翻译
   await popup.getByRole('button', { name: '翻译' }).click();
@@ -147,4 +147,47 @@ test('mock 错误响应 -> 错误横幅 -> 重试成功', async ({ context, exte
   // 重试进入流式,译文完成展示
   await expect(popup.getByLabel('译文')).toContainText(MOCK_TRANSLATION, { timeout: 15_000 });
   await expect(popup.getByText('已完成')).toBeVisible();
+});
+
+/** #89:译文超长时结果区出现滚动条,溢出内容可滚动查看 */
+test('译文超长溢出时结果区可滚动', async ({ context, extensionId }) => {
+  await seedExtensionStorage(context, [mockProvider()], mockSettings('popup-mock'));
+
+  const popup = await openPopup(context, extensionId);
+
+  // 原文含 __LONG__ 标记触发 mock 返回超长译文
+  await popup.getByRole('textbox', { name: '原文输入区' }).fill('__LONG__ 请翻译这段超长文本');
+  await popup.getByRole('button', { name: '翻译' }).click();
+
+  // 等待流式结束,「已完成」徽章出现
+  await expect(popup.getByText('已完成')).toBeVisible({ timeout: 15_000 });
+
+  // 译文 pane 的 ScrollArea 根 div:scrollHeight > clientHeight 时,浏览器自动展示滚动条
+  const resultContent = popup.locator('[class*="result-content"]').first();
+  const overflow = await resultContent.evaluate((el: HTMLElement) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    scrollTop: el.scrollTop,
+  }));
+  expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight);
+  expect(overflow.scrollTop).toBe(0);
+
+  // 未滚动时译文内容底边超出可视区(溢出内容不可见)
+  const contentBottom = await resultContent.evaluate((el: HTMLElement) => {
+    const text = el.querySelector('.result-text') as HTMLElement | null;
+    return text
+      ? text.getBoundingClientRect().bottom - el.getBoundingClientRect().top
+      : 0;
+  });
+  expect(contentBottom).toBeGreaterThan(overflow.clientHeight);
+
+  // 滚动到底部:scrollTop 生效(overflow 可滚动而非裁剪),且到达内容底部
+  await resultContent.evaluate((el: HTMLElement) => { el.scrollTop = el.scrollHeight; });
+  const scrolled = await resultContent.evaluate((el: HTMLElement) => ({
+    scrollTop: el.scrollTop,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }));
+  expect(scrolled.scrollTop).toBeGreaterThan(0);
+  expect(scrolled.scrollHeight - scrolled.scrollTop - scrolled.clientHeight).toBeLessThan(2);
 });

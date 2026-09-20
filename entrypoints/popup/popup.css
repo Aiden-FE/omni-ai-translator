@@ -293,7 +293,6 @@
 .result-content {
   min-height: 0;
   flex: 1;
-  overflow: hidden;
 }
 
 .result-text {

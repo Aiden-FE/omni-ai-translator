@@ -23,6 +23,26 @@ export function getLastRequestHeaders() {
 /** 模拟流式翻译的固定译文 "你好,世界",按字符拆分为 chunk */
 const STREAM_CHUNKS = ['你', '好', ',世界'];
 
+/**
+ * 超长译文标记(#89):请求体含该标记时流式返回远超 popup 结果区高度的译文,
+ * 供 popup 译文结果区滚动行为 e2e 断言。原文只需携带 __LONG__,mock 会忽略原文内容。
+ */
+const LONG_OUTPUT_MARKER = '__LONG__';
+
+/** 超长译文按行切 4 个 chunk,每行固定便于断言 */
+const LONG_TRANSLATION_CHUNKS: string[] = (() => {
+  const lines = Array.from(
+    { length: 30 },
+    (_, index) => `第 ${index + 1} 行:用于验证译文滚动条的模拟长译文。`,
+  );
+  const chunkSize = Math.ceil(lines.length / 4);
+  const chunks: string[] = [];
+  for (let start = 0; start < lines.length; start += chunkSize) {
+    chunks.push(`${lines.slice(start, start + chunkSize).join('\n')}\n`);
+  }
+  return chunks;
+})();
+
 /** chunk 间延迟(ms),模拟真实流式传输,使渐进渲染可被 e2e 捕获 */
 const CHUNK_DELAY_MS = 100;
 
@@ -317,7 +337,14 @@ async function sendOpenAIStream(
     return;
   }
 
-  for (const chunk of STREAM_CHUNKS) {
+  // 超长译文分支(#89):原文含 __LONG__ 标记时返回远超结果区高度的流式译文
+  const chunks = isRecord(requestBody) && Array.isArray(requestBody.messages)
+    && requestBody.messages.some((message: unknown) =>
+      isRecord(message) && typeof message.content === 'string'
+      && message.content.includes(LONG_OUTPUT_MARKER))
+    ? LONG_TRANSLATION_CHUNKS
+    : STREAM_CHUNKS;
+  for (const chunk of chunks) {
     writeOpenAIDelta(res, chunk);
     await sleep(CHUNK_DELAY_MS);
   }

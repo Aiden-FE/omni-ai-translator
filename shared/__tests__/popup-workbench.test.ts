@@ -41,27 +41,27 @@ describe('deriveWorkbenchInput — 原文输入准入判定', () => {
     expect(input.canTranslate).toBe(true);
   });
 
-  it('恰好 5000 码点 → 仍为 ready(边界含上限)', () => {
-    const input = deriveWorkbenchInput('a'.repeat(5000));
+  it('恰好达到上限码点 → 仍为 ready(边界含上限)', () => {
+    const input = deriveWorkbenchInput('a'.repeat(WORKBENCH_MAX_LENGTH));
     expect(input.phase).toBe('ready');
     expect(input.canTranslate).toBe(true);
   });
 
-  it('5001 码点 → overlimit 且不可翻译', () => {
-    const input = deriveWorkbenchInput('a'.repeat(5001));
+  it('超出上限 1 码点 → overlimit 且不可翻译', () => {
+    const input = deriveWorkbenchInput('a'.repeat(WORKBENCH_MAX_LENGTH + 1));
     expect(input.phase).toBe('overlimit');
-    expect(input.charCount).toBe(5001);
+    expect(input.charCount).toBe(WORKBENCH_MAX_LENGTH + 1);
     expect(input.canTranslate).toBe(false);
   });
 
   it('含 emoji 的代理对按码点计数(1 个 emoji = 1 字符)', () => {
-    const input = deriveWorkbenchInput('😀'.repeat(5000));
-    expect(input.charCount).toBe(5000);
+    const input = deriveWorkbenchInput('😀'.repeat(WORKBENCH_MAX_LENGTH));
+    expect(input.charCount).toBe(WORKBENCH_MAX_LENGTH);
     expect(input.phase).toBe('ready');
   });
 
   it('超长内容完整保留(不自动截断)', () => {
-    const longText = 'x'.repeat(6000);
+    const longText = 'x'.repeat(WORKBENCH_MAX_LENGTH + 1000);
     const next = reduceWorkbench(createWorkbenchState(), { type: 'edit-text', text: longText });
     expect(next.sourceText).toBe(longText);
     expect(next.inputPhase).toBe('overlimit');
@@ -105,7 +105,7 @@ describe('reduceWorkbench — 输入与启动迁移', () => {
   it('stream-start: overlimit → 拒绝迁移', () => {
     const overlimit = reduceWorkbench(createWorkbenchState(), {
       type: 'edit-text',
-      text: 'a'.repeat(5001),
+      text: 'a'.repeat(WORKBENCH_MAX_LENGTH + 1),
     });
     expect(reduceWorkbench(overlimit, { type: 'stream-start' })).toBe(overlimit);
   });
@@ -317,7 +317,7 @@ describe('reduceWorkbench — 流式迁移(就绪 → 流式 → 完成 / 停止
 });
 
 describe('WORKBENCH_MAX_LENGTH', () => {
-  it('字数上限为 5000', () => {
-    expect(WORKBENCH_MAX_LENGTH).toBe(5000);
+  it('字数上限为 20000（#89 由 5000 放开）', () => {
+    expect(WORKBENCH_MAX_LENGTH).toBe(20000);
   });
 });

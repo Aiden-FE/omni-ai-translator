@@ -5,8 +5,8 @@
 // 不持久化任何内容；状态仅存在于 popup 生命周期内（文本翻译会话）。
 import type { ErrorType, TranslateResult } from './types';
 
-/** 原文最大字符数（按 Unicode 码点计数） */
-export const WORKBENCH_MAX_LENGTH = 5000;
+/** 原文最大字符数（按 Unicode 码点计数）。#89：由 5000 放开到 20000。 */
+export const WORKBENCH_MAX_LENGTH = 20000;
 
 /** 原文输入阶段 */
 export type WorkbenchInputPhase = 'empty' | 'ready' | 'overlimit';
@@ -33,7 +33,7 @@ export interface WorkbenchState {
 /** 输入准入判定结果 */
 export interface WorkbenchInputEligibility {
   phase: WorkbenchInputPhase;
-  /** 码点字符数，展示为 N / 5000 */
+  /** 码点字符数，展示为 N / WORKBENCH_MAX_LENGTH */
   charCount: number;
   canTranslate: boolean;
 }
