@@ -128,9 +128,15 @@ export type DisplayMode = 'replace' | 'bilingual';
 
 /**
  * background → content 命令通道（与上方 content → background 的 Message 联合分离，勿混用）
- * - fullpage-translate：右键菜单「全文翻译」触发，background 经 browser.tabs.sendMessage 下发给目标页 content script（t5 消费）
+ * - fullpage-translate：右键菜单「全文翻译」触发，background 经 browser.tabs.sendMessage 下发给目标页 content script（t5 消费）。
+ *   capabilities 随命令携带（active source 的批量流式支持），编排器无需再单独发起一次 IPC 查询；
+ *   缺省时编排器回退到 get-translation-capabilities 查询（直接调 start() 的测试 / e2e 路径不受影响）。
  */
-export type BackgroundCommand = { type: 'fullpage-translate'; mode: DisplayMode };
+export type BackgroundCommand = {
+  type: 'fullpage-translate';
+  mode: DisplayMode;
+  capabilities?: TranslationCapabilities;
+};
 
 /** 流式翻译 chunk（增量译文片段） */
 export interface TranslateChunk {

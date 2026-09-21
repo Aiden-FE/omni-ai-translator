@@ -12,7 +12,7 @@ export default defineContentScript({
     browser.runtime.onMessage.addListener((msg: unknown) => {
       // unknown + 类型守卫：只消费 fullpage-translate 命令，其余消息（如划词通道）忽略
       if (isBackgroundCommand(msg)) {
-        start(msg.mode).catch((err: unknown) => {
+        start(msg.mode, msg.capabilities).catch((err: unknown) => {
           // 启动失败（如存储读取异常/非常规 DOM）：content script 无用户反馈通道，
           // 仅告警不阻断宿主页面（错误不含 API Key——Key 只存 background 侧存储）
           console.warn('[llm-translator] fullpage translate start failed', err);

@@ -68,12 +68,23 @@ export default defineBackground(() => {
     // 空值守卫：devtools 等上下文下 tab / tab.id 可能缺失
     const tabId = tab?.id;
     if (tabId === undefined) return;
+    // capability 随命令携带：background 本就持有 storage，编排器无需再单独 IPC 查询一次。
+    // 查询失败不阻断翻译——capabilities 缺省时编排器回退自行查询。
     const command: BackgroundCommand = { type: 'fullpage-translate', mode };
-    // 经 tabs.sendMessage 下发给目标页 content script（t5 以 runtime.onMessage 消费）；
-    // 接收端可能不存在（如 content script 未注入的页面），消化 reject 避免 SW 未处理 rejection
-    browser.tabs.sendMessage(tabId, command).catch(() => {
-      /* 无接收端，忽略 */
-    });
+    void getTranslationCapabilities()
+      .then((capabilities) => {
+        command.capabilities = capabilities;
+      })
+      .catch(() => {
+        /* 忽略：缺省时编排器回退自行查询 */
+      })
+      .finally(() => {
+        // 经 tabs.sendMessage 下发给目标页 content script（t5 以 runtime.onMessage 消费）；
+        // 接收端可能不存在（如 content script 未注入的页面），消化 reject 避免 SW 未处理 rejection
+        browser.tabs.sendMessage(tabId, command).catch(() => {
+          /* 无接收端，忽略 */
+        });
+      });
   });
 
   // 菜单创建必须放在 onInstalled 内：仅安装/更新时执行一次，SW 重启不重复创建，

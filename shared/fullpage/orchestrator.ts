@@ -102,8 +102,12 @@ let deferredViewport: DrainQueue<SegmentRecord> | null = null;
  * 启动全文翻译。
  * - 复用路径：active 且 records 非空 → 仅切换显示模式（零 API，复用缓存，验收标准 10）
  * - 全新路径：collectSegments → createToolbar → runPool 逐段渲染 → startObserver
+ * - capabilities：background 随 fullpage-translate 命令携带的能力信息；缺省时自行 IPC 查询。
  */
-export async function start(requestedMode: DisplayMode): Promise<void> {
+export async function start(
+  requestedMode: DisplayMode,
+  capabilities?: TranslationCapabilities,
+): Promise<void> {
   // 并发触发守卫（如右键菜单连点）：等待进行中的 start 完成，再按最新状态决策，
   // 避免重复收集分段 / 重复挂工具栏 / 重复派发翻译
   if (startInFlight) {
@@ -116,7 +120,7 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
     return;
   }
 
-  const p = doStart(requestedMode);
+  const p = doStart(requestedMode, capabilities);
   startInFlight = p;
   try {
     await p;
@@ -128,7 +132,10 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
 }
 
 /** 全新启动路径 */
-async function doStart(requestedMode: DisplayMode): Promise<void> {
+async function doStart(
+  requestedMode: DisplayMode,
+  capabilities?: TranslationCapabilities,
+): Promise<void> {
   const generation = ++sessionGeneration;
   clearBatchQueue();
   clearDeferredDrain();
@@ -140,7 +147,10 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
     resolvedTargetLang = await getTargetLang();
     if (!isSessionActive(generation)) return;
-    resolvedBatchStreamEnabled = await resolveBatchStreamCapability();
+    // 命令已携带 capability 时直接采用，省一次 IPC 往返；否则回退查询
+    resolvedBatchStreamEnabled = capabilities
+      ? capabilities.batchStream
+      : await resolveBatchStreamCapability();
     if (!isSessionActive(generation)) return;
   } catch (error) {
     cleanupFailedStart(generation);
