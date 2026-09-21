@@ -12,9 +12,10 @@ import '@/assets/content.css';
 // content.css 以字符串注入浮层 iframe 文档(见 showPanel),不依赖宿主文档全局 CSS 穿透进 iframe。
 import contentStyle from '@/assets/content.css?inline';
 import { getTargetLang } from '@/shared/target-lang';
-import type { TranslateResult, StreamPortMessage } from '@/shared/types';
+import type { TranslateResult } from '@/shared/types';
 import { errorFeedback } from '@/shared/translator/error';
 import { renderMarkdown } from '@/shared/render/markdown';
+import { createStreamPortSession, type StreamPortLike } from '@/shared/transport/stream-port-client';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -121,14 +122,9 @@ export default defineContentScript({
       };
       const targetLang = await getTargetLang();
 
-      // 经 port 长连接发起流式翻译
-      const port = browser.runtime.connect({ name: 'translate-stream' });
-      port.postMessage({ type: 'request', text: selectedText, targetLang });
-
       let translatedText = '';
       let pendingDelta = '';
       let rafId: number | null = null;
-      let finished = false;
       let firstChunkReceived = false;
 
       // 流式文本容器与光标元素（首次 chunk 到达时创建）
@@ -177,76 +173,79 @@ export default defineContentScript({
         cursor = null;
       }
 
-      port.onMessage.addListener((msg: StreamPortMessage) => {
-        if (msg.type === 'chunk') {
-          initStreamingUI();
-          pendingDelta += msg.deltaText;
-          scheduleFlush();
-        } else if (msg.type === 'done') {
-          finished = true;
-          if (rafId !== null) cancelAnimationFrame(rafId);
-          // 最终刷出
-          if (pendingDelta) {
-            translatedText += pendingDelta;
-            pendingDelta = '';
-          }
-          removeCursor();
-          // 以 done.result 为准（含完整译文）
-          if (currentRoot && currentDoc) {
-            if (firstChunkReceived && textContainer && msg.result.translatedText) {
-              // done 阶段:markdown 渲染(解析 → sanitize → innerHTML)
-              // 移除流式 span,创建 md 渲染容器注入 sanitize 后的 HTML
-              textContainer.remove();
-              const mdContainer = currentDoc.createElement('div');
-              mdContainer.className = 'llm-translator-md-render';
-              mdContainer.innerHTML = renderMarkdown(msg.result.translatedText);
-              currentRoot.appendChild(mdContainer);
-            } else if (!firstChunkReceived) {
-              // 无 chunk 直接 done（理论上不会发生，但防御处理）
-              currentRoot.textContent = '';
-              const mdContainer = currentDoc.createElement('div');
-              mdContainer.className = 'llm-translator-md-render';
-              mdContainer.innerHTML = renderMarkdown(msg.result.translatedText ?? '');
-              currentRoot.appendChild(mdContainer);
-            }
-            syncSize();
-          }
-          port.disconnect();
-        } else if (msg.type === 'error') {
-          finished = true;
-          if (rafId !== null) cancelAnimationFrame(rafId);
-          flushPending();
-          removeCursor();
-          if (currentRoot) {
-            // 保留已渲染译文 + 追加错误提示行
-            if (!firstChunkReceived) {
-              // 未收到任何 chunk，清空「翻译中…」再显示错误
-              currentRoot.textContent = '';
-            }
-            renderError(currentRoot, msg.result);
-            syncSize();
-          }
-          port.disconnect();
+      function cancelRaf() {
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
         }
-      });
+      }
 
-      port.onDisconnect.addListener(() => {
-        if (!finished && currentRoot) {
-          // SW 回收等异常路径 → 归入 network 错误
-          if (rafId !== null) cancelAnimationFrame(rafId);
-          flushPending();
-          removeCursor();
-          if (!firstChunkReceived) {
-            currentRoot.textContent = '';
-          }
-          renderError(currentRoot, {
-            translatedText: '',
-            error: '翻译连接中断',
-            errorType: 'network',
-          });
-          syncSize();
+      /** 异常断开 / 上游错误共用的收尾：刷出已收内容 + 渲染错误提示 */
+      function renderFailure(result: TranslateResult) {
+        cancelRaf();
+        flushPending();
+        removeCursor();
+        if (!currentRoot) return;
+        if (!firstChunkReceived) {
+          currentRoot.textContent = '';
         }
-      });
+        renderError(currentRoot, result);
+        syncSize();
+      }
+
+      // port 生命周期（chunk/done/error 分发、终态后回调失效、异常断开归因）
+      // 由 StreamPortSession 承担；此处只注入浮层渲染行为。
+      createStreamPortSession(
+        browser.runtime.connect({ name: 'translate-stream' }) as unknown as StreamPortLike,
+        { type: 'request', text: selectedText, targetLang },
+        {
+          onChunk(deltaText) {
+            initStreamingUI();
+            pendingDelta += deltaText;
+            scheduleFlush();
+          },
+          onDone(result) {
+            cancelRaf();
+            // 最终刷出
+            if (pendingDelta) {
+              translatedText += pendingDelta;
+              pendingDelta = '';
+            }
+            removeCursor();
+            // 以 done.result 为准（含完整译文）
+            if (currentRoot && currentDoc) {
+              if (firstChunkReceived && textContainer && result.translatedText) {
+                // done 阶段:markdown 渲染(解析 → sanitize → innerHTML)
+                // 移除流式 span,创建 md 渲染容器注入 sanitize 后的 HTML
+                textContainer.remove();
+                const mdContainer = currentDoc.createElement('div');
+                mdContainer.className = 'llm-translator-md-render';
+                mdContainer.innerHTML = renderMarkdown(result.translatedText);
+                currentRoot.appendChild(mdContainer);
+              } else if (!firstChunkReceived) {
+                // 无 chunk 直接 done（理论上不会发生，但防御处理）
+                currentRoot.textContent = '';
+                const mdContainer = currentDoc.createElement('div');
+                mdContainer.className = 'llm-translator-md-render';
+                mdContainer.innerHTML = renderMarkdown(result.translatedText ?? '');
+                currentRoot.appendChild(mdContainer);
+              }
+              syncSize();
+            }
+          },
+          onError(result) {
+            renderFailure(result);
+          },
+          onAbnormalDisconnect() {
+            // SW 回收等异常路径 → 归入 network 错误
+            renderFailure({
+              translatedText: '',
+              error: '翻译连接中断',
+              errorType: 'network',
+            });
+          },
+        },
+      );
     }
 
     // 划词后显示触发按钮
