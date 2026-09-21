@@ -14,6 +14,7 @@ import {
   setActiveSource,
 } from '@/shared/translator';
 import { isValidBatchTranslateChunks } from '@/shared/fullpage/batch-packer';
+import { createPortSession, type PortLike } from '@/shared/transport/port-session';
 import type {
   BackgroundCommand,
   BatchStreamPortMessage,
@@ -40,6 +41,17 @@ function isBatchStreamRequestMessage(value: unknown): value is BatchStreamReques
   return true;
 }
 
+type SelectionStreamRequestMessage = Extract<StreamPortMessage, { type: 'request' }>;
+
+function isSelectionStreamRequestMessage(value: unknown): value is SelectionStreamRequestMessage {
+  return isRecord(value) && value.type === 'request';
+}
+
+/** 把 WXT 注入的 browser Port 收窄为 PortSession 所需的最小接口（兼容类型差异）。 */
+function asPortLike(port: unknown): PortLike {
+  return port as PortLike;
+}
+
 export default defineBackground(() => {
   // 右键菜单「全文翻译」点击事件（v0.4.0 入口）。
   // MV3 约束：onClicked 监听必须顶层同步注册——SW 被菜单点击事件唤醒时，
@@ -56,12 +68,23 @@ export default defineBackground(() => {
     // 空值守卫：devtools 等上下文下 tab / tab.id 可能缺失
     const tabId = tab?.id;
     if (tabId === undefined) return;
+    // capability 随命令携带：background 本就持有 storage，编排器无需再单独 IPC 查询一次。
+    // 查询失败不阻断翻译——capabilities 缺省时编排器回退自行查询。
     const command: BackgroundCommand = { type: 'fullpage-translate', mode };
-    // 经 tabs.sendMessage 下发给目标页 content script（t5 以 runtime.onMessage 消费）；
-    // 接收端可能不存在（如 content script 未注入的页面），消化 reject 避免 SW 未处理 rejection
-    browser.tabs.sendMessage(tabId, command).catch(() => {
-      /* 无接收端，忽略 */
-    });
+    void getTranslationCapabilities()
+      .then((capabilities) => {
+        command.capabilities = capabilities;
+      })
+      .catch(() => {
+        /* 忽略：缺省时编排器回退自行查询 */
+      })
+      .finally(() => {
+        // 经 tabs.sendMessage 下发给目标页 content script（t5 以 runtime.onMessage 消费）；
+        // 接收端可能不存在（如 content script 未注入的页面），消化 reject 避免 SW 未处理 rejection
+        browser.tabs.sendMessage(tabId, command).catch(() => {
+          /* 无接收端，忽略 */
+        });
+      });
   });
 
   // 菜单创建必须放在 onInstalled 内：仅安装/更新时执行一次，SW 重启不重复创建，
@@ -122,43 +145,12 @@ export default defineBackground(() => {
   // 流式翻译 port 长连接：content-script 经 browser.runtime.connect({name:'translate-stream'}) 建连
   browser.runtime.onConnect.addListener((port) => {
     if (port.name === 'fullpage-translate-batch-stream') {
+      const session = createPortSession(asPortLike(port));
       let requestAccepted = false;
-      let disconnected = false;
-      let terminalSent = false;
-
-      port.onDisconnect.addListener(() => {
-        disconnected = true;
-      });
-
-      const disconnectOnce = () => {
-        if (disconnected) return;
-        disconnected = true;
-        try {
-          port.disconnect();
-        } catch {
-          // The peer can disappear between the state check and disconnect().
-        }
-      };
-
-      const postMessage = (message: BatchStreamPortMessage): boolean => {
-        if (disconnected) return false;
-        try {
-          port.postMessage(message);
-          return true;
-        } catch {
-          disconnectOnce();
-          return false;
-        }
-      };
-
-      const finalize = (message: BatchStreamPortMessage) => {
-        if (disconnected || terminalSent) return;
-        terminalSent = true;
-        if (postMessage(message)) disconnectOnce();
-      };
-
       port.onMessage.addListener((msg: unknown) => {
-        if (disconnected || requestAccepted || !isBatchStreamRequestMessage(msg)) return;
+        if (session.isDisconnected() || requestAccepted || !isBatchStreamRequestMessage(msg)) {
+          return;
+        }
         requestAccepted = true;
         const { requestId, targetLang, chunks } = msg;
 
@@ -166,7 +158,7 @@ export default defineBackground(() => {
           { targetLang, chunks },
           (chunk) => {
             const message: BatchStreamPortMessage = { type: 'chunk', requestId, chunk };
-            if (!postMessage(message)) {
+            if (!session.send(message)) {
               throw new Error('Batch translation port disconnected');
             }
           },
@@ -176,7 +168,7 @@ export default defineBackground(() => {
               const message: BatchStreamPortMessage = result.error
                 ? { type: 'error', requestId, result }
                 : { type: 'done', requestId, missingChunkIds: result.missingChunkIds };
-              finalize(message);
+              session.terminal(message);
             },
             (err) => {
               const result: BatchTranslateResult = {
@@ -184,7 +176,7 @@ export default defineBackground(() => {
                 error: err instanceof Error ? err.message : String(err),
                 errorType: 'network',
               };
-              finalize({ type: 'error', requestId, result });
+              session.terminal({ type: 'error', requestId, result });
             },
           );
       });
@@ -195,67 +187,35 @@ export default defineBackground(() => {
 
     // 客户端可在流式期间断开（popup「停止」/ 关闭 popup）：
     // 此后不再向已断开的 port 写消息，避免 uncaught postMessage 错误。
+    const session = createPortSession(asPortLike(port));
     let requestAccepted = false;
-    let disconnected = false;
-    let terminalSent = false;
-    const requestController = new AbortController();
-
-    port.onDisconnect.addListener(() => {
-      disconnected = true;
-      requestController.abort();
-    });
-
-    const disconnectOnce = () => {
-      if (disconnected) return;
-      disconnected = true;
-      try {
-        port.disconnect();
-      } catch {
-        // The peer can disappear between the state check and disconnect().
-      }
-    };
-
-    const postMessage = (message: StreamPortMessage): boolean => {
-      if (disconnected) return false;
-      try {
-        port.postMessage(message);
-        return true;
-      } catch {
-        disconnectOnce();
-        return false;
-      }
-    };
-
-    const finalize = (message: StreamPortMessage) => {
-      if (disconnected || terminalSent) return;
-      terminalSent = true;
-      if (postMessage(message)) disconnectOnce();
-    };
 
     port.onMessage.addListener((msg: unknown) => {
-      if (disconnected || requestAccepted || (msg as StreamPortMessage).type !== 'request') return;
+      if (session.isDisconnected() || requestAccepted || !isSelectionStreamRequestMessage(msg)) {
+        return;
+      }
       requestAccepted = true;
-      const request = msg as Extract<StreamPortMessage, { type: 'request' }>;
+      const request = msg as SelectionStreamRequestMessage;
 
       translateWithAdapterStream(
         { text: request.text, targetLang: request.targetLang, sourceLang: request.sourceLang },
         (chunk) => {
-          if (!postMessage({ type: 'chunk', deltaText: chunk.deltaText })) {
+          if (!session.send({ type: 'chunk', deltaText: chunk.deltaText })) {
             throw new Error('translate-stream port disconnected');
           }
         },
-        requestController.signal,
+        session.signal,
       )
         .then(
           (result) => {
             const message: StreamPortMessage = result.error
               ? { type: 'error', result }
               : { type: 'done', result };
-            finalize(message);
+            session.terminal(message);
           },
           (err) => {
-            if (disconnected) return;
-            finalize({
+            if (session.isDisconnected()) return;
+            session.terminal({
               type: 'error',
               result: {
                 translatedText: '',

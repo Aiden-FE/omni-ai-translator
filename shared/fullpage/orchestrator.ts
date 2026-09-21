@@ -8,19 +8,8 @@
 // segmenter / pool / renderer / toolbar 均为无全局状态组件；本模块是唯一状态持有者。
 // 样式隔离约定：所有注入 DOM 带 data-llm-translator（分段排除、观察器过滤、恢复清理均依赖）。
 
-import { collectSegments, collectSemanticSegments, walkSegments, walkSemanticSegments } from './segmenter';
-import {
-  runPool,
-  retrySegments,
-  isSegmentInViewport,
-  createViewportObserver,
-  type ViewportObserver,
-} from './translate-pool';
-import {
-  createBatchRequestGate,
-  retryBatchSegments,
-  runBatchPool,
-} from './batch-pool';
+import { isSegmentInViewport, createViewportObserver, type ViewportObserver } from './translate-pool';
+import { createBatchRequestGate } from './batch-pool';
 import {
   applyReplace,
   applyBilingual,
@@ -36,8 +25,13 @@ import {
   discoverSegments,
   createIdleChunkerScheduler,
   DiscoveryAborted,
-  type ChunkerMode,
 } from './chunker';
+import { pickStrategy, type TranslationStrategy, type StrategyContext } from './strategy';
+import {
+  createDebouncer,
+  createDrainQueue,
+  type DrainQueue,
+} from './scheduler';
 import { getTargetLang } from '../target-lang';
 import type { BackgroundCommand, DisplayMode, TranslationCapabilities } from '../types';
 import type { SegmentRecord, SemanticTranslation } from './types';
@@ -65,8 +59,8 @@ let active = false;
 let cache: Map<string, string> = new Map();
 /** LLM 语义译文缓存；key 由 batch pool 添加结构版本前缀。 */
 let semanticCache: Map<string, SemanticTranslation> = new Map();
-/** 当前会话翻译路径，由 capability 查询确定并供 retry / dynamic nodes 复用。 */
-let batchStreamEnabled = false;
+/** 当前会话翻译策略，由 capability 解析一次；chunker 模式、增量收段、入池与重试均经此分发。 */
+let strategy: TranslationStrategy | null = null;
 /** 所有会话入口共享同一个三槽 gate，避免 viewport/dynamic/retry pool 叠加并发。 */
 const batchRequestGate = createBatchRequestGate();
 /** 工具栏实例 */
@@ -84,31 +78,36 @@ let startInFlight: Promise<void> | null = null;
 /** 单调递增的会话代次，用于拒绝 restore/restart 前启动的晚到回调。 */
 let sessionGeneration = 0;
 
-// ---- 增量翻译防抖状态 ----
+// ---- 三个子状态对象（详见 ./scheduler.ts） ----
 
-/** 防抖窗口内聚合的新增节点 */
-let pendingAddedNodes: Set<HTMLElement> = new Set();
-/** 防抖计时器 */
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-/** flush 并发守卫：flush 期间新到达的节点入新 set，完成后重新调度 */
-let isFlushing = false;
+/**
+ * MutationObserver 防抖：200ms 内多次 mutation 聚合到一次 flush。
+ * drain 时调 flushAddedNodesBatch 进行分段收集与派发。
+ */
+let addedNodesDebouncer: ReturnType<typeof createDebouncer<HTMLElement>> | null = null;
 
-// ---- 视口 / 动态分段共享 micro-batch 队列 ----
+/**
+ * 视口进入 + 动态分段共享 micro-batch 队列：25ms 聚合窗口。
+ * drain 时把 pending 且连接中的段派发入池。
+ */
+let microBatch: DrainQueue<SegmentRecord> | null = null;
 
-let queuedSegments: Set<SegmentRecord> = new Set();
-let batchQueueTimer: ReturnType<typeof setTimeout> | null = null;
-let batchQueueGeneration = 0;
-/** 已注册 viewportObserver、尚未派发的段。 */
-let deferredViewportSegments: Set<SegmentRecord> = new Set();
-let deferredDrainTimer: ReturnType<typeof setTimeout> | null = null;
-let deferredDrainGeneration = 0;
+/**
+ * 视口外段延迟排空队列：已挂 viewportObserver、等待滚入视口或兜底排空的段。
+ * 成员在视口进入 / SPA 删除时被摘除；drain 时把剩余段送回 micro-batch。
+ */
+let deferredViewport: DrainQueue<SegmentRecord> | null = null;
 
 /**
  * 启动全文翻译。
  * - 复用路径：active 且 records 非空 → 仅切换显示模式（零 API，复用缓存，验收标准 10）
  * - 全新路径：collectSegments → createToolbar → runPool 逐段渲染 → startObserver
+ * - capabilities：background 随 fullpage-translate 命令携带的能力信息；缺省时自行 IPC 查询。
  */
-export async function start(requestedMode: DisplayMode): Promise<void> {
+export async function start(
+  requestedMode: DisplayMode,
+  capabilities?: TranslationCapabilities,
+): Promise<void> {
   // 并发触发守卫（如右键菜单连点）：等待进行中的 start 完成，再按最新状态决策，
   // 避免重复收集分段 / 重复挂工具栏 / 重复派发翻译
   if (startInFlight) {
@@ -121,7 +120,7 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
     return;
   }
 
-  const p = doStart(requestedMode);
+  const p = doStart(requestedMode, capabilities);
   startInFlight = p;
   try {
     await p;
@@ -133,7 +132,10 @@ export async function start(requestedMode: DisplayMode): Promise<void> {
 }
 
 /** 全新启动路径 */
-async function doStart(requestedMode: DisplayMode): Promise<void> {
+async function doStart(
+  requestedMode: DisplayMode,
+  capabilities?: TranslationCapabilities,
+): Promise<void> {
   const generation = ++sessionGeneration;
   clearBatchQueue();
   clearDeferredDrain();
@@ -145,14 +147,21 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
     // 目标语言每次启动解析一次（用户配置优先，回退浏览器首选语言）
     resolvedTargetLang = await getTargetLang();
     if (!isSessionActive(generation)) return;
-    resolvedBatchStreamEnabled = await resolveBatchStreamCapability();
+    // 命令已携带 capability 时直接采用，省一次 IPC 往返；否则回退查询
+    resolvedBatchStreamEnabled = capabilities
+      ? capabilities.batchStream
+      : await resolveBatchStreamCapability();
     if (!isSessionActive(generation)) return;
   } catch (error) {
     cleanupFailedStart(generation);
     throw error;
   }
   targetLang = resolvedTargetLang;
-  batchStreamEnabled = resolvedBatchStreamEnabled;
+  strategy = pickStrategy(resolvedBatchStreamEnabled, {
+    cache,
+    semanticCache,
+    requestGate: batchRequestGate,
+  });
 
   // 防御：空分段页重复触发走全新路径时先销毁旧工具栏，避免重复挂载
   toolbar?.destroy();
@@ -174,7 +183,8 @@ async function doStart(requestedMode: DisplayMode): Promise<void> {
   // 流式分段发现: 通过 chunker 把 walkSegments/walkSemanticSegments 切到 rIC 上,
   // 1000+ 段页面不会在同步收集阶段冻结主线程(Q12=B 预算)。
   // 每个 chunk flush 出来后立刻分入池(inView)/挂 IO(outOfView), 用户先看见可见区域。
-  const chunkerMode: ChunkerMode = batchStreamEnabled ? 'semantic' : 'flat';
+  // chunkerMode 由 strategy 解析 capability 时一并确定；不需要在编排器再分支一次。
+  const chunkerMode = strategy.chunkerMode;
   records = [];
   recordedEls = new Set();
   // 收集阶段工具栏进不定态脉冲: total 未知, 显示"全文翻译中…"
@@ -241,18 +251,19 @@ function handleDiscoveryChunk(
       console.warn('[fullpage] discovery in-view enqueue failed', err);
     });
   }
-  // 视口外: markLoading + 挂 IO
+  // 视口外: markLoading + 挂 IO + 入延迟排空队列
   if (newOutView.length > 0) {
     markSegmentsLoading(newOutView);
-    if (!viewportObserver) {
-      viewportObserver = createViewportEnterObserver(generation);
-    }
+    ensureViewportObserver(generation);
+    ensureDeferredViewport(generation);
     for (const seg of newOutView) {
-      deferredViewportSegments.add(seg);
-      viewportObserver.observe(seg);
+      viewportObserver?.observe(seg);
+      deferredViewport?.add(seg);
     }
   }
   updateProgress();
+  // 发现阶段所有 chunk 收完后由 doStart 统一 scheduleDeferredDrain(generation, 0)；
+  // 动态发现路径（增量 flush）自行排 100ms 优先窗口。
 }
 
 /**
@@ -266,24 +277,14 @@ async function enqueueSegments(
   if (segs.length === 0) return;
   markSegmentsLoading(segs);
   updateProgress();
-  if (batchStreamEnabled) {
-    await runBatchPool(segs, {
-      targetLang,
-      concurrency: 3,
-      cache: semanticCache,
-      requestGate: batchRequestGate,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  } else {
-    await runPool(segs, {
-      targetLang,
-      concurrency: 3,
-      cache,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  }
+  if (!strategy) return;
+  const ctx: StrategyContext = {
+    targetLang,
+    generation,
+    isActive: () => isSessionActive(generation),
+    onSettled: (seg) => handleSettled(seg, generation),
+  };
+  await strategy.enqueue(segs, ctx);
 }
 
 async function resolveBatchStreamCapability(): Promise<boolean> {
@@ -312,88 +313,71 @@ function cleanupFailedStart(generation: number): void {
   records = [];
   recordedEls = new Set();
   active = false;
-  batchStreamEnabled = false;
+  strategy = null;
   targetLang = '';
   sessionGeneration += 1;
 }
 
 /** 用于 `__reset`: 导入保留, 以备单测需要。 */
-void collectSegments;
-void collectSemanticSegments;
-void walkSegments;
-void walkSemanticSegments;
+void pickStrategy;
+
+/** 初始化 micro-batch 队列（同一会话复用；generation 捕获到 drain 回调里校验）。 */
+function ensureMicroBatch(generation: number): void {
+  if (microBatch) return;
+  microBatch = createDrainQueue<SegmentRecord>((items) => {
+    if (!isSessionActive(generation)) return;
+    discardDisconnectedSegments(items);
+    const segments = items.filter(
+      (seg) => seg.status === 'pending' && seg.el.isConnected,
+    );
+    void enqueueSegments(segments, generation).catch((err) => {
+      console.warn('[fullpage] micro-batch enqueue failed', err);
+    });
+  });
+}
+
+/** 初始化视口外延迟排空队列。 */
+function ensureDeferredViewport(generation: number): void {
+  if (deferredViewport) return;
+  deferredViewport = createDrainQueue<SegmentRecord>((items) => {
+    if (!isSessionActive(generation)) return;
+    for (const seg of items) {
+      viewportObserver?.unobserve(seg);
+    }
+    discardDisconnectedSegments(items);
+    const segments = items.filter(
+      (seg) => seg.status === 'pending' && seg.el.isConnected,
+    );
+    queueSegments(segments, generation);
+  });
+}
 
 /** 将多次视口进入和动态分段聚合到同一个 25ms 派发窗口。 */
 function queueSegments(segs: SegmentRecord[], generation: number): void {
   const pendingSegments = segs.filter((seg) => seg.status === 'pending');
   if (pendingSegments.length === 0 || !isSessionActive(generation)) return;
-  if (batchQueueTimer !== null && batchQueueGeneration !== generation) {
-    clearBatchQueue();
-  }
-  batchQueueGeneration = generation;
-  for (const seg of pendingSegments) queuedSegments.add(seg);
+  ensureMicroBatch(generation);
   markSegmentsLoading(pendingSegments);
   updateProgress();
-  if (batchQueueTimer !== null) return;
-  batchQueueTimer = setTimeout(() => {
-    batchQueueTimer = null;
-    const queuedGeneration = batchQueueGeneration;
-    const queued = Array.from(queuedSegments);
-    queuedSegments = new Set();
-    if (!isSessionActive(queuedGeneration)) return;
-    discardDisconnectedSegments(queued);
-    const segments = queued.filter(
-      (seg) => seg.status === 'pending' && seg.el.isConnected,
-    );
-    void enqueueSegments(segments, queuedGeneration).catch((err) => {
-      console.warn('[fullpage] micro-batch enqueue failed', err);
-    });
-  }, BATCH_QUEUE_MS);
+  for (const seg of pendingSegments) {
+    microBatch?.add(seg);
+  }
+  microBatch?.scheduleTimer(BATCH_QUEUE_MS);
 }
 
 function clearBatchQueue(): void {
-  if (batchQueueTimer !== null) {
-    clearTimeout(batchQueueTimer);
-    batchQueueTimer = null;
-  }
-  queuedSegments = new Set();
-  batchQueueGeneration = 0;
+  microBatch?.clear();
 }
 
-/** 安排视口外段兜底派发；初始发现结束立即安排，动态段保留短暂视口优先窗口。 */
+/** 安排视口外段兜底派发；初始发现结束立即安排（delay=0），动态段保留视口优先窗口。 */
 function scheduleDeferredDrain(generation: number, delay = DEFERRED_DRAIN_MS): void {
-  if (!isSessionActive(generation) || deferredViewportSegments.size === 0) return;
-  if (deferredDrainTimer !== null) {
-    if (deferredDrainGeneration === generation) return;
-    clearTimeout(deferredDrainTimer);
-  }
-  deferredDrainGeneration = generation;
-  deferredDrainTimer = setTimeout(() => {
-    deferredDrainTimer = null;
-    const scheduledGeneration = deferredDrainGeneration;
-    deferredDrainGeneration = 0;
-    if (!isSessionActive(scheduledGeneration)) return;
-
-    const deferred = Array.from(deferredViewportSegments);
-    for (const seg of deferred) {
-      deferredViewportSegments.delete(seg);
-      viewportObserver?.unobserve(seg);
-    }
-    discardDisconnectedSegments(deferred);
-    const segments = deferred.filter(
-      (seg) => seg.status === 'pending' && seg.el.isConnected,
-    );
-    queueSegments(segments, scheduledGeneration);
-  }, delay);
+  if (!isSessionActive(generation)) return;
+  ensureDeferredViewport(generation);
+  deferredViewport?.scheduleTimer(delay);
 }
 
 function clearDeferredDrain(): void {
-  if (deferredDrainTimer !== null) {
-    clearTimeout(deferredDrainTimer);
-    deferredDrainTimer = null;
-  }
-  deferredDrainGeneration = 0;
-  deferredViewportSegments = new Set();
+  deferredViewport?.clear();
 }
 
 /** SPA 删除尚未完成的源节点时，从进度与所有注入状态中同步移除该段。 */
@@ -406,7 +390,7 @@ function discardDisconnectedSegments(segments: SegmentRecord[]): void {
     clearFailedMark(seg);
     seg.blockHost?.remove();
     seg.blockHost = undefined;
-    deferredViewportSegments.delete(seg);
+    deferredViewport?.remove(seg);
     viewportObserver?.unobserve(seg);
     recordedEls.delete(seg.el);
   }
@@ -424,9 +408,16 @@ function createViewportEnterObserver(
   generation: number,
 ): ViewportObserver {
   return createViewportObserver((seg) => {
-    deferredViewportSegments.delete(seg);
+    deferredViewport?.remove(seg);
     queueSegments([seg], generation);
   });
+}
+
+/** 确保 viewportObserver 存在（同一会话复用同一句柄）。 */
+function ensureViewportObserver(generation: number): void {
+  if (!viewportObserver) {
+    viewportObserver = createViewportEnterObserver(generation);
+  }
 }
 
 function isSessionActive(generation: number): boolean {
@@ -533,24 +524,14 @@ async function handleRetry(requestedSegments?: SegmentRecord[]): Promise<void> {
   updateProgress();
   // retrySegments 重置段状态后复用池逻辑；onSettled 的 active 校验保证恢复后不误渲染，
   // 翻译仍完成并写入缓存（有利于再次触发时秒级渲染）
-  if (batchStreamEnabled) {
-    await retryBatchSegments(failedSegs, {
-      targetLang,
-      concurrency: 3,
-      cache: semanticCache,
-      requestGate: batchRequestGate,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  } else {
-    await retrySegments(failedSegs, {
-      targetLang,
-      concurrency: 3,
-      cache,
-      onSettled: (seg) => handleSettled(seg, generation),
-      isActive: () => isSessionActive(generation),
-    });
-  }
+  if (!strategy) return;
+  const ctx: StrategyContext = {
+    targetLang,
+    generation,
+    isActive: () => isSessionActive(generation),
+    onSettled: (seg) => handleSettled(seg, generation),
+  };
+  await strategy.retry(failedSegs, ctx);
   if (!isSessionActive(generation)) return;
   updateFailureCount();
   updateProgress();
@@ -569,6 +550,7 @@ function handleRecall(): void {
 /** 启动增量观察器（仅含初始分段的 active 会话调用；重复调用安全） */
 function startObserver(): void {
   if (observer) return;
+  ensureAddedNodesDebouncer();
   observer = new MutationObserver(handleMutations);
   observer.observe(document.body, { childList: true, subtree: true });
 }
@@ -577,93 +559,72 @@ function startObserver(): void {
 function stopObserver(): void {
   observer?.disconnect();
   observer = null;
-  if (debounceTimer !== null) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
-  }
-  pendingAddedNodes = new Set();
+  addedNodesDebouncer?.cancel();
 }
 
 /** MutationObserver 回调：聚合 addedNodes，每次 mutation 重置 200ms 防抖 */
 function handleMutations(mutations: MutationRecord[]): void {
+  if (!addedNodesDebouncer) return;
   for (const mutation of mutations) {
     for (const node of mutation.addedNodes) {
       if (node instanceof HTMLElement) {
-        pendingAddedNodes.add(node);
+        addedNodesDebouncer.add(node);
       }
     }
   }
-  scheduleFlush();
 }
 
-function scheduleFlush(): void {
-  if (debounceTimer !== null) {
-    clearTimeout(debounceTimer);
-  }
-  debounceTimer = setTimeout(() => {
-    debounceTimer = null;
-    flushAddedNodes().catch(() => {
-      /* 增量 flush 异常不阻断宿主页面；后续 mutation 会重新调度 */
-    });
-  }, OBSERVER_DEBOUNCE_MS);
+/** 初始化增量翻译防抖器（同一会话复用）。 */
+function ensureAddedNodesDebouncer(): void {
+  if (addedNodesDebouncer) return;
+  addedNodesDebouncer = createDebouncer<HTMLElement>(
+    OBSERVER_DEBOUNCE_MS,
+    (batch) => flushAddedNodesBatch(batch),
+  );
 }
 
 /**
- * 防抖 flush：逐新增子树 collectSegments → recordedEls 去重 → 新段入 records
- * 并按当前 mode 走缓存/翻译/渲染流程。
+ * 防抖 flush：逐新增子树 collectFor → recordedEls 去重 → 新段入 records
+ * 并按视口分组派发（视口内进 micro-batch；视口外挂 IO + 延迟排空）。
  * 自身渲染产物带 data-llm-translator，在此过滤，不形成回环。
  */
-async function flushAddedNodes(): Promise<void> {
-  if (isFlushing) return;
-  isFlushing = true;
-  const batch = Array.from(pendingAddedNodes);
-  // flush 期间新到达的节点入新 set，完成后重新调度
-  pendingAddedNodes = new Set();
-  try {
-    const newSegments: SegmentRecord[] = [];
-    for (const node of batch) {
-      if (!active) break;
-      try {
-        if (!node.isConnected) continue;
-        if (node.hasAttribute('data-llm-translator')) continue;
-        const segs = batchStreamEnabled
-          ? collectSemanticSegments(node)
-          : collectSegments(node);
-        for (const seg of segs) {
-          if (recordedEls.has(seg.el)) continue;
-          recordedEls.add(seg.el);
-          newSegments.push(seg);
-        }
-      } catch {
-        // 单棵子树收集失败不阻断整批（宿主页面 DOM 可能非常规）
-        continue;
+async function flushAddedNodesBatch(batch: HTMLElement[]): Promise<void> {
+  const newSegments: SegmentRecord[] = [];
+  for (const node of batch) {
+    if (!active) break;
+    try {
+      if (!node.isConnected) continue;
+      if (node.hasAttribute('data-llm-translator')) continue;
+      if (!strategy) continue;
+      const segs = strategy.collectFor(node);
+      for (const seg of segs) {
+        if (recordedEls.has(seg.el)) continue;
+        recordedEls.add(seg.el);
+        newSegments.push(seg);
       }
+    } catch {
+      // 单棵子树收集失败不阻断整批（宿主页面 DOM 可能非常规）
+      continue;
     }
-    if (active && newSegments.length > 0) {
-      const generation = sessionGeneration;
-      records.push(...newSegments);
-      // 增量段同样按视口分组：视口内走 enqueueSegments；视口外挂同一 viewportObserver
-      const inViewNew = newSegments.filter(isSegmentInViewport);
-      const outOfViewNew = newSegments.filter((r) => !isSegmentInViewport(r));
-      queueSegments(inViewNew, generation);
-      if (outOfViewNew.length > 0) {
-        markSegmentsLoading(outOfViewNew);
-        updateProgress();
-        // 同一会话复用 viewportObserver 句柄（doStart 与 flushAddedNodes 共享）
-        if (!viewportObserver) {
-          viewportObserver = createViewportEnterObserver(generation);
-        }
-        for (const seg of outOfViewNew) {
-          deferredViewportSegments.add(seg);
-          viewportObserver.observe(seg);
-        }
-        scheduleDeferredDrain(generation);
+  }
+  if (active && newSegments.length > 0) {
+    const generation = sessionGeneration;
+    records.push(...newSegments);
+    // 增量段同样按视口分组：视口内走 queueSegments；视口外挂同一 viewportObserver
+    const inViewNew = newSegments.filter(isSegmentInViewport);
+    const outOfViewNew = newSegments.filter((r) => !isSegmentInViewport(r));
+    queueSegments(inViewNew, generation);
+    if (outOfViewNew.length > 0) {
+      markSegmentsLoading(outOfViewNew);
+      updateProgress();
+      // 同一会话复用 viewportObserver 句柄（doStart 与 flushAddedNodes 共享）
+      ensureViewportObserver(generation);
+      ensureDeferredViewport(generation);
+      for (const seg of outOfViewNew) {
+        viewportObserver?.observe(seg);
+        deferredViewport?.add(seg);
       }
-    }
-  } finally {
-    isFlushing = false;
-    if (pendingAddedNodes.size > 0) {
-      scheduleFlush();
+      scheduleDeferredDrain(generation);
     }
   }
 }
@@ -702,7 +663,7 @@ export function __getState(): OrchestratorStateSnapshot {
     active,
     cache,
     semanticCache,
-    batchStreamEnabled,
+    batchStreamEnabled: strategy?.chunkerMode === 'semantic',
     targetLang,
   };
 }
@@ -726,8 +687,11 @@ export function __reset(): void {
   sessionGeneration++;
   cache = new Map();
   semanticCache = new Map();
-  batchStreamEnabled = false;
+  strategy = null;
   targetLang = '';
   startInFlight = null;
-  isFlushing = false;
+  // 调度器对象在同一会话内复用（generation 捕获在回调里校验），跨会话直接丢弃重建
+  addedNodesDebouncer = null;
+  microBatch = null;
+  deferredViewport = null;
 }

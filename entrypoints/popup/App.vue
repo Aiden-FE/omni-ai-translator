@@ -18,7 +18,11 @@ import LanguageSelect from '@/shared/ui/components/language-select/LanguageSelec
 import { getSettings } from '@/shared/storage';
 import { resolveInitialTargetLang } from '@/shared/language-catalog';
 import { errorFeedback } from '@/shared/translator/error';
-import type { StreamPortMessage } from '@/shared/types';
+import {
+  createStreamPortSession,
+  type StreamPortLike,
+  type StreamPortSession,
+} from '@/shared/transport/stream-port-client';
 import './popup.css';
 import {
   WORKBENCH_MAX_LENGTH,
@@ -60,8 +64,9 @@ const canCopyTranslation = computed(() => state.translatedText.length > 0);
 const copied = ref(false);
 let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
-// 当前流式会话的 port。回调必须校验 port 仍为当前会话，避免旧会话延迟断开污染新翻译。
-let streamPort: ReturnType<typeof browser.runtime.connect> | null = null;
+// 当前流式会话。StreamPortSession 内部守卫 stale 回调（旧会话延迟回调自动 no-op），
+// 应用层只关心渲染派发（reduceWorkbench）。
+let activeSession: StreamPortSession | null = null;
 
 async function initTargetLang() {
   // 从设置中的默认目标语言初始化;未配置时跟随浏览器首选语言(#78 共享目录解析)。
@@ -86,13 +91,8 @@ onMounted(async () => {
 
 onUnmounted(() => {
   // popup 关闭时断开进行中的流式 port(后台经 onDisconnect 感知,不再写消息)
-  const port = streamPort;
-  if (port) finishStream(port);
-  try {
-    port?.disconnect();
-  } catch {
-    // port 可能已被后台终结
-  }
+  activeSession?.stop();
+  activeSession = null;
   if (copiedTimer) clearTimeout(copiedTimer);
 });
 
@@ -118,67 +118,51 @@ async function clearSource() {
   sourceArea.value?.focus();
 }
 
-function finishStream(port: ReturnType<typeof browser.runtime.connect>): boolean {
-  if (streamPort !== port) return false;
-  streamPort = null;
-  return true;
-}
-
 async function translate() {
   if (!canTranslate.value) return;
   const text = state.sourceText;
   const lang = targetLangCode.value;
-
-  const port = browser.runtime.connect({ name: 'translate-stream' });
-  streamPort = port;
   dispatch({ type: 'stream-start' });
 
-  port.onMessage.addListener((msg: StreamPortMessage) => {
-    if (streamPort !== port) return;
-    if (msg.type === 'chunk') {
-      dispatch({ type: 'stream-chunk', deltaText: msg.deltaText });
-    } else if (msg.type === 'done') {
-      if (!finishStream(port)) return;
-      dispatch({ type: 'stream-done', result: msg.result });
-      try { port.disconnect(); } catch { /* 后台可能已断开 */ }
-    } else if (msg.type === 'error') {
-      if (!finishStream(port)) return;
-      dispatch({
-        type: 'stream-error',
-        message: msg.result.error ?? '翻译失败,请重试',
-        errorType: msg.result.errorType,
-      });
-      try { port.disconnect(); } catch { /* 后台可能已断开 */ }
-    }
-  });
-
-  // 异常断开(SW 回收 / 后台重启等):归一为可恢复的终态,不卡死不悬停。
-  // 已有部分译文 → 视为停止并保留;无译文 → 网络错误。
-  port.onDisconnect.addListener(() => {
-    if (!finishStream(port)) return;
-    if (state.translatedText) {
-      dispatch({ type: 'stream-stop' });
-    } else {
-      dispatch({ type: 'stream-error', message: '翻译连接中断,请重试' });
-    }
-  });
-
-  try {
-    port.postMessage({ type: 'request', text, targetLang: lang });
-  } catch {
-    // 建连即失败 → 交给 onDisconnect 兜底
-  }
+  // port 生命周期（chunk/done/error 分发、stale 守卫、异常断开归因）由
+  // StreamPortSession 承担；此处只把消息派发给 workbench 状态机。
+  activeSession = createStreamPortSession(
+    browser.runtime.connect({ name: 'translate-stream' }) as unknown as StreamPortLike,
+    { type: 'request', text, targetLang: lang },
+    {
+      onChunk(deltaText) {
+        dispatch({ type: 'stream-chunk', deltaText });
+      },
+      onDone(result) {
+        activeSession = null;
+        dispatch({ type: 'stream-done', result });
+      },
+      onError(result) {
+        activeSession = null;
+        dispatch({
+          type: 'stream-error',
+          message: result.error ?? '翻译失败,请重试',
+          errorType: result.errorType,
+        });
+      },
+      onAbnormalDisconnect() {
+        activeSession = null;
+        // 异常断开(SW 回收 / 后台重启等):归一为可恢复终态,不卡死不悬停。
+        // 已有部分译文 → 视为停止并保留;无译文 → 网络错误。
+        if (state.translatedText) {
+          dispatch({ type: 'stream-stop' });
+        } else {
+          dispatch({ type: 'stream-error', message: '翻译连接中断,请重试' });
+        }
+      },
+    },
+  );
 }
 
 function stop() {
   if (!isStreaming.value) return;
-  const port = streamPort;
-  if (!port || !finishStream(port)) return;
-  try {
-    port.disconnect();
-  } catch {
-    // port 可能已被后台终结
-  }
+  activeSession?.stop();
+  activeSession = null;
   dispatch({ type: 'stream-stop' });
 }
 
