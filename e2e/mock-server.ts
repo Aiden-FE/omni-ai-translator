@@ -179,6 +179,49 @@ export function releaseAllBatchChunks(): void {
   }
 }
 
+// ---- 加速节点 mock(供 accel e2e:命中/未命中/故障三种模式) ----
+
+/** 预置缓存: key = `${text}|${sourceLang}|${targetLang}` → 译文 */
+let accelCache = new Map<string, string>();
+/** 命中模式开启后 lookup 才返回 hits;关闭则恒为未命中 */
+let accelServeHits = true;
+/** 故障模式:lookup 直接 500,验证插件 fail-open */
+let accelFailLookup = false;
+/** 加速请求计数,断言「命中时零翻译请求」 */
+const accelRequestCounts = new Map<string, number>();
+
+export function accelCacheKey(text: string, sourceLang: string, targetLang: string): string {
+  return `${text}|${sourceLang}|${targetLang}`;
+}
+
+export function setAccelCache(entries: Record<string, string>): void {
+  accelCache = new Map(Object.entries(entries));
+}
+
+export function setAccelServeHits(on: boolean): void {
+  accelServeHits = on;
+}
+
+export function setAccelFailLookup(on: boolean): void {
+  accelFailLookup = on;
+}
+
+export function getAccelRequestCount(route: string): number {
+  return accelRequestCounts.get(route) ?? 0;
+}
+
+export function resetAccelState(): void {
+  accelCache = new Map();
+  accelServeHits = true;
+  accelFailLookup = false;
+  accelRequestCounts.clear();
+}
+
+/** 与插件侧一致的缓存身份规范化(供 mock 侧命中判定) */
+function accelNormalize(text: string): string {
+  return text.normalize('NFKC').trim().replace(/\s+/g, ' ');
+}
+
 /** 失败开关状态:开启后 OpenAI 兼容路由对含 __FAIL__ 标记的请求返回 500 */
 let failMode = false;
 
@@ -518,6 +561,52 @@ export function startMockServer(): Promise<{ url: string; close: () => Promise<v
           res.end(
             JSON.stringify([{ translations: [{ text: '你好,世界', to: 'zh' }] }]),
           );
+          return;
+        }
+
+        // ---- 加速节点接口(契约见 ADR-0002) ----
+        if (req.method === 'POST' && req.url === '/v1/cache/lookup') {
+          accelRequestCounts.set('lookup', (accelRequestCounts.get('lookup') ?? 0) + 1);
+          if (accelFailLookup) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'accel lookup forced failure' }));
+            return;
+          }
+          const items = Array.isArray(parsedBody?.items) ? parsedBody!.items as Array<Record<string, unknown>> : [];
+          const hits = accelServeHits
+            ? items.flatMap((item) => {
+                const text = typeof item.text === 'string' ? accelNormalize(item.text) : null;
+                const target = typeof item.targetLang === 'string' ? item.targetLang.toLowerCase() : '';
+                const source = typeof item.sourceLang === 'string' ? item.sourceLang.toLowerCase() : '';
+                if (text === null) return [];
+                const hit = accelCache.get(accelCacheKey(text, source, target));
+                return hit ? [{ id: item.id, translatedText: hit }] : [];
+              })
+            : [];
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ hits }));
+          return;
+        }
+
+        if (req.method === 'POST' && req.url === '/v1/cache/commit') {
+          accelRequestCounts.set('commit', (accelRequestCounts.get('commit') ?? 0) + 1);
+          const items = Array.isArray(parsedBody?.items) ? parsedBody!.items as Array<Record<string, unknown>> : [];
+          let accepted = 0;
+          for (const item of items) {
+            if (typeof item.text !== 'string' || typeof item.translatedText !== 'string') continue;
+            const target = typeof item.targetLang === 'string' ? item.targetLang.toLowerCase() : '';
+            const source = typeof item.sourceLang === 'string' ? item.sourceLang.toLowerCase() : '';
+            accelCache.set(accelCacheKey(accelNormalize(item.text), source, target), item.translatedText);
+            accepted += 1;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ accepted }));
+          return;
+        }
+
+        if (req.method === 'GET' && req.url === '/healthz') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', version: '0.1.0-mock', redis: 'ok' }));
           return;
         }
 
