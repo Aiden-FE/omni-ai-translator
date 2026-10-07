@@ -135,6 +135,22 @@ pnpm screenshots  # 重新生成 README 产品截图
 
 开发服务器启动后，按照 WXT 的终端提示加载 `.output` 中的开发构建。Chrome、Edge 和 Firefox 的独立构建命令可在 [`package.json`](package.json) 中查看。
 
+### Relay 本地开发
+
+如需带真实 Redis 调试 `@omni/relay`，可使用专用开发 compose 启动 Redis，宿主直接运行 relay（增量编译 + 自动重启）：
+
+```bash
+pnpm install
+docker compose -f docker-compose.dev.yml up -d redis
+REDIS_URL=redis://127.0.0.1:16379 pnpm --filter @omni/relay dev
+```
+
+Redis 默认映射到宿主 `16379` 端口，避免与本机已有 Redis 冲突。清理开发环境：
+
+```bash
+docker compose -f docker-compose.dev.yml down --volumes
+```
+
 ## 反馈与贡献
 
 遇到问题或希望增加新的翻译能力，请提交 [GitHub Issue](https://github.com/Aiden-FE/omni-ai-translator/issues)。反馈时建议附上浏览器版本、扩展版本、翻译源类型和可复现步骤；请勿提交真实 API Key 或敏感原文。
