@@ -3,3 +3,6 @@ node_modules/
 .wxt/
 e2e/
 playwright.config.ts
+# relay 服务由自己的 eslint 配置与独立 CI job 覆盖，
+# 避免根 eslint（vue/browser env）误判 NestJS 装饰器与 node 全局。
+services/relay/dist/

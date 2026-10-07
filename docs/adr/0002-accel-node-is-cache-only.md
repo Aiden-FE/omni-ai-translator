@@ -14,8 +14,10 @@
 
 加速节点**只缓存不代理**，契约固定为三个端点：
 
-- `POST /v1/cache:lookup` —— 批量查缓存。请求 `items: [{ id, text, sourceLang?, targetLang }]`，响应 `hits: [{ id, translatedText }]`。未出现在 `hits` 中的 id 即未命中。
-- `POST /v1/cache:commit` —— 批量 upsert 缓存。请求 `items: [{ id, text, sourceLang?, targetLang, translatedText }]`。**upsert 语义：覆盖既有条目并重置 TTL。**
+- `POST /v1/cache/lookup` —— 批量查缓存。请求 `items: [{ id, text, sourceLang?, targetLang }]`，响应 `hits: [{ id, translatedText }]`。未出现在 `hits` 中的 id 即未命中。
+- `POST /v1/cache/commit` —— 批量 upsert 缓存。请求 `items: [{ id, text, sourceLang?, targetLang, translatedText }]`。**upsert 语义：覆盖既有条目并重置 TTL。**
+
+> **实现偏离（2026-10-07）**：grilling 时定的路径是 `/v1/cache:lookup`（Google 风格冒号）。实测 find-my-way 把冒号后的段当通配参数，导致 `lookup` 与 `commit` 注册到同一路由并抛 `FST_ERR_DUPLICATED_ROUTE`。契约语义不变，路径改为斜杠形式 `/v1/cache/lookup`。ADR 与所有文档统一采用斜杠。
 - `GET /healthz` —— 健康检查，供自建者与部署探针使用。
 
 配套决策：

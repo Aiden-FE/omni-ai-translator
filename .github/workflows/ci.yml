@@ -28,6 +28,83 @@ jobs:
 
       - run: pnpm lint
 
+  relay:
+    name: relay (translation accel node)
+    runs-on: ubuntu-latest
+    services:
+      # 契约测试跑真实 Redis：upsert 覆盖 / TTL 落库 / mget 缺键等行为
+      # 无法用 mock 证明，必须打真实实例。
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @omni/relay typecheck
+
+      - run: pnpm --filter @omni/relay test
+
+      # 单测无 Redis 时自动 skip 契约测试；CI 里显式指向 service 容器强制跑全量
+      - name: relay contract tests (real redis)
+        run: pnpm --filter @omni/relay test
+        env:
+          RELAY_CONTRACT_REDIS_URL: redis://127.0.0.1:6379
+
+  relay-image:
+    name: relay docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/relay/Dockerfile
+          push: false
+          load: true
+          tags: omni-relay:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 镜像构建成功即证明 Dockerfile 可用；进一步起 compose 冒烟验证 healthz
+      - name: smoke test compose stack
+        run: |
+          docker compose up -d redis relay
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/healthz | grep -q '"redis":"ok"'; then
+              echo "relay healthy"
+              curl -fsS -X POST http://127.0.0.1:3000/v1/cache/commit \
+                -H 'content-type: application/json' \
+                -d '{"items":[{"id":"smoke","text":"smoke test","targetLang":"zh","translatedText":"冒烟"}]}'
+              echo
+              curl -fsS -X POST http://127.0.0.1:3000/v1/cache/lookup \
+                -H 'content-type: application/json' \
+                -d '{"items":[{"id":"smoke","text":"smoke test","targetLang":"zh"}]}'
+              echo
+              docker compose down
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "relay did not become healthy"
+          docker compose logs
+          docker compose down
+          exit 1
+
   e2e:
     name: e2e (chrome mv3)
     runs-on: ubuntu-latest
