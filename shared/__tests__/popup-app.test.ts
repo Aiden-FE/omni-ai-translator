@@ -413,11 +413,14 @@ describe('popup 错误横幅 / 重试 / 复制译文 (#80)', () => {
     await retry.trigger('click');
     await wrapper.vm.$nextTick();
 
-    // 重新建连并用当前原文 + 用户切换后的临时目标语言发起 request
+    // 重新建连并用当前原文 + 用户切换后的临时目标语言发起 request。
+    // 重试携带 accel.skipLookup：绕过可能已过期的加速缓存条目，
+    // 翻译成功后以 upsert 覆盖公共缓存（ADR-0002）。
     expect(second.port.postMessage).toHaveBeenCalledWith({
       type: 'request',
       text: 'hello',
       targetLang: 'ja',
+      accel: { skipLookup: true },
     });
     expect(wrapper.find('[role="alert"]').exists()).toBe(false);
   });

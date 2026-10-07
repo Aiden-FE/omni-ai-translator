@@ -118,7 +118,17 @@ async function clearSource() {
   sourceArea.value?.focus();
 }
 
-async function translate() {
+/**
+ * 发起一次翻译。
+ * @param skipLookup 重试时为 true：跳过加速缓存查询，翻译成功后以 upsert 覆盖
+ *   缓存条目——这是纠正错误缓存译文的唯一途径（ADR-0002）。
+ */
+/** 模板点击入口：不传参，避免把 PointerEvent 当成 skipLookup。 */
+function onTranslateClick(): void {
+  void translate();
+}
+
+async function translate(skipLookup = false) {
   if (!canTranslate.value) return;
   const text = state.sourceText;
   const lang = targetLangCode.value;
@@ -128,7 +138,13 @@ async function translate() {
   // StreamPortSession 承担；此处只把消息派发给 workbench 状态机。
   activeSession = createStreamPortSession(
     browser.runtime.connect({ name: 'translate-stream' }) as unknown as StreamPortLike,
-    { type: 'request', text, targetLang: lang },
+    // 仅重试时携带 accel：正常翻译保持原始消息形状，向后兼容既有消费方
+    {
+      type: 'request',
+      text,
+      targetLang: lang,
+      ...(skipLookup ? { accel: { skipLookup: true } } : {}),
+    },
     {
       onChunk(deltaText) {
         dispatch({ type: 'stream-chunk', deltaText });
@@ -197,7 +213,8 @@ function handleErrorAction() {
     void openSettings();
     return;
   }
-  void translate();
+  // 重试：绕过可能已过期的缓存条目（accel.skipLookup）
+  void translate(true);
 }
 
 // #88：翻译源不支持当前目标语言时，「更换语言」入口聚焦目标语言选择器，供用户改选后重试。
@@ -345,7 +362,7 @@ function handleAddProvider() {
         type="button"
         class="primary-action"
         :disabled="!canTranslate"
-        @click="translate"
+        @click="onTranslateClick"
       >
         <span>翻译</span>
         <kbd>⌘ ↵</kbd>

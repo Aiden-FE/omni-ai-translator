@@ -12,11 +12,14 @@ const setSettings = vi.fn();
 const getProviders = vi.fn();
 const setProviders = vi.fn();
 
+// AccelSettings 也从 storage 读确认态；此处补齐 mock 以免未定义导出。
 vi.mock('@/shared/storage', () => ({
   getSettings: (...args: unknown[]) => getSettings(...args),
   setSettings: (...args: unknown[]) => setSettings(...args),
   getProviders: (...args: unknown[]) => getProviders(...args),
   setProviders: (...args: unknown[]) => setProviders(...args),
+  getConfirmedAccelUrl: async (): Promise<string | null> => null,
+  setConfirmedAccelUrl: async (): Promise<void> => undefined,
 }));
 
 interface ProviderLike {

@@ -20,7 +20,10 @@
     "lint": "eslint . --ext .ts,.vue",
     "e2e": "wxt build && playwright test --project=chromium",
     "e2e:install": "playwright install chromium",
-    "postinstall": "wxt prepare"
+    "postinstall": "wxt prepare",
+    "relay:typecheck": "pnpm --filter @omni/relay typecheck",
+    "relay:test": "pnpm --filter @omni/relay test",
+    "relay:build": "pnpm --filter @omni/relay build"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

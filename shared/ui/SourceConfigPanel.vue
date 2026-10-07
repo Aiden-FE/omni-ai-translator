@@ -25,6 +25,7 @@ import Label from '@/shared/ui/components/label/Label.vue';
 import Select from '@/shared/ui/components/select/Select.vue';
 import Badge from '@/shared/ui/components/badge/Badge.vue';
 import LanguageSelect from '@/shared/ui/components/language-select/LanguageSelect.vue';
+import AccelSettings from '@/shared/ui/AccelSettings.vue';
 import { findLanguageByCode } from '@/shared/language-catalog';
 
 const props = withDefaults(defineProps<{
@@ -546,5 +547,8 @@ function isCollapsed(id: string): boolean {
         + 添加提供方
       </Button>
     </section>
+
+    <!-- 翻译加速：与翻译源并列的独立配置（加速节点不是 ProviderConfig） -->
+    <AccelSettings />
   </div>
 </template>

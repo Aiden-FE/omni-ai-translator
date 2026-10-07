@@ -15,6 +15,7 @@ dist/
 !.codegraph/.gitignore
 .codegraph/
 .pnpm-store
+services/relay/dist/
 .worktrees
 **/*.local.json
 .pi-subagents/

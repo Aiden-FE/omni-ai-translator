@@ -1,0 +1,63 @@
+# 翻译加速节点一键部署
+#
+#   docker compose up -d      # 启动 relay + redis
+#   curl localhost:3000/healthz
+#
+# 见 ADR-0003。⚠️ 部署在 nginx 等反向代理之后时，务必设置
+# TRUST_PROXY=true（见下方 relay 服务的注释），否则所有请求会共用
+# 127.0.0.1 一个限流桶，互相把对方限流掉。
+#
+# .env 可覆盖：PORT / TRUST_PROXY / CACHE_TTL_SECONDS / RATE_LIMIT_*
+
+services:
+  redis:
+    image: redis:7-alpine
+    # maxmemory + allkeys-lru：relay 只负责写 TTL，不自实现淘汰，
+    # 容量上限与淘汰策略交给 Redis（见 ADR-0002）。
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - relay-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  relay:
+    build:
+      context: .
+      dockerfile: services/relay/Dockerfile
+      # 可选：受限网络环境下经 .env 传代理 / 镜像源（默认全空，走官方源）。
+      # 详见 .env.example-compose。
+      args:
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+        NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY:-}"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "3000"
+      # 置为 true 以按真实客户端 IP 限流（nginx / Cloudflare 反代后必开）。
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
+      CACHE_TTL_SECONDS: "${CACHE_TTL_SECONDS:-2592000}"
+      RATE_LIMIT_LOOKUP: "${RATE_LIMIT_LOOKUP:-120}"
+      RATE_LIMIT_COMMIT: "${RATE_LIMIT_COMMIT:-30}"
+      RATE_LIMIT_WINDOW_SECONDS: "${RATE_LIMIT_WINDOW_SECONDS:-60}"
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  relay-redis:

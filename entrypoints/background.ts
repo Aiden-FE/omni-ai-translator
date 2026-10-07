@@ -205,6 +205,8 @@ export default defineBackground(() => {
           }
         },
         session.signal,
+        // popup「重试」传 skipLookup：绕过可能过期的缓存条目，翻译后覆盖（ADR-0002）
+        request.accel,
       )
         .then(
           (result) => {
