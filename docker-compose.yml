@@ -31,6 +31,13 @@ services:
     build:
       context: .
       dockerfile: services/relay/Dockerfile
+      # 可选：受限网络环境下经 .env 传代理 / 镜像源（默认全空，走官方源）。
+      # 详见 .env.example-compose。
+      args:
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+        NPM_CONFIG_REGISTRY: "${NPM_CONFIG_REGISTRY:-}"
     environment:
       REDIS_URL: redis://redis:6379
       PORT: "3000"
