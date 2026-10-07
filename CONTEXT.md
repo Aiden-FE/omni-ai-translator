@@ -68,6 +68,17 @@ UI 在 `entrypoints/content.ts:renderError` 差异化显示；契约源 `shared/
 | `StreamPortMessage` | content ↔ background | port 'translate-stream' | 划词流式 |
 | `BatchStreamPortMessage` | content ↔ background | port 'fullpage-translate-batch-stream' | 全文批量流 |
 
+### 1.6 翻译加速（Translation Acceleration）
+| 术语 | 定义 | 出处 |
+|---|---|---|
+| 加速节点 | 一个部署在官方或用户自有基础设施上的翻译加速服务实例；由用户按文档自行部署，对插件而言只是一个可配置的 URL | `services/relay/`（设计） |
+| 加速端点 | 设置中配置的加速节点 URL；为空表示不使用加速 | `Settings.accelEndpoint`（设计） |
+| 缓存条目 | 一条「规范化原文 + 源语言 + 目标语言」三元组对应的译文；加速节点中以该三元组的哈希为标识存储 | `services/relay/`（设计） |
+| 查缓存 | 翻译请求发出前向加速节点发起的批量查询，用于判定每条原文是否已有译文 | `POST /v1/cache:lookup` |
+| 存缓存 | 翻译成功后异步向加速节点发起的批量写入，用于建立或更新缓存条目 | `POST /v1/cache:commit` |
+| 命中 / 未命中 | 加速节点对某条原文返回了译文即为命中；未返回即未命中，插件照常走当前生效源翻译 | `POST /v1/cache:lookup` |
+| 开放缓存 | 加速节点的匿名读、匿名 upsert 写模型：任何客户端都能覆盖任意缓存条目，信任由用户对自选节点的所有权承担 | ADR-0002 |
+
 ---
 
 ## 2. 业务边界
@@ -177,6 +188,67 @@ ProviderConfig
 - 根 `tsconfig.json` 最初不 `extends "./.wxt/tsconfig.json"`，导致 `vue-tsc` 报全局未定义
 - 修复 = `extends` + `shims-vue.d.ts`（最小化、Q5=A 决定）
 
+### 3.11 加速层是「只缓存不代理」
+加速节点只回答「这段原文是否已有译文」，从不代持翻译接口凭据、从不代理翻译请求。
+插件的三条翻译路径（划词流式、popup 文本、全文批量流）统一先查缓存：命中条目直接出结果，
+未命中条目重组后照常发给当前生效源，翻译完成再异步存缓存。详见 ADR-0002。
+
+### 3.12 加速失败一律 fail-open
+查缓存超时 3 秒（可配）后或任何异常（网络错误、非 2xx、响应畸形）都按「全未命中」处理，
+用户不可见；存缓存为 fire-and-forget，失败即丢弃。加速节点是性能层，任何情况下不得阻断翻译。
+
+### 3.13 缓存命中不模拟流式
+命中条目以一次性完整译文呈现，不走 LLM 流式管线；全文翻译中命中段落即时渲染，
+未命中段落才入池。缓存的作用是消除等待，不是复刻流式体验。
+
+
+### 3.14 加速范围默认只覆盖免 Key 内置源
+`Settings.accelScope` 取 `'builtin'`（默认）或 `'all'`。默认只对内置免 Key 源（google / microsoft）走加速：
+用户自有源的原文不外发给加速节点，需要时由用户显式打开。加速价值最大的场景正是「免费源慢 + 限流 + 零成本顾虑」。
+
+### 3.15 第三方加速 URL 首次配置需显式确认
+官方节点不弹确认；配置第三方 URL 时弹一次对话框，说明「该节点可看到全部原文，且可返回任意译文」。
+确认状态存 `browser.storage.local`，URL 变更时重置。理由：第三方节点返回的内容无法被验证，这是唯一有实际约束力的知情点。
+
+### 3.16 加速端点配置形态
+`Settings.accelEndpoint: string | null`，空串表示不使用加速。设置页用单选呈现「不使用 / 官方域名 / 自定义域名」，
+选官方等价于填入官方 URL，不引入 `preset` 字段；提供「测试连通」按钮打 `GET /healthz`。
+**默认不使用**——发往项目方服务器必须是显式选择。
+
+### 3.17 Settings 读出不做深合并
+`shared/storage.ts` 的 `get<T>(key, fallback)` 命中已存对象时直接返回该对象，不与 `DEFAULT_SETTINGS` 合并。
+存量用户已存的对象不含新增字段，读出来是 `undefined` 而非 `null`／默认值。新增 Settings 字段必须声明为可选，
+并在读取侧归一化；`getSettings` 需要加一步 normalize 才能保证类型上非可选字段总是有值。
+
+### 3.18 隐私政策与 README 必须同步更新
+现有隐私政策明文写着「API Key 仅保存在浏览器本地，不会发送到本项目的服务器」。启用官方加速后需新增独立章节
+「翻译加速」：加速可选且默认关闭；启用后原文发往所选节点；API Key 仍只存本地、永不发往加速节点；
+第三方节点由第三方运营、数据政策以其自身为准。README「配置自己的翻译源」之后加「使用翻译加速」小节并挂官方部署文档链接。
+
+
+### 3.19 契约容错：坏条跳过、好条照处理
+服务端对批量请求中的非法单条（缺字段/类型不符/超长）跳过，不整批 400；命中条缺 `translatedText`
+按未命中处理。错误响应统一 `{ error: string }`。插件侧 `id` 只用于回填，缓存身份完全由服务端计算。
+
+### 3.20 relay 模块与测试形态
+NestJS 单模块单控制器：`cache.controller` + `cache.service` + `rate-limit` + `config`，fastify 引导读
+`TRUST_PROXY`。`GET /healthz` 返回 `{ status, version, redis: 'ok'|'down' }`。测试三层：单测 mock
+ioredis、契约测试用 CI redis service 跑真 mget/pipeline、插件 e2e 覆盖划词命中与全文部分命中。
+服务端不打原文/译文日志，只可打缓存键哈希。
+
+### 3.21 Redis 客户端用 ioredis 直连
+不进 cache-manager：lookup 的 `mget` 与 commit 的 `pipeline SET EX` 直接调用，抽象层只增阅读成本。
+
+### 3.22 版本与发布节奏
+扩展发 `0.5.0`（minor，可选新能力）；`@omni/relay` 独立版本线 `0.1.0`，compose 文档引用具体 tag。
+**代码先合 master、release 等官方节点可用后再打**：官方选项在 fail-open 下虽不阻断翻译，但商店用户
+会把「测试连通失败」当 bug 上报。文档注明「v0.5.0 起支持，官方端点上线另行通知」。
+
+### 3.23 Settings 新字段沿用可选惯例
+`accelEndpoint?: string | null`、`accelScope?: 'builtin' | 'all'`，读取侧判空归一化，不把深合并
+藏进 storage 层（与 §3.17 一致，跟随既有 `customPrompt?` 模式）。
+
+
 ---
 
 ## 4. 当前问题与解法进度
@@ -202,6 +274,8 @@ ProviderConfig
 | P3 | ③ 文本翻译 | 独立于页面翻译状态；不含输入、译文或历史持久化 | 3-4 天 |
 | P4 | CONTEXT.md 移入 `docs/adr/` | Q4 转正式 | 后续 sprint |
 | P5 | v0.4.0 release tag + AMO 提交 | 收尾 | 0.5 天 |
+| — | ④ 翻译加速节点（插件加速层 + `services/relay` + `docs/relay` 公开文档） | grilling 20 问全采纳，ADR-0002/0003/0004 | 2-3 周 |
+| — | ④-b 官方节点部署（域名证书 / Cloudflare / Redis / compose 落地） | 明确出本轮范围（Q14=A） | 0.5 天 |
 
 ### 4.4 已知技术债
 - `c5fbf86 docs: remove docs` 删除了 `docs/iterations/v0.4.0/CHANGELOG.md` 与 4 个 archive branch 的 PLAN/DESIGN。**当前 v0.4.0 范围仅能从代码与 commit 推断**。修复 PR 合并后另开一个 `docs: rebuild v0.4.0 changelog` PR。
@@ -216,3 +290,6 @@ ProviderConfig
 | 日期 | 变更 |
 |---|---|
 | 2026-08-07 | 接管读懂；建立 v0.4.0 快照；记录 25 个 sprint commit 的术语与决策 |
+| 2026-10-07 | 翻译加速节点能力：grilling 第一轮 8 项决策全采纳；落 §1.6 术语 + §3.11-3.13 决策 + ADR-0002/0003/0004 |
+| 2026-10-07 | grilling 第二轮：Q9-Q12/Q15 采纳；Q13 采纳并追加真实 IP 限流要求；Q14=A（官方节点部署出本轮范围）。落 §3.14-3.18 |
+| 2026-10-07 | grilling 第三轮：Q16-Q20 全采纳，前沿清空。落 §3.19-3.23 + 更新 ADR-0002；设计树走完，待用户确认共享理解 |
