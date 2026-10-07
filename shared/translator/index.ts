@@ -2,9 +2,11 @@
 import type {
   ActiveSourcesResult,
   AccelRequestOptions,
+  BatchTranslateChunk,
   BatchTranslateRequest,
   BatchTranslateResult,
   BatchTranslatedChunk,
+  BatchTranslatedPart,
   ProviderConfig,
   Settings,
   TranslationCapabilities,
@@ -13,7 +15,15 @@ import type {
   TranslateResult,
 } from '@/shared/types';
 import { getProviders, getSettings, setSettings } from '@/shared/storage';
-import { accelCommit, accelLookup, deriveAccelSettings, isAccelEligible, newAccelId } from '@/shared/accel';
+import {
+  accelCommit,
+  accelLookup,
+  deriveAccelSettings,
+  isAccelEligible,
+  newAccelId,
+  type AccelLookupQuery,
+} from '@/shared/accel';
+import { MAX_ITEMS_PER_REQUEST } from '@/services/relay/src/contracts';
 import { createProvider } from './registry';
 import { errorTypeMessage } from './error';
 import {
@@ -74,6 +84,95 @@ async function accelLookupText(
     { id, text: req.text, targetLang: req.targetLang, sourceLang: req.sourceLang },
   ]);
   return hits.find((hit) => hit.id === id)?.translatedText ?? null;
+}
+
+/** LLM provider 返回的 chunk 中相邻两条命中之间的关系 id：回填用。 */
+function chunkAccelId(chunkId: string, partId: number, sliceIndex: number): string {
+  return `${chunkId}\u0000${partId}\u0000${sliceIndex}`;
+}
+
+/**
+ * 批量查缓存，返回「整块全命中」的 chunk → 已翻译 chunk 映射，以及需要发 LLM 的 chunk 列表。
+ * lookup 按 ≤200 条一组分批（服务端契约上限）。
+ */
+async function accelLookupChunks(
+  endpoint: string,
+  chunks: BatchTranslateChunk[],
+  targetLang: string,
+): Promise<{
+  hitsByChunkId: Map<string, BatchTranslatedChunk>;
+  missChunks: BatchTranslateChunk[];
+}> {
+  // 收集全部 part 的查询条目
+  const queries: AccelLookupQuery[] = [];
+  for (const chunk of chunks) {
+    for (const part of chunk.parts) {
+      queries.push({
+        id: chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex),
+        text: part.text,
+        targetLang,
+      });
+    }
+  }
+  if (queries.length === 0) return { hitsByChunkId: new Map(), missChunks: chunks };
+
+  const hitMap = new Map<string, string>();
+  for (let start = 0; start < queries.length; start += MAX_ITEMS_PER_REQUEST) {
+    const slice = queries.slice(start, start + MAX_ITEMS_PER_REQUEST);
+    const hits = await accelLookup(endpoint, slice);
+    for (const hit of hits) hitMap.set(hit.id, hit.translatedText);
+  }
+
+  const hitsByChunkId = new Map<string, BatchTranslatedChunk>();
+  const missChunks: BatchTranslateChunk[] = [];
+  for (const chunk of chunks) {
+    const translatedParts: BatchTranslatedPart[] = [];
+    let allHit = true;
+    for (const part of chunk.parts) {
+      const cached = hitMap.get(chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex));
+      if (cached === undefined) {
+        allHit = false;
+        break;
+      }
+      translatedParts.push({ partId: part.partId, sliceIndex: part.sliceIndex, text: cached });
+    }
+    if (allHit) {
+      hitsByChunkId.set(chunk.chunkId, { chunkId: chunk.chunkId, translatedParts });
+    } else {
+      missChunks.push(chunk);
+    }
+  }
+  return { hitsByChunkId, missChunks };
+}
+
+/**
+ * 翻译完成的 chunk 逐 part 写缓存（fire-and-forget，一次请求写整块）。
+ * 译文里只有 partId/sliceIndex，需要 `sourceTexts` 提供原文才能构成缓存身份。
+ */
+function commitTranslatedChunk(
+  endpoint: string,
+  chunk: BatchTranslatedChunk,
+  targetLang: string,
+  sourceTexts: Map<string, string>,
+): void {
+  const items = chunk.translatedParts.flatMap((part) => {
+    const key = chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex);
+    const text = sourceTexts.get(key);
+    if (text === undefined) return [];
+    return [{ id: newAccelId(), text, targetLang, translatedText: part.text }];
+  });
+  if (items.length > 0) accelCommit(endpoint, items);
+}
+
+/** 建立 `${chunkId}-${partId}-${sliceIndex}` → 原文 的查表，供 commit 还原缓存身份。 */
+function buildSourceTextIndex(chunks: BatchTranslateChunk[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const chunk of chunks) {
+    for (const part of chunk.parts) {
+      index.set(chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex), part.text);
+    }
+  }
+  return index;
 }
 
 /** 单条存缓存（fire-and-forget）。 */
@@ -221,7 +320,7 @@ export async function translateBatchWithAdapterStream(
   onChunk: (chunk: BatchTranslatedChunk) => void,
 ): Promise<BatchTranslateResult> {
   const missingChunkIds = req.chunks.map((chunk) => chunk.chunkId);
-  const config = await resolveActiveProviderConfig();
+  const { config, settings } = await resolveTarget();
 
   if (!config) {
     return {
@@ -238,6 +337,39 @@ export async function translateBatchWithAdapterStream(
       error: '当前翻译源不支持批量流式翻译',
       errorType: 'unreachable',
     };
+  }
+
+  // 加速接入：按 chunk 整体命中才短路。
+  // 缓存身份仍是「单条原文 + 语言」（ADR-0002）——这里按 part 逐条查缓存，
+  // 但只有 chunk 的**全部** part 都命中才整块短路。原因在池侧：
+  // validateTranslatedChunk 要求返回的 parts 数量与请求完全一致（整段全有或全无），
+  // 部分命中若只回部分 parts 会被判为非法而丢弃，导致该段永不 settle。
+  const accelEndpoint = resolveAccelEndpoint(settings, config);
+  if (accelEndpoint) {
+    const { hitsByChunkId, missChunks } = await accelLookupChunks(
+      accelEndpoint,
+      req.chunks,
+      req.targetLang,
+    );
+
+    // 命中块直接以「完整 chunk」形态回给池
+    for (const chunk of req.chunks) {
+      const hit = hitsByChunkId.get(chunk.chunkId);
+      if (hit) onChunk(hit);
+    }
+
+    // 全部命中 → 不发起任何 LLM 请求
+    if (missChunks.length === 0) return { missingChunkIds: [] };
+
+    const sourceTexts = buildSourceTextIndex(missChunks);
+    const result = await provider.translateBatchStream(
+      { targetLang: req.targetLang, chunks: missChunks },
+      (chunk) => {
+        onChunk(chunk);
+        commitTranslatedChunk(accelEndpoint, chunk, req.targetLang, sourceTexts);
+      },
+    );
+    return result;
   }
 
   return provider.translateBatchStream(req, onChunk);
