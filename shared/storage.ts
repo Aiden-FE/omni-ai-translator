@@ -6,6 +6,9 @@ import { normalizeLlmProtocol } from './translator/llm-protocol';
 
 const PROVIDERS_KEY = 'llm_translator:providers';
 const SETTINGS_KEY = 'llm_translator:settings';
+// 第三方加速节点的知情确认记录（存 URL 本身；URL 变更即视为未确认）。
+// 刻意不放进 Settings：这是 UI 确认态而非翻译配置。
+const ACCEL_CONFIRMED_KEY = 'llm_translator:accel_confirmed_url';
 
 const DEFAULT_SETTINGS: Settings = {
   activeProviderId: null,
@@ -118,4 +121,21 @@ export async function getSettings(): Promise<Settings> {
 
 export async function setSettings(settings: Settings): Promise<void> {
   await set(SETTINGS_KEY, settings);
+}
+
+/**
+ * 读取已确认的第三方加速节点 URL。
+ * 与当前配置的 URL 相等才视为已确认——换域名需重新确认。
+ */
+export async function getConfirmedAccelUrl(): Promise<string | null> {
+  return get<string | null>(ACCEL_CONFIRMED_KEY, null);
+}
+
+/** 记录用户对某个第三方加速节点的知情确认；传 null 表示撤销确认。 */
+export async function setConfirmedAccelUrl(url: string | null): Promise<void> {
+  if (url === null) {
+    await browser.storage.local.remove(ACCEL_CONFIRMED_KEY);
+    return;
+  }
+  await set(ACCEL_CONFIRMED_KEY, url);
 }

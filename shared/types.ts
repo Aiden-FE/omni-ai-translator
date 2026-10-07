@@ -103,6 +103,16 @@ export interface Settings {
   activeProviderId: string | null;
   defaultTargetLang: string;
   customPrompt?: string;
+  /**
+   * 翻译加速端点 URL；空串 / null / undefined 表示不使用加速（默认）。
+   * 选「官方」等价于写入官方 URL，不引入额外的 preset 字段。
+   *
+   * 声明为可选是刻意的：shared/storage.ts 的 getSettings 不做深合并，
+   * 存量用户已存对象读出来没有该字段（undefined），读取侧需归一化。
+   */
+  accelEndpoint?: string | null;
+  /** 加速范围：'builtin'（默认，仅免 Key 内置源）/ 'all'（所有翻译源）。 */
+  accelScope?: 'builtin' | 'all';
 }
 
 /** 生效源列表与当前生效源（getActiveSources 返回，供 #4 配置页消费） */
@@ -144,12 +154,21 @@ export interface TranslateChunk {
 }
 
 /**
+ * 翻译请求的加速选项（可选，向后兼容）。
+ * - skipLookup：跳过加速缓存查询。用于「重试」语义——用户显式重试应绕过
+ *   可能过期的缓存条目，翻译成功后以 upsert 覆盖公共缓存（ADR-0002）。
+ */
+export interface AccelRequestOptions {
+  skipLookup?: boolean;
+}
+
+/**
  * Port 消息类型（content ↔ background 流式翻译契约）
  * - content → background：request（翻译请求）
  * - background → content：chunk（增量译文）/ done（流结束）/ error（错误）
  */
 export type StreamPortMessage =
-  | { type: 'request'; text: string; targetLang: string; sourceLang?: string }
+  | { type: 'request'; text: string; targetLang: string; sourceLang?: string; accel?: AccelRequestOptions }
   | { type: 'chunk'; deltaText: string }
   | { type: 'done'; result: TranslateResult }
   | { type: 'error'; result: TranslateResult };

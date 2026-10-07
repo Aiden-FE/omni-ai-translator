@@ -1,16 +1,19 @@
 // 适配层统一入口 — 上层（background）经此模块调用翻译，不感知具体源类型
 import type {
   ActiveSourcesResult,
+  AccelRequestOptions,
   BatchTranslateRequest,
   BatchTranslateResult,
   BatchTranslatedChunk,
   ProviderConfig,
+  Settings,
   TranslationCapabilities,
   TranslateChunk,
   TranslateRequest,
   TranslateResult,
 } from '@/shared/types';
 import { getProviders, getSettings, setSettings } from '@/shared/storage';
+import { accelCommit, accelLookup, deriveAccelSettings, isAccelEligible, newAccelId } from '@/shared/accel';
 import { createProvider } from './registry';
 import { errorTypeMessage } from './error';
 import {
@@ -20,13 +23,70 @@ import {
   getBuiltinSourceById,
 } from './builtin-sources';
 
-/** Resolves the active user or builtin provider consistently for every translation entry point. */
-async function resolveActiveProviderConfig(): Promise<ProviderConfig | null> {
+/**
+ * 一次读出「生效源 + 设置」。加速裁决与 provider 创建共用同一次存储读取，
+ * 避免两条路径读到不同的快照。
+ */
+async function resolveTarget(): Promise<{ config: ProviderConfig | null; settings: Settings }> {
   const [settings, providers] = await Promise.all([getSettings(), getProviders()]);
   const activeId = settings.activeProviderId ?? DEFAULT_ACTIVE_SOURCE_ID;
-  return providers.find((provider) => provider.id === activeId)
+  const config = providers.find((provider) => provider.id === activeId)
     ?? getBuiltinSourceById(activeId)
     ?? null;
+  return { config, settings };
+}
+
+/** Resolves the active user or builtin provider consistently for every translation entry point. */
+async function resolveActiveProviderConfig(): Promise<ProviderConfig | null> {
+  return (await resolveTarget()).config;
+}
+
+/**
+ * 解析本次翻译可用的加速端点（不可用时返回 null）。
+ * 裁决规则见 shared/accel/config.ts：端点为空 / 源不符合 scope / 配置了 customPrompt 都跳过。
+ */
+function resolveAccelEndpoint(
+  settings: Settings,
+  config: ProviderConfig | null,
+): string | null {
+  const { endpoint, scope } = deriveAccelSettings(settings);
+  const eligible = isAccelEligible({
+    endpoint,
+    scope,
+    activeConfig: config,
+    customPrompt: settings.customPrompt,
+  });
+  return eligible ? endpoint : null;
+}
+
+/**
+ * 单条查缓存。命中返回译文，未命中 / 跳过 / 任何异常返回 null。
+ * `skipLookup` 为真时直接跳过（「重试」语义，见 AccelRequestOptions）。
+ */
+async function accelLookupText(
+  endpoint: string,
+  req: TranslateRequest,
+  options?: AccelRequestOptions,
+): Promise<string | null> {
+  if (options?.skipLookup) return null;
+  const id = newAccelId();
+  const hits = await accelLookup(endpoint, [
+    { id, text: req.text, targetLang: req.targetLang, sourceLang: req.sourceLang },
+  ]);
+  return hits.find((hit) => hit.id === id)?.translatedText ?? null;
+}
+
+/** 单条存缓存（fire-and-forget）。 */
+function commitAccelText(endpoint: string, req: TranslateRequest, translatedText: string): void {
+  accelCommit(endpoint, [
+    {
+      id: newAccelId(),
+      text: req.text,
+      targetLang: req.targetLang,
+      sourceLang: req.sourceLang,
+      translatedText,
+    },
+  ]);
 }
 
 /** Only the built-in keyless chain may switch providers without explicit user selection. */
@@ -60,8 +120,11 @@ async function translateWithDefaultFallback(
  * - 先在用户已配置源中查找，未命中再查内置免 Key 免费源。
  * - 均未命中才返回 no-config 错误。
  */
-export async function translateWithAdapter(req: TranslateRequest): Promise<TranslateResult> {
-  const config = await resolveActiveProviderConfig();
+export async function translateWithAdapter(
+  req: TranslateRequest,
+  accelOptions?: AccelRequestOptions,
+): Promise<TranslateResult> {
+  const { config, settings } = await resolveTarget();
 
   if (!config) {
     return {
@@ -71,7 +134,18 @@ export async function translateWithAdapter(req: TranslateRequest): Promise<Trans
     };
   }
 
-  return translateWithDefaultFallback(config, req);
+  const accelEndpoint = resolveAccelEndpoint(settings, config);
+  if (accelEndpoint) {
+    const cached = await accelLookupText(accelEndpoint, req, accelOptions);
+    if (cached !== null) return { translatedText: cached };
+  }
+
+  const result = await translateWithDefaultFallback(config, req);
+  // 仅成功且有译文时提交缓存；失败译文不入缓存。
+  if (accelEndpoint && !result.error && result.translatedText) {
+    commitAccelText(accelEndpoint, req, result.translatedText);
+  }
+  return result;
 }
 
 /**
@@ -85,8 +159,9 @@ export async function translateWithAdapterStream(
   req: TranslateRequest,
   onChunk: (chunk: TranslateChunk) => void,
   signal?: AbortSignal,
+  accelOptions?: AccelRequestOptions,
 ): Promise<TranslateResult> {
-  const config = await resolveActiveProviderConfig();
+  const { config, settings } = await resolveTarget();
 
   if (!config) {
     return {
@@ -96,17 +171,35 @@ export async function translateWithAdapterStream(
     };
   }
 
+  const accelEndpoint = resolveAccelEndpoint(settings, config);
+
+  // 缓存命中：整段译文一次性推送，不模拟流式（CONTEXT.md §3.13）。
+  if (accelEndpoint) {
+    const cached = await accelLookupText(accelEndpoint, req, accelOptions);
+    if (cached !== null) {
+      onChunk({ deltaText: cached });
+      return { translatedText: cached };
+    }
+  }
+
   const provider = createProvider(config);
 
-  // provider 支持流式 → 调流式方法
+  // provider 支持流式 → 调流式方法（提交在流结束后由 onChunk 收尾触发）
   if (provider.translateStream) {
-    return provider.translateStream(req, onChunk, signal);
+    const result = await provider.translateStream(req, onChunk, signal);
+    if (accelEndpoint && !result.error && result.translatedText) {
+      commitAccelText(accelEndpoint, req, result.translatedText);
+    }
+    return result;
   }
 
   // 传统源一次性返回；默认免 Key 源在 Microsoft 失败时先尝试 Google。
   const result = await translateWithDefaultFallback(config, req, signal);
   if (!result.error && result.translatedText) {
     onChunk({ deltaText: result.translatedText });
+    if (accelEndpoint) {
+      commitAccelText(accelEndpoint, req, result.translatedText);
+    }
   }
   return result;
 }
