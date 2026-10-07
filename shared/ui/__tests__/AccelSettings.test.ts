@@ -160,6 +160,23 @@ describe('关闭加速', () => {
     await flushPromises();
     expect(lastSettingsCall().accelEndpoint).toBeNull();
   });
+
+  it('第三方 URL 未确认时切回「不使用」→ 隐藏确认块且保持端点为空', async () => {
+    const w = mount(AccelSettings);
+    await flushPromises();
+    await w.find('[data-testid="accel-custom"]').setValue(true);
+    await flushPromises();
+    await w.find('[data-testid="accel-custom-url"]').setValue('https://my-accel.example.com');
+    await flushPromises();
+    expect(w.find('[data-testid="accel-confirm"]').exists()).toBe(true);
+
+    const off = w.findAll('input[name="accel-mode"]').find((r) => r.element.value === 'off')!;
+    await off.setValue(true);
+    await flushPromises();
+
+    expect(w.find('[data-testid="accel-confirm"]').exists()).toBe(false);
+    expect(lastSettingsCall().accelEndpoint).toBeNull();
+  });
 });
 
 describe('加速范围', () => {
@@ -179,6 +196,22 @@ describe('加速范围', () => {
     await w.find('[data-testid="accel-scope-all"]').setValue(true);
     await flushPromises();
     expect(lastSettingsCall().accelScope).toBe('all');
+  });
+
+  it('从「所有翻译源」切回「仅免 Key 翻译源」→ scope=builtin', async () => {
+    getSettings.mockResolvedValue(baseSettings({
+      accelEndpoint: OFFICIAL_ACCEL_ENDPOINT,
+      accelScope: 'all',
+    }));
+    const w = mount(AccelSettings);
+    await flushPromises();
+
+    await w.find('[data-testid="accel-scope-builtin"]').setValue(true);
+    await flushPromises();
+
+    expect(lastSettingsCall().accelScope).toBe('builtin');
+    expect((w.find('[data-testid="accel-scope-builtin"]').element as HTMLInputElement).checked)
+      .toBe(true);
   });
 });
 

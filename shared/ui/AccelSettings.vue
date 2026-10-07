@@ -131,6 +131,7 @@ async function attemptCustomActivation(): Promise<void> {
 
 /** 用户阅读风险说明后确认启用。 */
 async function confirmThirdParty(): Promise<void> {
+  if (mode.value !== 'custom') return;
   const url = normalizedCustom.value;
   if (url === null) return;
   await setConfirmedAccelUrl(url);
@@ -249,7 +250,7 @@ async function testAccel(): Promise<void> {
 
     <!-- 第三方节点首次配置：显式知悉后才生效（CONTEXT.md §3.15） -->
     <div
-      v-if="pendingCustomUrl === null && normalizedCustom !== null && normalizedCustom !== OFFICIAL_ACCEL_ENDPOINT"
+      v-if="mode === 'custom' && pendingCustomUrl === null && normalizedCustom !== null && normalizedCustom !== OFFICIAL_ACCEL_ENDPOINT"
       class="space-y-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3"
       data-testid="accel-confirm"
     >
@@ -276,8 +277,9 @@ async function testAccel(): Promise<void> {
           type="radio"
           name="accel-scope"
           value="builtin"
+          data-testid="accel-scope-builtin"
           :checked="!scopeAll"
-          @change="onScopeChange"
+          @change="scopeAll = false; onScopeChange()"
         >
         <span class="min-w-0 flex-1 text-xs leading-5">
           仅免 Key 翻译源<span class="block text-muted-foreground">默认。你的自有源原文不会外发。</span>
