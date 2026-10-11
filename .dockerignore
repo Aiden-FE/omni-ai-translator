@@ -1,0 +1,24 @@
+# Docker 构建只需要 workspace manifest、lockfile 与 relay 源码/配置。
+# 排除本机依赖、构建产物与测试产物，避免把数百 MB 上下文发给 daemon。
+.git
+.codegraph
+.DS_Store
+node_modules
+**/node_modules
+.pnpm-store
+.output
+.wxt
+test-results
+playwright-report
+services/relay/dist
+.worktrees
+.env
+.env.*
+
+e2e
+docs
+assets
+entrypoints
+public
+scripts
+shared

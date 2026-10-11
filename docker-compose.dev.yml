@@ -1,0 +1,23 @@
+# 翻译加速节点开发环境 — 真实 Redis 容器。
+#
+# relay 在宿主运行，享受 tsx watch 热更新，并复用仓库现有 node_modules：
+#   pnpm install
+#   docker compose -f docker-compose.dev.yml up -d redis
+#   REDIS_URL=redis://127.0.0.1:${REDIS_DEV_PORT:-16379} pnpm --filter @omni/relay dev
+#
+# Redis 数据不落盘，停止即清理。
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "${REDIS_DEV_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

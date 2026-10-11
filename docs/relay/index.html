@@ -205,6 +205,15 @@ docker compose up -d</code></pre>
 <pre><code>cp .env.example-compose .env
 docker compose up -d</code></pre>
 
+    <p>本地开发或调试服务代码时，用 compose 启动真实 Redis，宿主运行 relay：</p>
+<pre><code>pnpm install
+docker compose -f docker-compose.dev.yml up -d redis
+REDIS_URL=redis://127.0.0.1:16379 pnpm --filter @omni/relay dev</code></pre>
+    <p class="muted">
+      Redis 默认映射到宿主 <code>16379</code>，避免与本机 Redis 冲突。停止并清理数据：
+      <code>docker compose -f docker-compose.dev.yml down --volumes</code>。
+    </p>
+
     <h2 id="proxy">3. 部署在反向代理之后（务必读）</h2>
     <blockquote class="notice">
       <span class="danger">不配 <code>TRUST_PROXY</code> 会导致限流误伤。</span>
