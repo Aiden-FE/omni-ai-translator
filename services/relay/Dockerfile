@@ -1,4 +1,5 @@
-# 翻译加速节点镜像 — 多阶段构建。
+# 翻译加速节点镜像 — 多阶段构建。本地 docker compose 默认使用这个 Dockerfile。
+# release 会由 .github/workflows/relay-image.yml 构建同一文件并推送到 GHCR。
 #
 # 见 ADR-0003：relay 以 monorepo 成员形式存在于本仓库，compose 直接引用构建上下文。
 #
@@ -44,6 +45,15 @@ RUN pnpm --filter @omni/relay deploy --prod --legacy --ignore-scripts /relay-run
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="Omni AI Translator Relay" \
+      org.opencontainers.image.description="Translation acceleration cache node (cache only, never a proxy)" \
+      org.opencontainers.image.source="https://github.com/Aiden-FE/omni-ai-translator" \
+      org.opencontainers.image.url="https://aiden-fe.github.io/omni-ai-translator/relay/" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 # deploy 产物已把 node_modules 物化到 /relay-runtime/node_modules（含 .pnpm 实体），
 # 整个目录拷到 /app 即可自包含解析。

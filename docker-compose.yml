@@ -7,7 +7,9 @@
 # TRUST_PROXY=true（见下方 relay 服务的注释），否则所有请求会共用
 # 127.0.0.1 一个限流桶，互相把对方限流掉。
 #
-# .env 可覆盖：PORT / TRUST_PROXY / CACHE_TTL_SECONDS / RATE_LIMIT_*
+# .env 可覆盖：
+#   RELAY_IMAGE - 留空则本地 build；填完整镜像地址则直接拉取
+#   PORT / TRUST_PROXY / CACHE_TTL_SECONDS / RATE_LIMIT_*
 
 services:
   redis:
@@ -28,6 +30,9 @@ services:
     restart: unless-stopped
 
   relay:
+    # 远端部署推荐设置 RELAY_IMAGE（见 .env.example-compose），从 GHCR 按 release
+    # tag 拉取预构建镜像；未设置时保留本地源码构建，便于自建者直接部署。
+    image: "${RELAY_IMAGE:-ghcr.io/aiden-fe/omni-relay:latest}"
     build:
       context: .
       dockerfile: services/relay/Dockerfile

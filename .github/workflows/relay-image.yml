@@ -1,0 +1,85 @@
+# Publish the relay container to GitHub Container Registry (GHCR).
+#
+# Runs when a GitHub Release is published. The image name is deliberately
+# independent from the repository name so it stays stable if the repo is moved:
+#
+#   ghcr.io/aiden-fe/omni-relay:v0.5.0
+#   ghcr.io/aiden-fe/omni-relay:0.5.0
+#   ghcr.io/aiden-fe/omni-relay:latest  (formal releases only)
+#
+# The repository is public and publishing uses GITHUB_TOKEN, so the new
+# container package inherits public visibility and remote servers can pull it
+# anonymously. If this repository ever becomes private, set the package
+# visibility explicitly in Packages -> omni-relay -> Package settings.
+
+name: Publish Relay Image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag whose source should be built (e.g. v0.5.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: relay-image-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: aiden-fe/omni-relay
+
+jobs:
+  publish:
+    name: Build & publish relay image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=${{ github.event_name == 'release' && !github.event.release.prerelease }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{raw}}
+            type=raw,value=${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Build, tag and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/relay/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.revision=${{ github.event.release.target_commitish || github.sha }}
+            org.opencontainers.image.created=${{ github.event.release.published_at }}
+          build-args: |
+            VCS_REF=${{ github.event.release.target_commitish || github.sha }}
+            BUILD_DATE=${{ github.event.release.published_at || github.run_started_at }}
+          cache-from: type=gha,scope=relay
+          cache-to: type=gha,mode=max,scope=relay

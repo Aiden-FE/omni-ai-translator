@@ -190,9 +190,23 @@
     </table>
 
     <h2 id="quickstart">2. 快速开始</h2>
-    <p>克隆仓库后一条命令起服务：</p>
+    <p><strong>远端部署推荐：</strong>从 GHCR 拉取与 release 同 tag 的预构建镜像，不在服务器编译：</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/Aiden-FE/omni-ai-translator/master/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/Aiden-FE/omni-ai-translator/master/.env.example-compose -o .env
+
+# 编辑 .env，锁定与已发布 Release 一致的镜像 tag（示例）
+# RELAY_IMAGE=ghcr.io/aiden-fe/omni-relay:v0.5.0
+docker compose pull
+docker compose up -d</code></pre>
+    <p>
+      从 <code>v0.5.0</code> 起，GitHub Releases 页面可查看当前版本号；镜像同时提供完整 tag（<code>v0.5.0</code>）、
+      纯版本 tag（<code>0.5.0</code>）和正式版的 <code>latest</code>。
+    </p>
+    <p>也可以克隆仓库并从源码构建：</p>
 <pre><code>git clone https://github.com/Aiden-FE/omni-ai-translator.git
 cd omni-ai-translator
+cp .env.example-compose .env
+docker compose build relay
 docker compose up -d</code></pre>
     <p>验证服务与缓存是否都就绪：</p>
 <pre><code>curl http://localhost:3000/healthz
@@ -201,10 +215,6 @@ docker compose up -d</code></pre>
       <code>redis:"ok"</code> 表示容器和缓存都正常。若返回 <code>"redis":"down"</code> 且 HTTP 503，
       说明 relay 起来了但 Redis 没通——检查 <code>docker compose logs redis</code>。
     </p>
-    <p>可选：复制环境变量模板再按需调整。</p>
-<pre><code>cp .env.example-compose .env
-docker compose up -d</code></pre>
-
     <p>本地开发或调试服务代码时，用 compose 启动真实 Redis，宿主运行 relay：</p>
 <pre><code>pnpm install
 docker compose -f docker-compose.dev.yml up -d redis
