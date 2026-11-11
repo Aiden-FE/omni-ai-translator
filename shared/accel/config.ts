@@ -9,7 +9,7 @@ import type { ProviderConfig, Settings } from '@/shared/types';
 import { isBuiltinSourceId } from '@/shared/translator/builtin-sources';
 
 /** 官方加速端点。选「官方」即等价于把该 URL 写入 accelEndpoint，不引入 preset 字段。 */
-export const OFFICIAL_ACCEL_ENDPOINT = 'https://omni-trans.makabonka.com';
+export const OFFICIAL_ACCEL_ENDPOINT = 'https://translator.makabonka.com/api';
 
 /** 加速范围：仅免 Key 内置源 / 所有翻译源。 */
 export type AccelScope = 'builtin' | 'all';

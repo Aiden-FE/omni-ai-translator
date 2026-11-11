@@ -13,6 +13,19 @@ export const MAX_ITEMS_PER_REQUEST = 200;
 /** 单条原文允许的最大字符数。 */
 export const MAX_TEXT_LENGTH = 5000;
 
+/** 单条 id 允许的最大字符数。id 仅用于回显，限制它可避免响应放大。 */
+export const MAX_ID_LENGTH = 128;
+
+/** 语言标签允许的最大字符数。语言参与缓存键，超长值会把 key 撑大。 */
+export const MAX_LANG_LENGTH = 32;
+
+/**
+ * 单条译文允许的最大字符数。
+ * 译文可能比原文长（中→英约 2 倍），因此给到原文上限的 2 倍；
+ * 再大就拒绝写入，避免单条大对象挤占共享缓存。
+ */
+export const MAX_TRANSLATED_TEXT_LENGTH = MAX_TEXT_LENGTH * 2;
+
 /** 查缓存请求中的一条原文。 */
 export interface LookupItem {
   /** 客户端生成的相关 id，服务端原样回显，仅用于回填。 */

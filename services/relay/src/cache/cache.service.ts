@@ -12,8 +12,11 @@ import { buildCacheKey, type CacheIdentity } from './cache-key.js';
 import { loadEnv } from '../config/env.js';
 import { REDIS_CLIENT } from '../redis/redis.provider.js';
 import {
+  MAX_ID_LENGTH,
   MAX_ITEMS_PER_REQUEST,
+  MAX_LANG_LENGTH,
   MAX_TEXT_LENGTH,
+  MAX_TRANSLATED_TEXT_LENGTH,
   type CommitItem,
   type LookupItem,
   type LookupResponse,
@@ -36,11 +39,15 @@ export class CacheService {
     return (
       typeof candidate.id === 'string'
       && candidate.id.length > 0
+      && candidate.id.length <= MAX_ID_LENGTH
       && typeof candidate.text === 'string'
       && candidate.text.length <= MAX_TEXT_LENGTH
       && typeof candidate.targetLang === 'string'
       && candidate.targetLang.length > 0
-      && (candidate.sourceLang === undefined || typeof candidate.sourceLang === 'string')
+      && candidate.targetLang.length <= MAX_LANG_LENGTH
+      && (candidate.sourceLang === undefined
+        || (typeof candidate.sourceLang === 'string'
+          && candidate.sourceLang.length <= MAX_LANG_LENGTH))
     );
   }
 
@@ -89,7 +96,10 @@ export class CacheService {
    */
   async commit(items: unknown): Promise<number> {
     const valid = CacheService.pickValid<CommitItem>(items)
-      .filter((item) => typeof item.translatedText === 'string' && item.translatedText.length > 0);
+      .filter((item) =>
+        typeof item.translatedText === 'string'
+        && item.translatedText.length > 0
+        && item.translatedText.length <= MAX_TRANSLATED_TEXT_LENGTH);
     if (valid.length === 0) return 0;
 
     const pipeline = this.redis.pipeline();

@@ -97,14 +97,14 @@ Release 中同时提供 `firefox.zip` 构建包。未签名的扩展需要在 `a
 | 选项 | 说明 |
 | --- | --- |
 | 不使用加速（默认） | 行为与以前完全一致 |
-| 官方加速节点 | 由项目方运营的公共加速服务 |
+| 官方加速节点 | 由项目方运营的公共加速服务（`https://translator.makabonka.com/api`） |
 | 自定义节点地址 | 填入你自己部署的加速节点地址 |
 
 加速范围默认**仅免 Key 内置翻译源**——你的自有源原文不会外发到加速节点；需要时可主动改为「所有翻译源」。
 
 加速节点能看到被翻译的原文，但**不会**收到你的 API Key：加速服务只做缓存、不做代理，从设计上就不接收任何翻译接口凭据。第三方节点由第三方运营、可以返回任意内容作为译文，配置第三方地址时插件会明确提示这一点。
 
-想自建加速节点？[自建部署指南](https://aiden-fe.github.io/omni-ai-translator/relay/) 提供 GHCR 预构建镜像、docker-compose 快速部署、环境变量说明与 HTTP API 参考。从 `v0.5.0` 起，每次 GitHub Release 都会推送 `ghcr.io/aiden-fe/omni-relay:<tag>`，远端服务器无需克隆源码或安装 Node.js。
+从 `v0.5.0` 起，设置里的「官方加速节点」指向 `https://translator.makabonka.com/api`。想自建加速节点？[自建部署指南](https://aiden-fe.github.io/omni-ai-translator/relay/) 提供 GHCR 预构建镜像、docker-compose 快速部署、环境变量说明与 HTTP API 参考。从 `v0.5.0` 起，每次 GitHub Release 都会推送 `ghcr.io/aiden-fe/omni-relay:<tag>`，远端服务器无需克隆源码或安装 Node.js。
 
 ## 隐私说明
 

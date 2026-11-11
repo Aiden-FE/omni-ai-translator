@@ -144,13 +144,19 @@
       <p class="sub">Omni AI Translator · 翻译加速服务（Relay）</p>
     </header>
 
-    <p class="meta">最后更新：2026-10-07 · 对应服务版本 v0.1.0</p>
+    <p class="meta">最后更新：2026-11-11 · 对应服务版本 v0.1.0</p>
 
     <blockquote>
       加速节点是一个<strong>只缓存、不代理</strong>的译文缓存服务。插件在翻译前先向它查询缓存，
       命中的直接展示；未命中的照常发往翻译接口，翻译完成后再把结果异步写回缓存。<br>
       它<strong>永远拿不到你的 API Key</strong>，也从不代理翻译请求。
     </blockquote>
+
+    <p>
+      <strong>项目方官方节点：</strong><code>https://translator.makabonka.com/api</code>。
+      自 v0.5.0 起，插件设置中的「官方加速节点」即指向该地址；下文的自建配置与它一致，
+      可以直接照抄。
+    </p>
 
     <nav class="toc">
       <strong>目录</strong>

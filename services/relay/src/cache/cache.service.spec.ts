@@ -4,7 +4,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CacheService } from './cache.service.js';
 import { buildCacheKey } from './cache-key.js';
-import { MAX_ITEMS_PER_REQUEST, MAX_TEXT_LENGTH, type CommitItem, type LookupItem } from '../contracts.js';
+import {
+  MAX_ID_LENGTH,
+  MAX_ITEMS_PER_REQUEST,
+  MAX_LANG_LENGTH,
+  MAX_TEXT_LENGTH,
+  MAX_TRANSLATED_TEXT_LENGTH,
+  type CommitItem,
+  type LookupItem,
+} from '../contracts.js';
 
 /** 最小 Redis mock：只需 mget / pipeline / ping。 */
 function createRedisMock() {
@@ -98,6 +106,16 @@ describe('CacheService.lookup', () => {
     expect(result.hits).toEqual([]);
   });
 
+  it('超长 id / 语言标签的条目被跳过', async () => {
+    const result = await service.lookup([
+      item({ id: 'x'.repeat(MAX_ID_LENGTH + 1) }),
+      item({ targetLang: 'x'.repeat(MAX_LANG_LENGTH + 1) }),
+      item({ sourceLang: 'x'.repeat(MAX_LANG_LENGTH + 1) }),
+    ]);
+    expect(result.hits).toEqual([]);
+    expect(redis.mget).not.toHaveBeenCalled();
+  });
+
   it('超出 MAX_ITEMS 的多余条目被截断', async () => {
     const items = Array.from({ length: MAX_ITEMS_PER_REQUEST + 50 }, (_, i) =>
       item({ id: `i${i}` }),
@@ -140,6 +158,13 @@ describe('CacheService.commit', () => {
 
   it('缺译文的条目被跳过', async () => {
     const result = await service.commit([item() as CommitItem]);
+    expect(result).toBe(0);
+    expect(redis.pipeline).not.toHaveBeenCalled();
+  });
+
+  it('超长译文被跳过，不写 Redis', async () => {
+    const long = 'x'.repeat(MAX_TRANSLATED_TEXT_LENGTH + 1);
+    const result = await service.commit([item({ translatedText: long } as CommitItem)]);
     expect(result).toBe(0);
     expect(redis.pipeline).not.toHaveBeenCalled();
   });
