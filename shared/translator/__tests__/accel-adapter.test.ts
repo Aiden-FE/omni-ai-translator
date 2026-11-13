@@ -8,6 +8,7 @@
 // - skipLookup（重试）→ 跳过查询但仍提交（覆盖公共缓存）
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { translateWithAdapter, translateWithAdapterStream } from '../index';
+import { configureAccelScheduler, resetAccelScheduler } from '@/shared/accel';
 import type { Settings } from '@/shared/types';
 
 vi.mock('@/shared/storage', () => ({
@@ -39,11 +40,15 @@ function stubAccel(settings: Partial<Settings>): void {
 }
 
 beforeEach(() => {
+  // 调度器是模块级单例：每个用例必须从干净状态开始，否则熔断冷却会跨用例泄漏。
+  resetAccelScheduler();
+  configureAccelScheduler({ lookupWindowMs: 0, commitIdleMs: 0 });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 afterEach(() => {
+  resetAccelScheduler();
   vi.unstubAllGlobals();
 });
 
@@ -120,6 +125,31 @@ describe('未命中 → 翻译后提交缓存', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(fetchMock.mock.calls.map((c) => String(c[0])).some((u) => u.includes('/v1/cache/commit')))
       .toBe(true);
+  });
+
+  it('目标语言显示名按 BCP-47 写入缓存身份（跨入口共用同一 key）', async () => {
+    stubAccel({});
+    const lookupBodies: Array<{ items: Array<{ targetLang: string }> }> = [];
+    const commitBodies: Array<{ items: Array<{ targetLang: string }> }> = [];
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/v1/cache/lookup')) {
+        lookupBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ hits: [] }), { status: 200 });
+      }
+      if (String(url).includes('/v1/cache/commit')) {
+        commitBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ accepted: 1 }), { status: 200 });
+      }
+      return microsoftFetch();
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // 全文翻译跟随 navigator.language 时传入的是显示名，不是 BCP-47 代码
+    await translateWithAdapter({ text: 'hello', targetLang: '简体中文' });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(lookupBodies[0]!.items[0]!.targetLang).toBe('zh-CN');
+    expect(commitBodies[0]!.items[0]!.targetLang).toBe('zh-CN');
   });
 
   it('翻译失败时不提交缓存', async () => {

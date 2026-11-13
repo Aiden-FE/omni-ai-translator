@@ -16,8 +16,9 @@ import type {
 } from '@/shared/types';
 import { getProviders, getSettings, setSettings } from '@/shared/storage';
 import {
-  accelCommit,
-  accelLookup,
+  accelCommitQueued,
+  accelLookupBatched,
+  canonicalAccelLang,
   deriveAccelSettings,
   isAccelEligible,
   newAccelId,
@@ -80,8 +81,14 @@ async function accelLookupText(
 ): Promise<string | null> {
   if (options?.skipLookup) return null;
   const id = newAccelId();
-  const hits = await accelLookup(endpoint, [
-    { id, text: req.text, targetLang: req.targetLang, sourceLang: req.sourceLang },
+  // 语言标签在进入缓存身份前统一成 BCP-47 代码，避免显示名/代码被哈希成不同 key。
+  const hits = await accelLookupBatched(endpoint, [
+    {
+      id,
+      text: req.text,
+      targetLang: canonicalAccelLang(req.targetLang) ?? req.targetLang,
+      sourceLang: canonicalAccelLang(req.sourceLang),
+    },
   ]);
   return hits.find((hit) => hit.id === id)?.translatedText ?? null;
 }
@@ -103,14 +110,15 @@ async function accelLookupChunks(
   hitsByChunkId: Map<string, BatchTranslatedChunk>;
   missChunks: BatchTranslateChunk[];
 }> {
-  // 收集全部 part 的查询条目
+  // 收集全部 part 的查询条目；语言标签先规范化，保证与单段路径共用同一批 key。
+  const accelTargetLang = canonicalAccelLang(targetLang) ?? targetLang;
   const queries: AccelLookupQuery[] = [];
   for (const chunk of chunks) {
     for (const part of chunk.parts) {
       queries.push({
         id: chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex),
         text: part.text,
-        targetLang,
+        targetLang: accelTargetLang,
       });
     }
   }
@@ -119,7 +127,7 @@ async function accelLookupChunks(
   const hitMap = new Map<string, string>();
   for (let start = 0; start < queries.length; start += MAX_ITEMS_PER_REQUEST) {
     const slice = queries.slice(start, start + MAX_ITEMS_PER_REQUEST);
-    const hits = await accelLookup(endpoint, slice);
+    const hits = await accelLookupBatched(endpoint, slice);
     for (const hit of hits) hitMap.set(hit.id, hit.translatedText);
   }
 
@@ -155,13 +163,14 @@ function commitTranslatedChunk(
   targetLang: string,
   sourceTexts: Map<string, string>,
 ): void {
+  const accelTargetLang = canonicalAccelLang(targetLang) ?? targetLang;
   const items = chunk.translatedParts.flatMap((part) => {
     const key = chunkAccelId(chunk.chunkId, part.partId, part.sliceIndex);
     const text = sourceTexts.get(key);
     if (text === undefined) return [];
-    return [{ id: newAccelId(), text, targetLang, translatedText: part.text }];
+    return [{ id: newAccelId(), text, targetLang: accelTargetLang, translatedText: part.text }];
   });
-  if (items.length > 0) accelCommit(endpoint, items);
+  if (items.length > 0) accelCommitQueued(endpoint, items);
 }
 
 /** 建立 `${chunkId}-${partId}-${sliceIndex}` → 原文 的查表，供 commit 还原缓存身份。 */
@@ -177,12 +186,12 @@ function buildSourceTextIndex(chunks: BatchTranslateChunk[]): Map<string, string
 
 /** 单条存缓存（fire-and-forget）。 */
 function commitAccelText(endpoint: string, req: TranslateRequest, translatedText: string): void {
-  accelCommit(endpoint, [
+  accelCommitQueued(endpoint, [
     {
       id: newAccelId(),
       text: req.text,
-      targetLang: req.targetLang,
-      sourceLang: req.sourceLang,
+      targetLang: canonicalAccelLang(req.targetLang) ?? req.targetLang,
+      sourceLang: canonicalAccelLang(req.sourceLang),
       translatedText,
     },
   ]);

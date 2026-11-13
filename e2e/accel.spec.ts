@@ -149,7 +149,9 @@ test('未配置加速端点 → 不查询缓存', async ({ context, extensionId 
 });
 
 test('全文批量部分命中 → 命中段零等待渲染，未命中段单独发 LLM', async ({ context, extensionId }) => {
-  setAccelCache({ 'Cached paragraph||简体中文': '缓存段落译文' });
+  // 目标语言在设置里是显示名「简体中文」，缓存身份按 BCP-47 规范化为 zh-CN ——
+  // 这里故意用 zh-cn 预置，验证跨入口/跨设备共用同一 key。
+  setAccelCache({ 'Cached paragraph||zh-cn': '缓存段落译文' });
   const provider = mockProvider('accel-fullpage-mock');
   await seedExtensionStorage(context, [provider], {
     ...accelSettings(provider.id),
@@ -181,4 +183,45 @@ test('全文批量部分命中 → 命中段零等待渲染，未命中段单独
   expect(requests[0]!.chunks.map((chunk) => chunk.parts.map((part) => part.text))).toEqual([
     ['Uncached paragraph'],
   ]);
+});
+
+test('传统源全文翻译：逐段 lookup 被合批，不再每段打一次加速节点', async ({ context }) => {
+  setAccelCache({});
+  // 自定义微软源 → 全文走 runPool 逐段翻译（与内置免 Key 源同一条路径），
+  // 正是生产事故里「一段一次 lookup + 一次 commit」的流量形态。
+  // 带 apiKey 才会走 config.baseUrl 的 Azure 端点；否则会落回内置 edge 免 Key 端点。
+  const traditional: ProviderConfig = {
+    id: 'ms-mock',
+    name: 'ms-mock',
+    type: 'microsoft',
+    category: 'traditional',
+    baseUrl: `${mockUrl}/translate`,
+    model: 'microsoft',
+    apiKey: 'mock-key',
+  };
+  await seedExtensionStorage(context, [traditional], {
+    activeProviderId: traditional.id,
+    defaultTargetLang: '简体中文',
+    accelEndpoint: mockUrl,
+    accelScope: 'all',
+  } as Settings);
+
+  const page = await context.newPage();
+  await page.goto(fullpageTestPageUrl);
+  await page.locator('#para-1').waitFor();
+  await page.evaluate(() => {
+    document.body.replaceChildren();
+    for (let index = 0; index < 6; index += 1) {
+      const paragraph = document.createElement('p');
+      paragraph.id = `batch-${index}`;
+      paragraph.textContent = `Batch paragraph ${index}`;
+      document.body.append(paragraph);
+    }
+  });
+
+  await triggerFullpageTranslate(context);
+  await expect(page.locator('#batch-5')).toHaveText(MOCK_TRANSLATION, { timeout: 30_000 });
+
+  // 6 段逐段路径；合批后一个 25ms 窗口只发一次请求（修复前恒为 6 次）。
+  expect(getAccelRequestCount('lookup')).toBeLessThanOrEqual(3);
 });
