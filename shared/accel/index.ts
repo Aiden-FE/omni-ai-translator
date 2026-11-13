@@ -12,10 +12,22 @@ export {
   accelHealth,
   accelLookup,
   newAccelId,
+  requestCommit,
+  requestLookup,
 } from './client';
 export type {
   AccelCommitItem,
   AccelHealthStatus,
   AccelHit,
+  AccelLookupOutcome,
   AccelLookupQuery,
+  AccelOutcome,
 } from './client';
+export { canonicalAccelLang } from './lang';
+export {
+  accelCommitQueued,
+  accelLookupBatched,
+  configureAccelScheduler,
+  resetAccelScheduler,
+} from './scheduler';
+export type { AccelSchedulerTiming } from './scheduler';

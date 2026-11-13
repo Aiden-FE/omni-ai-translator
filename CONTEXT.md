@@ -196,6 +196,8 @@ ProviderConfig
 ### 3.12 加速失败一律 fail-open
 查缓存超时 3 秒（可配）后或任何异常（网络错误、非 2xx、响应畸形）都按「全未命中」处理，
 用户不可见；存缓存为 fire-and-forget，失败即丢弃。加速节点是性能层，任何情况下不得阻断翻译。
+2026-11-13 起，「失败」还包含限流：429/5xx/网络错误会打开调度器冷却（见 §3.24），
+冷却期内 lookup 立即返回空、commit 直接丢弃，调用方马上走自己的翻译源，不排队等节点释放。
 
 ### 3.13 缓存命中不模拟流式
 命中条目以一次性完整译文呈现，不走 LLM 流式管线；全文翻译中命中段落即时渲染，
@@ -247,6 +249,28 @@ ioredis、契约测试用 CI redis service 跑真 mget/pipeline、插件 e2e 覆
 ### 3.23 Settings 新字段沿用可选惯例
 `accelEndpoint?: string | null`、`accelScope?: 'builtin' | 'all'`，读取侧判空归一化，不把深合并
 藏进 storage 层（与 §3.17 一致，跟随既有 `customPrompt?` 模式）。
+
+### 3.24 加速请求合批 + 限流熔断（2026-11-13 生产事故）
+**现象**：官方节点上一篇文章全页翻译期间，两台设备共 555 次缓存请求只有 192 次成功（34.6%），
+363 次被 429（relay 263 次 + nginx 100 次）；第二台设备的有效命中率只有 17/105。
+**根因**：
+- 默认免 Key 源（builtin:microsoft）全文翻译走 `runPool` 逐段 `translate`，每段 1 次 lookup + 1 次
+  commit（`shared/fullpage/translate-pool.ts` → `shared/translator/index.ts`）。一篇 60 段的文章
+  ≈120 次请求，而 relay 限额是每 IP `lookup 120/min`、`commit 30/min`，一篇文章的 commit 就必超。
+- 429 被 `accelLookup` 当「未命中」，`accelCommit` 静默丢弃；客户端没有退避，越限越重试，
+  持续以 6–8 req/s 打已拥堵的节点。
+- 缓存身份里的 `targetLang` 直接使用显示名（`简体中文`/`中文`）或 BCP-47 代码（`zh-CN`），
+  同一段译文在不同入口/设备被拆成多条 key（生产 Redis 里 67 条 key 全是 `...::简体中文`）。
+
+**解法**（`shared/accel/scheduler.ts` + `shared/accel/lang.ts`）：
+- lookup 在 25ms 窗口内合流，单请求 ≤200 条；commit 按 40 条或 1.2s 空闲落盘；同一 endpoint
+  同时只有 1 个在途请求。逐段流量从 2N 次请求降到个位数。
+- 429 / 5xx / 网络错误 → 立即把所有等待中的查询按未命中结清（调用方立刻走自己的翻译源），
+  并进入指数退避冷却（10s 起、上限 120s，叠加 0–20% 抖动；有 `Retry-After` 则取较大值）；
+  冷却期内不再发请求；冷却结束后的第一个请求即探针，成功清零、失败继续加倍。
+- 加速身份统一用 BCP-47 代码：`shared/language-catalog.ts` 的 code/中文名/原文名 +
+  常见别名（`中文`→`zh-CN`、`繁體中文`→`zh-TW`）在客户端映射后再算 key；翻译请求本身不改语言值。
+- 服务端限额与协议不变：合批后 60 段文章约 20 次 lookup + 2 次 commit，落在现有配额内。
 
 
 ---

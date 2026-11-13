@@ -4,6 +4,7 @@
 // 因此只有「chunk 全部 part 命中」才能整块短路；部分命中必须整块发 LLM。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { translateBatchWithAdapterStream } from '../index';
+import { configureAccelScheduler, resetAccelScheduler } from '@/shared/accel';
 import type {
   BatchTranslatedChunk,
   BatchTranslateChunk,
@@ -65,11 +66,15 @@ function stubLlm(onRequest: (req: unknown) => void) {
 }
 
 beforeEach(() => {
+  // 调度器是模块级单例：每个用例必须从干净状态开始，否则熔断冷却会跨用例泄漏。
+  resetAccelScheduler();
+  configureAccelScheduler({ lookupWindowMs: 0, commitIdleMs: 0 });
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 afterEach(() => {
+  resetAccelScheduler();
   vi.unstubAllGlobals();
 });
 
@@ -276,5 +281,36 @@ describe('提交缓存', () => {
         expect.objectContaining({ text: 'b', translatedText: 'LLM:b' }),
       ]),
     );
+  });
+
+  it('lookup 与 commit 的语言标签都规范化成 BCP-47', async () => {
+    stub({});
+    const llm = stubLlm(() => {});
+    const providerMod = await import('../registry');
+    vi.spyOn(providerMod, 'createProvider').mockReturnValue({
+      id: 'user-llm',
+      type: 'llm',
+      translate: vi.fn(),
+      test: vi.fn(),
+      translateBatchStream: llm.translateBatchStream,
+    } as never);
+
+    const bodies: Array<{ path: string; items: Array<{ targetLang: string }> }> = [];
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url).includes('/v1/cache/lookup') ? 'lookup' : 'commit';
+      bodies.push({ path, items: JSON.parse(String(init?.body)).items });
+      return new Response(JSON.stringify(path === 'lookup' ? { hits: [] } : { accepted: 1 }), {
+        status: 200,
+      });
+    }) as never;
+
+    await translateBatchWithAdapterStream(
+      { targetLang: '简体中文', chunks: [chunk('c1', ['a'])] },
+      () => {},
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(bodies.find((b) => b.path === 'lookup')!.items[0]!.targetLang).toBe('zh-CN');
+    expect(bodies.find((b) => b.path === 'commit')!.items[0]!.targetLang).toBe('zh-CN');
   });
 });
